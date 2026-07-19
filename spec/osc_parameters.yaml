@@ -1,0 +1,17 @@
+- id: JawX
+  name: v2/JawX
+  range: signed_unit
+  derive: subtract
+  inputs:
+    - JawRight
+    - JawLeft
+
+- id: MouthOpen
+  name: v2/MouthOpen
+  range: unit
+  derive: average
+  inputs:
+    - MouthUpperUpRight
+    - MouthUpperUpLeft
+    - MouthLowerDownRight
+    - MouthLowerDownLeft
