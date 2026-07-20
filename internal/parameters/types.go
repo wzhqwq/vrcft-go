@@ -50,19 +50,18 @@ type BoolSemantics struct {
 }
 
 type ParameterDefinition struct {
-	ID         ParameterID
-	Name       string
-	OSCName    string
-	Group      string
-	Kind       ParameterKind
-	ValueType  ValueType
-	Encodings  Encoding
-	Range      ValueRange
-	HasRange   bool
-	Unit       string
-	Semantics  []SemanticRange
-	Bool       BoolSemantics
-	SendPolicy string
+	ID        ParameterID
+	Name      string
+	OSCName   string
+	Group     string
+	Kind      ParameterKind
+	ValueType ValueType
+	Encodings Encoding
+	Range     ValueRange
+	HasRange  bool
+	Unit      string
+	Semantics []SemanticRange
+	Bool      BoolSemantics
 }
 
 func Definition(id ParameterID) (ParameterDefinition, bool) {

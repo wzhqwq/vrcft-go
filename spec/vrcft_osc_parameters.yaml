@@ -2146,7 +2146,6 @@ tracking_active_parameters:
   semantics:
     'true': eye tracking is active
     'false': eye tracking is inactive
-  send_policy: on_avatar_load_or_state_change
 - name: ExpressionTrackingActive
   osc_name: ExpressionTrackingActive
   group: tracking_active
@@ -2156,7 +2155,6 @@ tracking_active_parameters:
   semantics:
     'true': expression tracking is active
     'false': expression tracking is inactive
-  send_policy: on_avatar_load_or_state_change
 - name: LipTrackingActive
   osc_name: LipTrackingActive
   group: tracking_active
@@ -2166,4 +2164,3 @@ tracking_active_parameters:
   semantics:
     'true': expression/lip tracking is active
     'false': expression/lip tracking is inactive
-  send_policy: on_avatar_load_or_state_change
