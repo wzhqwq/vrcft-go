@@ -6,11 +6,13 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+
+	"github.com/wzhqwq/vrcft-go/internal/parameters"
 )
 
 type ValueSource interface {
-	Float(key string) (float32, bool)
-	Bool(key string) (bool, bool)
+	Float(id parameters.ParameterID) (float32, bool)
+	Bool(id parameters.ParameterID) (bool, bool)
 }
 
 type SenderConfig struct {
@@ -71,28 +73,18 @@ func (s *ParameterSender) Send(source ValueSource) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	keys := make([]string, 0, len(catalog.Bindings))
-	for key := range catalog.Bindings {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	ids := sortedCatalogIDs(catalog)
+	messages := make([]Message, 0, len(ids))
+	for _, id := range ids {
+		binding := catalog.Bindings[id]
 
-	messages := make([]Message, 0, len(keys))
-	for _, key := range keys {
-		binding := catalog.Bindings[key]
-		switch binding.Spec.Class {
-		case ParameterFloat:
-			value, valid := source.Float(key)
+		switch binding.Spec.ValueType {
+		case parameters.ValueFloat:
+			value, valid := source.Float(id)
 			if !valid || math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
 				continue
 			}
-			if !binding.Spec.Unbounded {
-				if binding.Spec.Signed {
-					value = clamp(value, -1, 1)
-				} else {
-					value = clamp(value, 0, 1)
-				}
-			}
+			value = binding.Spec.Clamp(value)
 			for _, endpoint := range binding.Direct {
 				if message, ok := s.changedMessage(endpoint, floatToEndpoint(endpoint.Type, value)); ok {
 					messages = append(messages, message)
@@ -101,8 +93,9 @@ func (s *ParameterSender) Send(source ValueSource) error {
 			for _, binary := range binding.Binary {
 				messages = append(messages, s.binaryMessages(binding.Spec, binary, value)...)
 			}
-		case ParameterBool:
-			value, valid := source.Bool(key)
+
+		case parameters.ValueBool:
+			value, valid := source.Bool(id)
 			if !valid {
 				continue
 			}
@@ -123,13 +116,13 @@ func (s *ParameterSender) Send(source ValueSource) error {
 
 func (s *ParameterSender) binaryMessages(spec ParameterSpec, binding BinaryBinding, value float32) []Message {
 	var messages []Message
-	if spec.Signed && binding.Negative != nil {
+	if spec.Signed() && binding.Negative != nil {
 		if message, ok := s.changedMessage(*binding.Negative, boolToEndpoint(binding.Negative.Type, value < 0)); ok {
 			messages = append(messages, message)
 		}
 	}
 
-	magnitude := float32(math.Abs(float64(value)))
+	magnitude := binaryMagnitude(spec, value)
 	var max uint32
 	for _, bit := range binding.Bits {
 		max |= bit.Weight
@@ -148,6 +141,20 @@ func (s *ParameterSender) binaryMessages(spec ParameterSpec, binding BinaryBindi
 		}
 	}
 	return messages
+}
+
+func binaryMagnitude(spec ParameterSpec, value float32) float32 {
+	if !spec.HasRange || spec.Range.Max <= spec.Range.Min {
+		return clamp(float32(math.Abs(float64(value))), 0, 1)
+	}
+	if spec.Signed() {
+		limit := float32(math.Max(math.Abs(float64(spec.Range.Min)), math.Abs(float64(spec.Range.Max))))
+		if limit <= 0 {
+			return 0
+		}
+		return clamp(float32(math.Abs(float64(value)))/limit, 0, 1)
+	}
+	return clamp((value-spec.Range.Min)/(spec.Range.Max-spec.Range.Min), 0, 1)
 }
 
 func (s *ParameterSender) changedMessage(endpoint Endpoint, value Value) (Message, bool) {

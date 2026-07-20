@@ -1,44 +1,85 @@
 package osc
 
-import "sync"
+import (
+	"sync"
 
-// SnapshotSource is a simple thread-safe ValueSource. A production tracking
-// pipeline may replace it with a dense fixed-array implementation.
+	"github.com/wzhqwq/vrcft-go/internal/parameters"
+)
+
+// SnapshotSource is a dense, thread-safe ValueSource keyed by ParameterID.
+// Production code may replace it with an immutable parameter snapshot.
 type SnapshotSource struct {
-	mu     sync.RWMutex
-	floats map[string]float32
-	bools  map[string]bool
+	mu sync.RWMutex
+
+	floats     [parameters.ParameterCount]float32
+	floatValid [parameters.ParameterCount]bool
+	bools      [parameters.ParameterCount]bool
+	boolValid  [parameters.ParameterCount]bool
 }
 
-func NewSnapshotSource() *SnapshotSource {
-	return &SnapshotSource{
-		floats: make(map[string]float32),
-		bools:  make(map[string]bool),
+func NewSnapshotSource() *SnapshotSource { return &SnapshotSource{} }
+
+func (s *SnapshotSource) SetFloat(id parameters.ParameterID, value float32) bool {
+	definition, ok := parameters.Definition(id)
+	if !ok || definition.ValueType != parameters.ValueFloat {
+		return false
 	}
-}
-
-func (s *SnapshotSource) SetFloat(key string, value float32) {
 	s.mu.Lock()
-	s.floats[key] = value
+	s.floats[id] = value
+	s.floatValid[id] = true
 	s.mu.Unlock()
+	return true
 }
 
-func (s *SnapshotSource) SetBool(key string, value bool) {
+func (s *SnapshotSource) SetBool(id parameters.ParameterID, value bool) bool {
+	definition, ok := parameters.Definition(id)
+	if !ok || definition.ValueType != parameters.ValueBool {
+		return false
+	}
 	s.mu.Lock()
-	s.bools[key] = value
+	s.bools[id] = value
+	s.boolValid[id] = true
 	s.mu.Unlock()
+	return true
 }
 
-func (s *SnapshotSource) Float(key string) (float32, bool) {
+func (s *SnapshotSource) SetFloatByOSCName(name string, value float32) bool {
+	id, ok := parameters.LookupOSCName(name)
+	return ok && s.SetFloat(id, value)
+}
+
+func (s *SnapshotSource) SetBoolByOSCName(name string, value bool) bool {
+	id, ok := parameters.LookupOSCName(name)
+	return ok && s.SetBool(id, value)
+}
+
+func (s *SnapshotSource) Invalidate(id parameters.ParameterID) bool {
+	if _, ok := parameters.Definition(id); !ok {
+		return false
+	}
+	s.mu.Lock()
+	s.floatValid[id] = false
+	s.boolValid[id] = false
+	s.mu.Unlock()
+	return true
+}
+
+func (s *SnapshotSource) Float(id parameters.ParameterID) (float32, bool) {
+	if id >= parameters.ParameterCount {
+		return 0, false
+	}
 	s.mu.RLock()
-	value, ok := s.floats[key]
+	value, ok := s.floats[id], s.floatValid[id]
 	s.mu.RUnlock()
 	return value, ok
 }
 
-func (s *SnapshotSource) Bool(key string) (bool, bool) {
+func (s *SnapshotSource) Bool(id parameters.ParameterID) (bool, bool) {
+	if id >= parameters.ParameterCount {
+		return false, false
+	}
 	s.mu.RLock()
-	value, ok := s.bools[key]
+	value, ok := s.bools[id], s.boolValid[id]
 	s.mu.RUnlock()
 	return value, ok
 }

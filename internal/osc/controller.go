@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/wzhqwq/vrcft-go/internal/parameters"
 )
 
 type ControllerConfig struct {
@@ -63,7 +64,7 @@ type refreshRequest struct {
 
 type Controller struct {
 	config ControllerConfig
-	specs  []ParameterSpec
+	specs  *ParameterCatalog
 	source ValueSource
 
 	ctx    context.Context
@@ -98,9 +99,24 @@ type Controller struct {
 func NewController(
 	config ControllerConfig,
 	source ValueSource,
-	specs []ParameterSpec,
 	onIncoming func(Message, *net.UDPAddr),
-) *Controller {
+) (*Controller, error) {
+	specs, err := NewVRCFTParameterCatalog()
+	if err != nil {
+		return nil, fmt.Errorf("compile VRCFT OSC parameter definitions: %w", err)
+	}
+	return NewControllerWithCatalog(config, source, specs, onIncoming)
+}
+
+func NewControllerWithCatalog(
+	config ControllerConfig,
+	source ValueSource,
+	specs *ParameterCatalog,
+	onIncoming func(Message, *net.UDPAddr),
+) (*Controller, error) {
+	if specs == nil {
+		return nil, errors.New("OSC parameter catalog is nil")
+	}
 	if config.ServiceName == "" {
 		config.ServiceName = "VRCFaceTracking-Go"
 	}
@@ -122,12 +138,9 @@ func NewController(
 	if config.SendInterval <= 0 {
 		config.SendInterval = 10 * time.Millisecond
 	}
-	if len(specs) == 0 {
-		specs = VRCFTParameterSpecs()
-	}
 	controller := &Controller{
 		config:     config,
-		specs:      append([]ParameterSpec(nil), specs...),
+		specs:      specs,
 		source:     source,
 		services:   make(map[string]DiscoveredService),
 		refreshCh:  make(chan refreshRequest, 8),
@@ -136,7 +149,7 @@ func NewController(
 		onIncoming: onIncoming,
 	}
 	controller.avatarID.Store("")
-	return controller
+	return controller, nil
 }
 
 func (c *Controller) Start(parent context.Context) error {
@@ -248,7 +261,7 @@ func (c *Controller) Catalog() *Catalog {
 		return nil
 	}
 	copyCatalog := *catalog
-	copyCatalog.Bindings = make(map[string]ParameterBinding, len(catalog.Bindings))
+	copyCatalog.Bindings = make(map[parameters.ParameterID]ParameterBinding, len(catalog.Bindings))
 	for key, binding := range catalog.Bindings {
 		copyCatalog.Bindings[key] = binding
 	}
@@ -661,13 +674,4 @@ func normalizedServiceType(value string) string {
 	value = strings.TrimSuffix(value, ".")
 	value = strings.TrimSuffix(value, ".local")
 	return value
-}
-
-func sortedCatalogKeys(catalog *Catalog) []string {
-	keys := make([]string, 0, len(catalog.Bindings))
-	for key := range catalog.Bindings {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }

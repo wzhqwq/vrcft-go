@@ -5,26 +5,10 @@ import (
 	"hash/fnv"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
+
+	"github.com/wzhqwq/vrcft-go/internal/parameters"
 )
-
-type ParameterClass uint8
-
-const (
-	ParameterFloat ParameterClass = iota + 1
-	ParameterBool
-)
-
-type ParameterSpec struct {
-	// Key is the stable application-side semantic identifier.
-	Key string
-	// Suffix is matched at an OSC path segment boundary, for example v2/JawOpen.
-	Suffix    string
-	Class     ParameterClass
-	Signed    bool
-	Unbounded bool
-}
 
 type Endpoint struct {
 	Address string
@@ -51,80 +35,86 @@ type Catalog struct {
 	Generation uint64
 	UpdatedAt  time.Time
 	Hash       uint64
-	Bindings   map[string]ParameterBinding
+	Bindings   map[parameters.ParameterID]ParameterBinding
 	RawMethods []Endpoint
 }
 
-func BuildCatalog(root *QueryNode, specs []ParameterSpec, generation uint64) (*Catalog, error) {
+func BuildCatalog(root *QueryNode, specs *ParameterCatalog, generation uint64) (*Catalog, error) {
 	if root == nil {
 		return nil, fmt.Errorf("nil OSCQuery root")
 	}
-	methods := root.FlattenMethods()
+	if specs == nil {
+		return nil, fmt.Errorf("nil parameter catalog")
+	}
+
 	catalog := &Catalog{
 		Generation: generation,
 		UpdatedAt:  time.Now(),
-		Bindings:   make(map[string]ParameterBinding, len(specs)),
+		Bindings:   make(map[parameters.ParameterID]ParameterBinding),
 	}
+	groups := make(map[parameters.ParameterID]map[string]*binaryGroup)
 
-	for _, method := range methods {
+	for _, method := range root.FlattenMethods() {
 		if !isWritable(method) || !supportedParameterType(method.Type) {
 			continue
 		}
-		catalog.RawMethods = append(catalog.RawMethods, Endpoint{
-			Address: method.FullPath,
-			Type:    method.Type,
-		})
-	}
-	sortEndpoints(catalog.RawMethods)
+		endpoint := Endpoint{Address: method.FullPath, Type: method.Type}
+		catalog.RawMethods = append(catalog.RawMethods, endpoint)
 
-	for _, spec := range specs {
-		if spec.Key == "" || spec.Suffix == "" {
-			return nil, fmt.Errorf("invalid parameter spec: key and suffix are required")
-		}
-		binding := ParameterBinding{Spec: spec}
-		groups := make(map[string]*binaryGroup)
-
-		for _, endpoint := range catalog.RawMethods {
-			if pathHasSuffix(endpoint.Address, spec.Suffix) {
+		if match, ok := specs.ResolveAddress(method.FullPath); ok {
+			spec, exists := specs.Spec(match.ID)
+			if exists && spec.SupportsDirect() {
+				binding := catalog.Bindings[match.ID]
+				binding.Spec = spec
 				binding.Direct = append(binding.Direct, endpoint)
-				continue
+				catalog.Bindings[match.ID] = binding
 			}
-			if spec.Class != ParameterFloat {
-				continue
-			}
-
-			if pathHasSuffix(endpoint.Address, spec.Suffix+"Negative") {
-				prefix := trimPathSuffix(endpoint.Address, spec.Suffix+"Negative")
-				group := groups[prefix]
-				if group == nil {
-					group = &binaryGroup{}
-					groups[prefix] = group
-				}
-				copyEndpoint := endpoint
-				group.negative = &copyEndpoint
-				continue
-			}
-
-			weight, prefix, ok := binaryWeight(endpoint.Address, spec.Suffix)
-			if !ok {
-				continue
-			}
-			group := groups[prefix]
-			if group == nil {
-				group = &binaryGroup{}
-				groups[prefix] = group
-			}
-			group.bits = append(group.bits, BinaryBit{Endpoint: endpoint, Weight: weight})
+			continue
 		}
 
+		match, ok := specs.ResolveBinaryAddress(method.FullPath)
+		if !ok {
+			continue
+		}
+		spec, exists := specs.Spec(match.ID)
+		if !exists || !spec.SupportsBinary() {
+			continue
+		}
+
+		parameterGroups := groups[match.ID]
+		if parameterGroups == nil {
+			parameterGroups = make(map[string]*binaryGroup)
+			groups[match.ID] = parameterGroups
+		}
+		group := parameterGroups[match.Prefix]
+		if group == nil {
+			group = &binaryGroup{}
+			parameterGroups[match.Prefix] = group
+		}
+		if match.Negative {
+			copyEndpoint := endpoint
+			group.negative = &copyEndpoint
+		} else {
+			group.bits = append(group.bits, BinaryBit{Endpoint: endpoint, Weight: match.Weight})
+		}
+
+		binding := catalog.Bindings[match.ID]
+		binding.Spec = spec
+		catalog.Bindings[match.ID] = binding
+	}
+
+	sortEndpoints(catalog.RawMethods)
+	for id, binding := range catalog.Bindings {
 		sortEndpoints(binding.Direct)
-		prefixes := make([]string, 0, len(groups))
-		for prefix := range groups {
+
+		parameterGroups := groups[id]
+		prefixes := make([]string, 0, len(parameterGroups))
+		for prefix := range parameterGroups {
 			prefixes = append(prefixes, prefix)
 		}
 		sort.Strings(prefixes)
 		for _, prefix := range prefixes {
-			group := groups[prefix]
+			group := parameterGroups[prefix]
 			if len(group.bits) == 0 {
 				continue
 			}
@@ -136,7 +126,7 @@ func BuildCatalog(root *QueryNode, specs []ParameterSpec, generation uint64) (*C
 				Bits:     append([]BinaryBit(nil), group.bits...),
 			})
 		}
-		catalog.Bindings[spec.Key] = binding
+		catalog.Bindings[id] = binding
 	}
 
 	catalog.Hash = hashCatalog(catalog)
@@ -160,39 +150,6 @@ func supportedParameterType(typ string) bool {
 	return typ == "f" || typ == "i" || typ == "T" || typ == "F"
 }
 
-func pathHasSuffix(fullPath, suffix string) bool {
-	fullPath = cleanOSCPath(fullPath)
-	suffix = strings.TrimPrefix(suffix, "/")
-	return strings.HasSuffix(fullPath, "/"+suffix)
-}
-
-func trimPathSuffix(fullPath, suffix string) string {
-	return strings.TrimSuffix(fullPath, strings.TrimPrefix(suffix, "/"))
-}
-
-func binaryWeight(fullPath, suffix string) (uint32, string, bool) {
-	fullPath = cleanOSCPath(fullPath)
-	suffix = strings.TrimPrefix(suffix, "/")
-	marker := "/" + suffix
-	index := strings.LastIndex(fullPath, marker)
-	if index < 0 {
-		return 0, "", false
-	}
-	trailing := fullPath[index+len(marker):]
-	if trailing == "" || strings.Contains(trailing, "/") {
-		return 0, "", false
-	}
-	parsed, err := strconv.ParseUint(trailing, 10, 32)
-	if err != nil || parsed == 0 {
-		return 0, "", false
-	}
-	weight := uint32(parsed)
-	if weight&(weight-1) != 0 {
-		return 0, "", false
-	}
-	return weight, fullPath[:index+1], true
-}
-
 func sortEndpoints(endpoints []Endpoint) {
 	sort.Slice(endpoints, func(i, j int) bool {
 		if endpoints[i].Address == endpoints[j].Address {
@@ -204,14 +161,10 @@ func sortEndpoints(endpoints []Endpoint) {
 
 func hashCatalog(catalog *Catalog) uint64 {
 	h := fnv.New64a()
-	keys := make([]string, 0, len(catalog.Bindings))
-	for key := range catalog.Bindings {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		binding := catalog.Bindings[key]
-		_, _ = h.Write([]byte(key))
+	ids := sortedCatalogIDs(catalog)
+	for _, id := range ids {
+		binding := catalog.Bindings[id]
+		_, _ = h.Write([]byte(strconv.FormatUint(uint64(id), 10)))
 		for _, endpoint := range binding.Direct {
 			_, _ = h.Write([]byte(endpoint.Address))
 			_, _ = h.Write([]byte(endpoint.Type))
@@ -229,4 +182,13 @@ func hashCatalog(catalog *Catalog) uint64 {
 		}
 	}
 	return h.Sum64()
+}
+
+func sortedCatalogIDs(catalog *Catalog) []parameters.ParameterID {
+	ids := make([]parameters.ParameterID, 0, len(catalog.Bindings))
+	for id := range catalog.Bindings {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }

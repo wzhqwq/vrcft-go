@@ -2,6 +2,7 @@ package osc
 
 import (
 	"context"
+	"log"
 )
 
 type OSCService interface {
@@ -32,7 +33,8 @@ type baseOSCService struct {
 
 func NewOSCService() OSCService {
 	source := NewSnapshotSource()
-	controller := NewController(ControllerConfig{
+
+	controller, err := NewController(ControllerConfig{
 		ServiceName: "VRCFaceTracking-Go",
 		HTTPBind:    "0.0.0.0:0",
 		OSCBind:     "0.0.0.0:0",
@@ -41,7 +43,11 @@ func NewOSCService() OSCService {
 			MaxDatagram:  1200,
 			UseBundles:   true,
 		},
-	}, source, VRCFTParameterSpecs(), nil)
+	}, source, nil)
+
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	return &baseOSCService{
 		source:     source,
