@@ -3,7 +3,6 @@ package osc
 import (
 	"fmt"
 	"math"
-	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -21,16 +20,38 @@ type SenderConfig struct {
 	UseBundles   bool
 }
 
+type packetSender interface {
+	Send([]byte) error
+}
+
+type cachedScalar struct {
+	value scalarValue
+	valid bool
+}
+
+type pendingScalar struct {
+	index int
+	value scalarValue
+}
+
 type ParameterSender struct {
-	transport *UDPTransport
+	transport packetSender
 	config    SenderConfig
 	catalog   atomic.Pointer[Catalog]
 
-	mu   sync.Mutex
-	last map[string]Value
+	mu sync.Mutex
+
+	last           []cachedScalar
+	pending        []pendingScalar
+	bundleBuilder  bundleBuilder
+	messageBuilder messageBuilder
 }
 
 func NewParameterSender(transport *UDPTransport, config SenderConfig) *ParameterSender {
+	return newParameterSender(transport, config)
+}
+
+func newParameterSender(transport packetSender, config SenderConfig) *ParameterSender {
 	if config.FloatEpsilon <= 0 {
 		config.FloatEpsilon = 0.001
 	}
@@ -38,109 +59,235 @@ func NewParameterSender(transport *UDPTransport, config SenderConfig) *Parameter
 		config.MaxDatagram = 1200
 	}
 	return &ParameterSender{
-		transport: transport,
-		config:    config,
-		last:      make(map[string]Value),
+		transport:     transport,
+		config:        config,
+		bundleBuilder: newBundleBuilder(config.MaxDatagram),
 	}
 }
 
-func (s *ParameterSender) SetCatalog(catalog *Catalog) {
-	previous := s.catalog.Swap(catalog)
-	if previous == nil || catalog == nil || previous.Hash != catalog.Hash {
-		s.mu.Lock()
-		clear(s.last)
-		s.mu.Unlock()
+func (sender *ParameterSender) SetCatalog(catalog *Catalog) {
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+
+	previous := sender.catalog.Load()
+	sender.catalog.Store(catalog)
+	if previous == nil || catalog == nil || previous.Hash != catalog.Hash || len(sender.last) != len(catalog.Outputs) {
+		if catalog == nil {
+			sender.last = nil
+			sender.pending = nil
+			return
+		}
+		sender.last = make([]cachedScalar, len(catalog.Outputs))
+		sender.pending = make([]pendingScalar, 0, len(catalog.Outputs))
 	}
 }
 
-func (s *ParameterSender) Catalog() *Catalog { return s.catalog.Load() }
-
-func (s *ParameterSender) ResetChangeDetection() {
-	s.mu.Lock()
-	clear(s.last)
-	s.mu.Unlock()
+func (sender *ParameterSender) Catalog() *Catalog {
+	return sender.catalog.Load()
 }
 
-func (s *ParameterSender) Send(source ValueSource) error {
+func (sender *ParameterSender) ResetChangeDetection() {
+	sender.mu.Lock()
+	for index := range sender.last {
+		sender.last[index].valid = false
+	}
+	sender.mu.Unlock()
+}
+
+func (sender *ParameterSender) Send(source ValueSource) error {
 	if source == nil {
 		return fmt.Errorf("OSC parameter source is nil")
 	}
-	catalog := s.catalog.Load()
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+
+	catalog := sender.catalog.Load()
 	if catalog == nil {
 		return nil
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	ids := sortedCatalogIDs(catalog)
-	messages := make([]Message, 0, len(ids))
-	for _, id := range ids {
-		binding := catalog.Bindings[id]
-
-		switch binding.Spec.ValueType {
-		case parameters.ValueFloat:
-			value, valid := source.Float(id)
-			if !valid || math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-				continue
-			}
-			value = binding.Spec.Clamp(value)
-			for _, endpoint := range binding.Direct {
-				if message, ok := s.changedMessage(endpoint, floatToEndpoint(endpoint.Type, value)); ok {
-					messages = append(messages, message)
-				}
-			}
-			for _, binary := range binding.Binary {
-				messages = append(messages, s.binaryMessages(binding.Spec, binary, value)...)
-			}
-
-		case parameters.ValueBool:
-			value, valid := source.Bool(id)
-			if !valid {
-				continue
-			}
-			for _, endpoint := range binding.Direct {
-				if message, ok := s.changedMessage(endpoint, boolToEndpoint(endpoint.Type, value)); ok {
-					messages = append(messages, message)
-				}
-			}
-		}
+	if sender.transport == nil {
+		return fmt.Errorf("OSC transport is nil")
 	}
 
-	if len(messages) == 0 {
-		return nil
+	if sender.config.UseBundles {
+		return sender.sendBundle(catalog.Outputs, source)
 	}
-	sort.Slice(messages, func(i, j int) bool { return messages[i].Address < messages[j].Address })
-	return s.sendMessages(messages)
+	return sender.sendStandalone(catalog.Outputs, source)
 }
 
-func (s *ParameterSender) binaryMessages(spec ParameterSpec, binding BinaryBinding, value float32) []Message {
-	var messages []Message
-	if spec.Signed() && binding.Negative != nil {
-		if message, ok := s.changedMessage(*binding.Negative, boolToEndpoint(binding.Negative.Type, value < 0)); ok {
-			messages = append(messages, message)
+func (sender *ParameterSender) sendStandalone(outputs []outputBinding, source ValueSource) error {
+	for index := range outputs {
+		value, valid, err := evaluateOutput(outputs[index], source)
+		if err != nil {
+			return err
 		}
+		if !valid || !sender.changed(index, value) {
+			continue
+		}
+		packet, err := sender.messageBuilder.encodeScalar(outputs[index].Address, value)
+		if err != nil {
+			return err
+		}
+		if err := sender.transport.Send(packet); err != nil {
+			return err
+		}
+		sender.commit(index, value)
 	}
+	return nil
+}
 
-	magnitude := binaryMagnitude(spec, value)
-	var max uint32
-	for _, bit := range binding.Bits {
-		max |= bit.Weight
-	}
-	if max == 0 {
-		return messages
-	}
-	quantized := uint32(math.Floor(float64(magnitude * float32(max+1))))
-	if quantized > max {
-		quantized = max
-	}
-	for _, bit := range binding.Bits {
-		set := quantized&bit.Weight != 0
-		if message, ok := s.changedMessage(bit.Endpoint, boolToEndpoint(bit.Endpoint.Type, set)); ok {
-			messages = append(messages, message)
+func (sender *ParameterSender) sendBundle(outputs []outputBinding, source ValueSource) error {
+	sender.bundleBuilder.reset()
+	sender.pending = sender.pending[:0]
+
+	for index := range outputs {
+		output := outputs[index]
+		value, valid, err := evaluateOutput(output, source)
+		if err != nil {
+			return err
 		}
+		if !valid || !sender.changed(index, value) {
+			continue
+		}
+
+		appended, err := sender.bundleBuilder.appendScalar(output.Address, value)
+		if err != nil {
+			return err
+		}
+		if !appended && !sender.bundleBuilder.empty() {
+			if err := sender.flushBundle(); err != nil {
+				return err
+			}
+			appended, err = sender.bundleBuilder.appendScalar(output.Address, value)
+			if err != nil {
+				return err
+			}
+		}
+		if !appended {
+			packet, err := sender.messageBuilder.encodeScalar(output.Address, value)
+			if err != nil {
+				return err
+			}
+			if err := sender.transport.Send(packet); err != nil {
+				return err
+			}
+			sender.commit(index, value)
+			continue
+		}
+		sender.pending = append(sender.pending, pendingScalar{index: index, value: value})
 	}
-	return messages
+	return sender.flushBundle()
+}
+
+func (sender *ParameterSender) flushBundle() error {
+	if sender.bundleBuilder.empty() {
+		return nil
+	}
+	if err := sender.transport.Send(sender.bundleBuilder.bytes()); err != nil {
+		return err
+	}
+	for _, pending := range sender.pending {
+		sender.commit(pending.index, pending.value)
+	}
+	sender.pending = sender.pending[:0]
+	sender.bundleBuilder.reset()
+	return nil
+}
+
+func (sender *ParameterSender) changed(index int, value scalarValue) bool {
+	entry := sender.last[index]
+	return !entry.valid || !scalarEqual(entry.value, value, sender.config.FloatEpsilon)
+}
+
+func (sender *ParameterSender) commit(index int, value scalarValue) {
+	sender.last[index] = cachedScalar{value: value, valid: true}
+}
+
+func evaluateOutput(output outputBinding, source ValueSource) (scalarValue, bool, error) {
+	switch output.Operation {
+	case outputDirectFloat:
+		value, valid := source.Float(output.Parameter)
+		if !valid || !finite32(value) {
+			return scalarValue{}, false, nil
+		}
+		value = clampOutput(output, value)
+		return scalarFromFloat(output.WireKind, value)
+
+	case outputDirectBool:
+		value, valid := source.Bool(output.Parameter)
+		if !valid {
+			return scalarValue{}, false, nil
+		}
+		return scalarFromBool(output.WireKind, value)
+
+	case outputBinaryNegative:
+		value, valid := source.Float(output.Parameter)
+		if !valid || !finite32(value) {
+			return scalarValue{}, false, nil
+		}
+		return scalarFromBool(output.WireKind, clampOutput(output, value) < 0)
+
+	case outputBinaryBit:
+		value, valid := source.Float(output.Parameter)
+		if !valid || !finite32(value) {
+			return scalarValue{}, false, nil
+		}
+		value = clampOutput(output, value)
+		spec := ParameterSpec{Range: output.Range, HasRange: output.HasRange}
+		magnitude := binaryMagnitude(spec, value)
+		quantized := uint32(math.Floor(float64(magnitude * float32(output.QuantizeMax+1))))
+		if quantized > output.QuantizeMax {
+			quantized = output.QuantizeMax
+		}
+		return scalarFromBool(output.WireKind, quantized&output.Weight != 0)
+
+	default:
+		return scalarValue{}, false, fmt.Errorf("%w: output operation %d for %s", ErrUnsupportedType, output.Operation, output.Address)
+	}
+}
+
+func scalarFromFloat(kind scalarKind, value float32) (scalarValue, bool, error) {
+	switch kind {
+	case scalarFloat32:
+		return floatScalar(value), true, nil
+	case scalarInt32:
+		return intScalar(int32(math.Round(float64(value)))), true, nil
+	case scalarFalse, scalarTrue:
+		return boolScalar(value >= 0.5), true, nil
+	default:
+		return scalarValue{}, false, fmt.Errorf("%w: scalar wire kind %d", ErrUnsupportedType, kind)
+	}
+}
+
+func scalarFromBool(kind scalarKind, value bool) (scalarValue, bool, error) {
+	switch kind {
+	case scalarFloat32:
+		if value {
+			return floatScalar(1), true, nil
+		}
+		return floatScalar(0), true, nil
+	case scalarInt32:
+		if value {
+			return intScalar(1), true, nil
+		}
+		return intScalar(0), true, nil
+	case scalarFalse, scalarTrue:
+		return boolScalar(value), true, nil
+	default:
+		return scalarValue{}, false, fmt.Errorf("%w: scalar wire kind %d", ErrUnsupportedType, kind)
+	}
+}
+
+func clampOutput(output outputBinding, value float32) float32 {
+	if !output.HasRange {
+		return value
+	}
+	return clamp(value, output.Range.Min, output.Range.Max)
+}
+
+func finite32(value float32) bool {
+	return !math.IsNaN(float64(value)) && !math.IsInf(float64(value), 0)
 }
 
 func binaryMagnitude(spec ParameterSpec, value float32) float32 {
@@ -155,117 +302,6 @@ func binaryMagnitude(spec ParameterSpec, value float32) float32 {
 		return clamp(float32(math.Abs(float64(value)))/limit, 0, 1)
 	}
 	return clamp((value-spec.Range.Min)/(spec.Range.Max-spec.Range.Min), 0, 1)
-}
-
-func (s *ParameterSender) changedMessage(endpoint Endpoint, value Value) (Message, bool) {
-	previous, exists := s.last[endpoint.Address]
-	if exists && valuesEqual(previous, value, s.config.FloatEpsilon) {
-		return Message{}, false
-	}
-	s.last[endpoint.Address] = value
-	return Message{Address: endpoint.Address, Args: []Value{value}}, true
-}
-
-func (s *ParameterSender) sendMessages(messages []Message) error {
-	if !s.config.UseBundles {
-		for _, message := range messages {
-			packet, err := MarshalMessage(message)
-			if err != nil {
-				return err
-			}
-			if err := s.transport.Send(packet); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	var elements [][]byte
-	currentSize := 16 // #bundle + timetag
-	flush := func() error {
-		if len(elements) == 0 {
-			return nil
-		}
-		packet, err := MarshalBundle(Bundle{Timetag: 1, Elements: elements})
-		if err != nil {
-			return err
-		}
-		if err := s.transport.Send(packet); err != nil {
-			return err
-		}
-		elements = nil
-		currentSize = 16
-		return nil
-	}
-
-	for _, message := range messages {
-		packet, err := MarshalMessage(message)
-		if err != nil {
-			return err
-		}
-		elementSize := 4 + len(packet)
-		if len(elements) > 0 && currentSize+elementSize > s.config.MaxDatagram {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-		if 16+elementSize > s.config.MaxDatagram {
-			// A single oversized message cannot benefit from a bundle.
-			if err := s.transport.Send(packet); err != nil {
-				return err
-			}
-			continue
-		}
-		elements = append(elements, packet)
-		currentSize += elementSize
-	}
-	return flush()
-}
-
-func floatToEndpoint(typ string, value float32) Value {
-	switch typ {
-	case "i":
-		return Int32(int32(math.Round(float64(value))))
-	case "T", "F":
-		return Bool(value >= 0.5)
-	default:
-		return Float32(value)
-	}
-}
-
-func boolToEndpoint(typ string, value bool) Value {
-	switch typ {
-	case "i":
-		if value {
-			return Int32(1)
-		}
-		return Int32(0)
-	case "f":
-		if value {
-			return Float32(1)
-		}
-		return Float32(0)
-	default:
-		return Bool(value)
-	}
-}
-
-func valuesEqual(left, right Value, epsilon float32) bool {
-	if left.Kind != right.Kind {
-		return false
-	}
-	switch left.Kind {
-	case ValueFloat32:
-		return float32(math.Abs(float64(left.F32-right.F32))) <= epsilon
-	case ValueInt32:
-		return left.I32 == right.I32
-	case ValueString:
-		return left.Str == right.Str
-	case ValueBool:
-		return left.Bool == right.Bool
-	default:
-		return false
-	}
 }
 
 func clamp(value, minValue, maxValue float32) float32 {
