@@ -165,7 +165,7 @@ func TestParameterSenderCatalogChangeInvalidatesCache(t *testing.T) {
 	}
 }
 
-func buildSenderTestCatalog(t *testing.T, includeBinary bool) *Catalog {
+func buildSenderTestCatalog(t testing.TB, includeBinary bool) *Catalog {
 	t.Helper()
 	definitions := []parameters.ParameterDefinition{
 		{
