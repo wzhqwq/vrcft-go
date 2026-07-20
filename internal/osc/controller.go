@@ -266,6 +266,7 @@ func (c *Controller) Catalog() *Catalog {
 		copyCatalog.Bindings[key] = binding
 	}
 	copyCatalog.RawMethods = append([]Endpoint(nil), catalog.RawMethods...)
+	copyCatalog.Outputs = append([]outputBinding(nil), catalog.Outputs...)
 	return &copyCatalog
 }
 

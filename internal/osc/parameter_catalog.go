@@ -10,8 +10,6 @@ import (
 	"github.com/wzhqwq/vrcft-go/internal/parameters"
 )
 
-type SendPolicy uint8
-
 var (
 	ErrInvalidParameterID   = errors.New("invalid parameter ID")
 	ErrDuplicateParameterID = errors.New("duplicate parameter ID")

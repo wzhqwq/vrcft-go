@@ -63,3 +63,72 @@ func TestBuildCatalogHonorsDefinitionEncodings(t *testing.T) {
 		t.Fatalf("binary bindings = %d, want 0", len(binding.Binary))
 	}
 }
+
+func TestBuildCatalogCompilesSortedOutputPlan(t *testing.T) {
+	definitions := []parameters.ParameterDefinition{
+		{
+			ID: 0, OSCName: "Float", ValueType: parameters.ValueFloat,
+			Encodings: parameters.EncodingFloat | parameters.EncodingBinary,
+			Range:     parameters.ValueRange{Min: -1, Max: 1}, HasRange: true,
+		},
+		{
+			ID: 1, OSCName: "Active", ValueType: parameters.ValueBool,
+			Encodings: parameters.EncodingBool,
+		},
+	}
+	specs, err := NewParameterCatalog(definitions)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := NewQueryRoot()
+	methods := []*QueryNode{
+		NewMethod("/z/Float", "f", AccessWriteOnly),
+		NewMethod("/a/Float", "i", AccessWriteOnly),
+		NewMethod("/b/FloatNegative", "T", AccessWriteOnly),
+		NewMethod("/b/Float1", "T", AccessWriteOnly),
+		NewMethod("/b/Float2", "T", AccessWriteOnly),
+		NewMethod("/c/Active", "f", AccessWriteOnly),
+	}
+	for _, method := range methods {
+		if err := root.Add(method); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	catalog, err := BuildCatalog(root, specs, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(catalog.Outputs), len(methods); got != want {
+		t.Fatalf("outputs = %d, want %d", got, want)
+	}
+	for index, output := range catalog.Outputs {
+		if output.CacheIndex != uint16(index) {
+			t.Fatalf("cache index %d = %d", index, output.CacheIndex)
+		}
+		if index > 0 && catalog.Outputs[index-1].Address > output.Address {
+			t.Fatalf("outputs are not address sorted: %#v", catalog.Outputs)
+		}
+	}
+
+	byAddress := make(map[string]outputBinding, len(catalog.Outputs))
+	for _, output := range catalog.Outputs {
+		byAddress[output.Address] = output
+	}
+	if output := byAddress["/a/Float"]; output.Operation != outputDirectFloat || output.WireKind != scalarInt32 {
+		t.Fatalf("integer direct output = %#v", output)
+	}
+	if output := byAddress["/c/Active"]; output.Operation != outputDirectBool || output.WireKind != scalarFloat32 {
+		t.Fatalf("float bool output = %#v", output)
+	}
+	if output := byAddress["/b/FloatNegative"]; output.Operation != outputBinaryNegative || output.WireKind != scalarFalse {
+		t.Fatalf("negative output = %#v", output)
+	}
+	for _, address := range []string{"/b/Float1", "/b/Float2"} {
+		output := byAddress[address]
+		if output.Operation != outputBinaryBit || output.QuantizeMax != 3 {
+			t.Fatalf("binary output %s = %#v", address, output)
+		}
+	}
+}
