@@ -1,0 +1,2169 @@
+schema_version: 1
+source:
+  title: VRCFaceTracking Parameters
+  documentation_version: Current (v5.0)
+  url: https://docs.vrcft.io/docs/tutorial-avatars/tutorial-avatars-extras/parameters
+  retrieved_date: '2026-07-20'
+  scope: All parameters publicly listed on the referenced documentation page.
+  limitations:
+  - The documentation states that additional optimization-oriented parameters may remain undocumented.
+  - Float tracking parameters may also be represented through the documented Binary parameter form.
+  - Prefixed parameter paths are supported; osc_name records the canonical suffix rather than a full /avatar/parameters address.
+conventions:
+  default_osc_address_prefix: /avatar/parameters/
+  canonical_version_prefix: v2/
+  prefix_examples:
+  - v2/JawOpen
+  - ExamplePrefix/v2/JawOpen
+  - Example/Nest/v2/JawOpen
+  float_encodings:
+  - float
+  - binary
+  binary_note: Binary parameters use boolean bit parameters and, for signed values, a separate Negative boolean.
+counts:
+  detailed_float_parameters: 88
+  simplified_float_parameters: 36
+  float_parameters_total: 124
+  status_bool_parameters: 3
+  all_parameters_total: 127
+detailed_parameters:
+- name: EyeLeftX
+  osc_name: v2/EyeLeftX
+  group: eye_gaze
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized_cartesian
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left eye looks right
+  - range:
+    - -1.0
+    - 0.0
+    meaning: left eye looks left
+- name: EyeLeftY
+  osc_name: v2/EyeLeftY
+  group: eye_gaze
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized_cartesian
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left eye looks up
+  - range:
+    - -1.0
+    - 0.0
+    meaning: left eye looks down
+- name: EyeRightX
+  osc_name: v2/EyeRightX
+  group: eye_gaze
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized_cartesian
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right eye looks right
+  - range:
+    - -1.0
+    - 0.0
+    meaning: right eye looks left
+- name: EyeRightY
+  osc_name: v2/EyeRightY
+  group: eye_gaze
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized_cartesian
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right eye looks up
+  - range:
+    - -1.0
+    - 0.0
+    meaning: right eye looks down
+- name: EyeLidRight
+  osc_name: v2/EyeLidRight
+  group: eye_expression
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 0.75
+    meaning: right-eye openness
+  - range:
+    - 0.75
+    - 1.0
+    meaning: right-eye widen beyond the normal-open region
+- name: EyeLidLeft
+  osc_name: v2/EyeLidLeft
+  group: eye_expression
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 0.75
+    meaning: left-eye openness
+  - range:
+    - 0.75
+    - 1.0
+    meaning: left-eye widen beyond the normal-open region
+- name: EyeLid
+  osc_name: v2/EyeLid
+  group: eye_expression
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 0.75
+    meaning: combined left/right eye openness
+  - range:
+    - 0.75
+    - 1.0
+    meaning: combined left/right eye widen beyond the normal-open region
+- name: EyeSquintRight
+  osc_name: v2/EyeSquintRight
+  group: eye_expression
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right-eye squint
+- name: EyeSquintLeft
+  osc_name: v2/EyeSquintLeft
+  group: eye_expression
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left-eye squint
+- name: EyeSquint
+  osc_name: v2/EyeSquint
+  group: eye_expression
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined right/left eye squint
+- name: PupilDilation
+  osc_name: v2/PupilDilation
+  group: eye_expression
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: normalized pupil dilation
+- name: PupilDiameterRight
+  osc_name: v2/PupilDiameterRight
+  group: eye_expression
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: centimeter
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right-pupil diameter
+- name: PupilDiameterLeft
+  osc_name: v2/PupilDiameterLeft
+  group: eye_expression
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: centimeter
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left-pupil diameter
+- name: PupilDiameter
+  osc_name: v2/PupilDiameter
+  group: eye_expression
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: centimeter
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined pupil diameter
+- name: BrowPinchRight
+  osc_name: v2/BrowPinchRight
+  group: brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right-brow pinch
+- name: BrowPinchLeft
+  osc_name: v2/BrowPinchLeft
+  group: brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left-brow pinch
+- name: BrowLowererRight
+  osc_name: v2/BrowLowererRight
+  group: brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right-brow lowering
+- name: BrowLowererLeft
+  osc_name: v2/BrowLowererLeft
+  group: brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left-brow lowering
+- name: BrowInnerUpRight
+  osc_name: v2/BrowInnerUpRight
+  group: brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right inner-brow raise
+- name: BrowInnerUpLeft
+  osc_name: v2/BrowInnerUpLeft
+  group: brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left inner-brow raise
+- name: BrowOuterUpRight
+  osc_name: v2/BrowOuterUpRight
+  group: brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right outer-brow raise
+- name: BrowOuterUpLeft
+  osc_name: v2/BrowOuterUpLeft
+  group: brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left outer-brow raise
+- name: NoseSneerRight
+  osc_name: v2/NoseSneerRight
+  group: nose
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right-side nose sneer
+- name: NoseSneerLeft
+  osc_name: v2/NoseSneerLeft
+  group: nose
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left-side nose sneer
+- name: NasalDilationRight
+  osc_name: v2/NasalDilationRight
+  group: nose
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right nostril dilation
+- name: NasalDilationLeft
+  osc_name: v2/NasalDilationLeft
+  group: nose
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left nostril dilation
+- name: NasalConstrictRight
+  osc_name: v2/NasalConstrictRight
+  group: nose
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right nostril constriction
+  notes: The documentation table labels this row as left-side constriction; the parameter name is retained as authoritative.
+- name: NasalConstrictLeft
+  osc_name: v2/NasalConstrictLeft
+  group: nose
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left nostril constriction
+  notes: The documentation table labels this row as right-side constriction; the parameter name is retained as authoritative.
+- name: CheekSquintRight
+  osc_name: v2/CheekSquintRight
+  group: cheek
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right-cheek squint
+- name: CheekSquintLeft
+  osc_name: v2/CheekSquintLeft
+  group: cheek
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left-cheek squint
+- name: CheekPuffSuckRight
+  osc_name: v2/CheekPuffSuckRight
+  group: cheek
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right-cheek puff
+  - range:
+    - -1.0
+    - 0.0
+    meaning: right-cheek suck
+- name: CheekPuffSuckLeft
+  osc_name: v2/CheekPuffSuckLeft
+  group: cheek
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left-cheek puff
+  - range:
+    - -1.0
+    - 0.0
+    meaning: left-cheek suck
+- name: JawOpen
+  osc_name: v2/JawOpen
+  group: jaw
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: jaw opening
+- name: MouthClosed
+  osc_name: v2/MouthClosed
+  group: jaw
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: mouth closing
+- name: JawX
+  osc_name: v2/JawX
+  group: jaw
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: jaw moves right
+  - range:
+    - -1.0
+    - 0.0
+    meaning: jaw moves left
+- name: JawZ
+  osc_name: v2/JawZ
+  group: jaw
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: jaw moves forward
+  - range:
+    - -1.0
+    - 0.0
+    meaning: jaw moves backward
+- name: JawClench
+  osc_name: v2/JawClench
+  group: jaw
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: jaw clench
+  documentation_footnote: 1
+- name: JawMandibleRaise
+  osc_name: v2/JawMandibleRaise
+  group: jaw
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: mandible raise
+  documentation_footnote: 1
+- name: LipSuckUpperRight
+  osc_name: v2/LipSuckUpperRight
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: upper-right lip suck
+- name: LipSuckUpperLeft
+  osc_name: v2/LipSuckUpperLeft
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: upper-left lip suck
+- name: LipSuckLowerRight
+  osc_name: v2/LipSuckLowerRight
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: lower-right lip suck
+- name: LipSuckLowerLeft
+  osc_name: v2/LipSuckLowerLeft
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: lower-left lip suck
+- name: LipSuckCornerRight
+  osc_name: v2/LipSuckCornerRight
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right lip-corner suck
+- name: LipSuckCornerLeft
+  osc_name: v2/LipSuckCornerLeft
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left lip-corner suck
+- name: LipFunnelUpperRight
+  osc_name: v2/LipFunnelUpperRight
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: upper-right lip funnel
+- name: LipFunnelUpperLeft
+  osc_name: v2/LipFunnelUpperLeft
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: upper-left lip funnel
+- name: LipFunnelLowerRight
+  osc_name: v2/LipFunnelLowerRight
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: lower-right lip funnel
+- name: LipFunnelLowerLeft
+  osc_name: v2/LipFunnelLowerLeft
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: lower-left lip funnel
+- name: LipPuckerUpperRight
+  osc_name: v2/LipPuckerUpperRight
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: upper-right lip pucker
+- name: LipPuckerUpperLeft
+  osc_name: v2/LipPuckerUpperLeft
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: upper-left lip pucker
+- name: LipPuckerLowerRight
+  osc_name: v2/LipPuckerLowerRight
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: lower-right lip pucker
+- name: LipPuckerLowerLeft
+  osc_name: v2/LipPuckerLowerLeft
+  group: lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: lower-left lip pucker
+- name: MouthUpperUpRight
+  osc_name: v2/MouthUpperUpRight
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: upper-right mouth raise
+- name: MouthUpperUpLeft
+  osc_name: v2/MouthUpperUpLeft
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: upper-left mouth raise
+- name: MouthLowerDownRight
+  osc_name: v2/MouthLowerDownRight
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: lower-right mouth depression
+- name: MouthLowerDownLeft
+  osc_name: v2/MouthLowerDownLeft
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: lower-left mouth depression
+- name: MouthUpperDeepenRight
+  osc_name: v2/MouthUpperDeepenRight
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: upper-right mouth deepen
+- name: MouthUpperDeepenLeft
+  osc_name: v2/MouthUpperDeepenLeft
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: upper-left mouth deepen
+- name: MouthUpperX
+  osc_name: v2/MouthUpperX
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: upper mouth moves right
+  - range:
+    - -1.0
+    - 0.0
+    meaning: upper mouth moves left
+- name: MouthLowerX
+  osc_name: v2/MouthLowerX
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: lower mouth moves right
+  - range:
+    - -1.0
+    - 0.0
+    meaning: lower mouth moves left
+- name: MouthCornerPullRight
+  osc_name: v2/MouthCornerPullRight
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right mouth-corner pull
+- name: MouthCornerPullLeft
+  osc_name: v2/MouthCornerPullLeft
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left mouth-corner pull
+- name: MouthCornerSlantRight
+  osc_name: v2/MouthCornerSlantRight
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right mouth-corner slant
+- name: MouthCornerSlantLeft
+  osc_name: v2/MouthCornerSlantLeft
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left mouth-corner slant
+- name: MouthDimpleRight
+  osc_name: v2/MouthDimpleRight
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right mouth dimple
+- name: MouthDimpleLeft
+  osc_name: v2/MouthDimpleLeft
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left mouth dimple
+- name: MouthFrownRight
+  osc_name: v2/MouthFrownRight
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right mouth frown
+- name: MouthFrownLeft
+  osc_name: v2/MouthFrownLeft
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left mouth frown
+- name: MouthStretchRight
+  osc_name: v2/MouthStretchRight
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right mouth stretch
+- name: MouthStretchLeft
+  osc_name: v2/MouthStretchLeft
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left mouth stretch
+- name: MouthRaiserUpper
+  osc_name: v2/MouthRaiserUpper
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: upper-mouth raiser
+- name: MouthRaiserLower
+  osc_name: v2/MouthRaiserLower
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: lower-mouth raiser
+- name: MouthPressRight
+  osc_name: v2/MouthPressRight
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right mouth press
+- name: MouthPressLeft
+  osc_name: v2/MouthPressLeft
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left mouth press
+- name: MouthTightenerRight
+  osc_name: v2/MouthTightenerRight
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right mouth tightener
+- name: MouthTightenerLeft
+  osc_name: v2/MouthTightenerLeft
+  group: mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left mouth tightener
+- name: TongueOut
+  osc_name: v2/TongueOut
+  group: tongue
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: tongue extension
+- name: TongueX
+  osc_name: v2/TongueX
+  group: tongue
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: tongue points right
+  - range:
+    - -1.0
+    - 0.0
+    meaning: tongue points left
+- name: TongueY
+  osc_name: v2/TongueY
+  group: tongue
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: tongue points up
+  - range:
+    - -1.0
+    - 0.0
+    meaning: tongue points down
+- name: TongueRoll
+  osc_name: v2/TongueRoll
+  group: tongue
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: tongue roll
+- name: TongueArchY
+  osc_name: v2/TongueArchY
+  group: tongue
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: tongue bends down
+  - range:
+    - -1.0
+    - 0.0
+    meaning: tongue curls up
+- name: TongueShape
+  osc_name: v2/TongueShape
+  group: tongue
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: tongue squish
+  - range:
+    - -1.0
+    - 0.0
+    meaning: tongue flatten
+- name: TongueTwistRight
+  osc_name: v2/TongueTwistRight
+  group: tongue
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: rightward tongue twist
+- name: TongueTwistLeft
+  osc_name: v2/TongueTwistLeft
+  group: tongue
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: leftward tongue twist
+- name: SoftPalateClose
+  osc_name: v2/SoftPalateClose
+  group: neck
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: soft-palate closure
+- name: ThroatSwallow
+  osc_name: v2/ThroatSwallow
+  group: neck
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: swallowing motion
+- name: NeckFlexRight
+  osc_name: v2/NeckFlexRight
+  group: neck
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right-side neck flex
+- name: NeckFlexLeft
+  osc_name: v2/NeckFlexLeft
+  group: neck
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left-side neck flex
+simplified_parameters:
+- name: EyeX
+  osc_name: v2/EyeX
+  group: simplified_eye
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized_cartesian
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: both eyes look right
+  - range:
+    - -1.0
+    - 0.0
+    meaning: both eyes look left
+- name: EyeY
+  osc_name: v2/EyeY
+  group: simplified_eye
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized_cartesian
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: both eyes look up
+  - range:
+    - -1.0
+    - 0.0
+    meaning: both eyes look down
+- name: BrowDownRight
+  osc_name: v2/BrowDownRight
+  group: simplified_brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right brow down
+- name: BrowDownLeft
+  osc_name: v2/BrowDownLeft
+  group: simplified_brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left brow down
+- name: BrowOuterUp
+  osc_name: v2/BrowOuterUp
+  group: simplified_brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined outer-brow raise
+- name: BrowInnerUp
+  osc_name: v2/BrowInnerUp
+  group: simplified_brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined inner-brow raise
+- name: BrowUp
+  osc_name: v2/BrowUp
+  group: simplified_brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined brow raise
+- name: BrowExpressionRight
+  osc_name: v2/BrowExpressionRight
+  group: simplified_brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right brow up
+  - range:
+    - -1.0
+    - 0.0
+    meaning: right brow down
+- name: BrowExpressionLeft
+  osc_name: v2/BrowExpressionLeft
+  group: simplified_brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left brow up
+  - range:
+    - -1.0
+    - 0.0
+    meaning: left brow down
+- name: BrowExpression
+  osc_name: v2/BrowExpression
+  group: simplified_brow
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined brow up
+  - range:
+    - -1.0
+    - 0.0
+    meaning: combined brow down
+- name: MouthX
+  osc_name: v2/MouthX
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: mouth moves right
+  - range:
+    - -1.0
+    - 0.0
+    meaning: mouth moves left
+- name: MouthUpperUp
+  osc_name: v2/MouthUpperUp
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined upper-mouth raise
+- name: MouthLowerDown
+  osc_name: v2/MouthLowerDown
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined lower-mouth depression
+- name: MouthOpen
+  osc_name: v2/MouthOpen
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined upper raise and lower depression
+- name: MouthSmileRight
+  osc_name: v2/MouthSmileRight
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right smile from mouth-corner pull and slant
+- name: MouthSmileLeft
+  osc_name: v2/MouthSmileLeft
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left smile from mouth-corner pull and slant
+- name: MouthSadRight
+  osc_name: v2/MouthSadRight
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right sad shape from frown and stretch
+- name: MouthSadLeft
+  osc_name: v2/MouthSadLeft
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left sad shape from frown and stretch
+- name: SmileFrownRight
+  osc_name: v2/SmileFrownRight
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right smile from corner pull/slant
+  - range:
+    - -1.0
+    - 0.0
+    meaning: right frown
+- name: SmileFrownLeft
+  osc_name: v2/SmileFrownLeft
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left smile from corner pull/slant
+  - range:
+    - -1.0
+    - 0.0
+    meaning: left frown
+- name: SmileFrown
+  osc_name: v2/SmileFrown
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined smile from corner pull/slant
+  - range:
+    - -1.0
+    - 0.0
+    meaning: combined frown
+- name: SmileSadRight
+  osc_name: v2/SmileSadRight
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: right smile from corner pull/slant
+  - range:
+    - -1.0
+    - 0.0
+    meaning: right sad shape from frown/stretch
+- name: SmileSadLeft
+  osc_name: v2/SmileSadLeft
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: left smile from corner pull/slant
+  - range:
+    - -1.0
+    - 0.0
+    meaning: left sad shape from frown/stretch
+- name: SmileSad
+  osc_name: v2/SmileSad
+  group: simplified_mouth
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined smile from corner pull/slant
+  - range:
+    - -1.0
+    - 0.0
+    meaning: combined sad shape from frown/stretch
+- name: LipSuckUpper
+  osc_name: v2/LipSuckUpper
+  group: simplified_lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined upper-lip suck
+- name: LipSuckLower
+  osc_name: v2/LipSuckLower
+  group: simplified_lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined lower-lip suck
+- name: LipSuck
+  osc_name: v2/LipSuck
+  group: simplified_lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined lip suck
+- name: LipFunnelUpper
+  osc_name: v2/LipFunnelUpper
+  group: simplified_lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined upper-lip funnel
+- name: LipFunnelLower
+  osc_name: v2/LipFunnelLower
+  group: simplified_lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined lower-lip funnel
+- name: LipFunnel
+  osc_name: v2/LipFunnel
+  group: simplified_lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined lip funnel
+- name: LipPuckerUpper
+  osc_name: v2/LipPuckerUpper
+  group: simplified_lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined upper-lip pucker
+- name: LipPuckerLower
+  osc_name: v2/LipPuckerLower
+  group: simplified_lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined lower-lip pucker
+- name: LipPucker
+  osc_name: v2/LipPucker
+  group: simplified_lip
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined lip pucker
+- name: NoseSneer
+  osc_name: v2/NoseSneer
+  group: simplified_nose_cheek
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined nose sneer
+- name: CheekSquint
+  osc_name: v2/CheekSquint
+  group: simplified_nose_cheek
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: 0.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined cheek squint
+- name: CheekPuffSuck
+  osc_name: v2/CheekPuffSuck
+  group: simplified_nose_cheek
+  value_type: float
+  supported_encodings:
+  - float
+  - binary
+  range:
+    min: -1.0
+    max: 1.0
+  unit: normalized
+  semantics:
+  - range:
+    - 0.0
+    - 1.0
+    meaning: combined cheek puff
+  - range:
+    - -1.0
+    - 0.0
+    meaning: combined cheek suck
+tracking_active_parameters:
+- name: EyeTrackingActive
+  osc_name: EyeTrackingActive
+  group: tracking_active
+  value_type: bool
+  supported_encodings:
+  - bool
+  semantics:
+    'true': eye tracking is active
+    'false': eye tracking is inactive
+  send_policy: on_avatar_load_or_state_change
+- name: ExpressionTrackingActive
+  osc_name: ExpressionTrackingActive
+  group: tracking_active
+  value_type: bool
+  supported_encodings:
+  - bool
+  semantics:
+    'true': expression tracking is active
+    'false': expression tracking is inactive
+  send_policy: on_avatar_load_or_state_change
+- name: LipTrackingActive
+  osc_name: LipTrackingActive
+  group: tracking_active
+  value_type: bool
+  supported_encodings:
+  - bool
+  semantics:
+    'true': expression/lip tracking is active
+    'false': expression/lip tracking is inactive
+  send_policy: on_avatar_load_or_state_change
