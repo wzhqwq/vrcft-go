@@ -361,8 +361,10 @@ go run ./cmd/projectstatus -check
 
 Default mode prints the latest report without changing files. `-write` writes
 `docs/project/status.md`. JSON mode emits the same model for CI and future UI
-consumers. `-check` fails when the committed Markdown report differs from a
-fresh report after excluding volatile generation time.
+consumers. `-check` fails when the report's source-content fingerprint or
+deterministic result differs from a fresh evaluation. Generation time, Git
+commit, command durations, and dirty state are informational and excluded from
+freshness comparison.
 
 Each command check has a 120-second default timeout. Identical command IDs and
 arguments execute once per run and share results. Failure of one check does not
@@ -395,6 +397,7 @@ dependency cycles are fatal schema errors.
 `docs/project/status.md` contains:
 
 - source Git commit;
+- source-content fingerprint excluding generated status files;
 - generation time and dirty-worktree marker;
 - overall state and progress;
 - milestone table with dependency state;
@@ -408,6 +411,13 @@ Rows and diagnostics are sorted by milestone, spec ID, and check ID. Paths use
 forward slashes in generated output on every platform. Volatile durations are
 shown in terminal and JSON output but omitted from committed Markdown to keep
 diffs stable.
+
+The source-content fingerprint hashes repository-relative paths and contents in
+stable path order, excluding `docs/project/status.md`, `.git`, dependency
+directories, and transient build outputs. This lets the generated report be
+committed without invalidating itself while still detecting source, test, spec,
+and configuration changes. Git commit and dirty state remain visible provenance
+but do not determine freshness.
 
 The JSON representation includes schema version `1`, exact integer weight
 totals, check duration, stdout/stderr summaries, and dependency relationships.
