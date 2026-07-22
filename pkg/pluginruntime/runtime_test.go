@@ -93,6 +93,12 @@ func (c *memoryConn) calls() (int, int) {
 	return c.sendCalls, c.receiveCalls
 }
 
+func (c *memoryConn) failNextReceive(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.receiveErr = err
+}
+
 type testDriver struct {
 	descriptor pluginapi.Descriptor
 	run        func(context.Context, pluginapi.Host) error
@@ -222,6 +228,10 @@ func TestNewValidationAndNoIOBeforeRun(t *testing.T) {
 		{"zero log queue", validDriver, validConn, func() RuntimeConfig { c := validCfg; c.LogQueue = 0; return c }()},
 		{"zero heartbeat", validDriver, validConn, func() RuntimeConfig { c := validCfg; c.HeartbeatInterval = 0; return c }()},
 		{"zero shutdown timeout", validDriver, validConn, func() RuntimeConfig { c := validCfg; c.ShutdownTimeout = 0; return c }()},
+		{"negative control queue", validDriver, validConn, func() RuntimeConfig { c := validCfg; c.ControlQueue = -1; return c }()},
+		{"negative log queue", validDriver, validConn, func() RuntimeConfig { c := validCfg; c.LogQueue = -1; return c }()},
+		{"negative heartbeat", validDriver, validConn, func() RuntimeConfig { c := validCfg; c.HeartbeatInterval = -time.Second; return c }()},
+		{"negative shutdown timeout", validDriver, validConn, func() RuntimeConfig { c := validCfg; c.ShutdownTimeout = -time.Second; return c }()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -365,7 +375,9 @@ func TestRuntimeDeliversControlsInWireOrderAndSuppressesDuplicates(t *testing.T)
 	// Idempotent duplicates must not produce events.
 	c.toRuntime <- mustMessage(t, protocol.ActiveChanged{Active: false})
 	c.toRuntime <- mustMessage(t, protocol.ConfigChanged{Config: config.Clone()})
-	c.toRuntime <- mustMessage(t, protocol.SubscriptionChanged{Subscription: subscription})
+	normalizedEquivalent := subscription
+	normalizedEquivalent.Expressions = trackingmodel.ExpressionMaskOf(2)
+	c.toRuntime <- mustMessage(t, protocol.SubscriptionChanged{Subscription: normalizedEquivalent})
 
 	want := []pluginapi.ControlEvent{
 		pluginapi.ActiveChanged{Active: false},
@@ -523,6 +535,7 @@ func TestRuntimeShutdownLifecycle(t *testing.T) {
 	done := startHandshake(t, runtime, c, validTestStartup())
 	host := <-hostReady
 	c.toRuntime <- mustMessage(t, protocol.Shutdown{})
+	c.toRuntime <- mustMessage(t, protocol.ActiveChanged{Active: false})
 	select {
 	case got := <-host.Events():
 		if !reflect.DeepEqual(got, pluginapi.ShutdownRequested{}) {
@@ -545,6 +558,140 @@ func TestRuntimeShutdownLifecycle(t *testing.T) {
 	awaitClosed(t, host.Events())
 	if c.closeCalls.Load() != 1 {
 		t.Fatalf("Close calls = %d, want 1", c.closeCalls.Load())
+	}
+	if _, receives := c.calls(); receives != 2 {
+		t.Fatalf("Receive calls = %d, want initialization plus shutdown only", receives)
+	}
+}
+
+func TestRuntimeAcceptedShutdownOwnsCompletion(t *testing.T) {
+	// Multiple independent runs amplify the terminal race without timing sleeps:
+	// every driver return is causally after it consumes ShutdownRequested.
+	for attempt := 0; attempt < 100; attempt++ {
+		c := newMemoryConn(8)
+		d := &testDriver{descriptor: validTestDescriptor(), run: func(_ context.Context, host pluginapi.Host) error {
+			if event := <-host.Events(); !reflect.DeepEqual(event, pluginapi.ShutdownRequested{}) {
+				return errors.New("driver received non-shutdown event")
+			}
+			return nil
+		}}
+		runtime, err := New(d, c, testConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := startHandshake(t, runtime, c, validTestStartup())
+		c.toRuntime <- mustMessage(t, protocol.Shutdown{})
+		if err := awaitResult(t, done); err != nil {
+			t.Fatalf("attempt %d Run() error = %v", attempt, err)
+		}
+		select {
+		case message := <-c.fromRuntime:
+			if message.Type != protocol.MessageShutdownAck {
+				t.Fatalf("attempt %d final message = %#v, want ShutdownAck", attempt, message)
+			}
+		default:
+			t.Fatalf("attempt %d accepted shutdown returned without ShutdownAck", attempt)
+		}
+	}
+}
+
+func TestRuntimeShutdownAckSendFailureReportsProtocolError(t *testing.T) {
+	c := newMemoryConn(8)
+	ackErr := errors.New("shutdown ack send failed")
+	c.sendErrAt, c.sendErr = 3, ackErr
+	d := &testDriver{descriptor: validTestDescriptor(), run: func(ctx context.Context, host pluginapi.Host) error {
+		if event := <-host.Events(); !reflect.DeepEqual(event, pluginapi.ShutdownRequested{}) {
+			return errors.New("driver received non-shutdown event")
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	runtime, err := New(d, c, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := startHandshake(t, runtime, c, validTestStartup())
+	c.toRuntime <- mustMessage(t, protocol.Shutdown{})
+	if err := awaitResult(t, done); !errors.Is(err, ackErr) {
+		t.Fatalf("Run() error = %v, want ack send error", err)
+	}
+	got := receiveMessage(t, c)
+	if got.Type != protocol.MessageError || got.Payload.(protocol.Error).Code != "protocol_error" {
+		t.Fatalf("ack failure notice = %#v, want protocol_error", got)
+	}
+}
+
+func TestRuntimePostReadyReceiveFailureCancelsDriver(t *testing.T) {
+	c := newMemoryConn(8)
+	receiveErr := errors.New("control receive failed")
+	driverCanceled := make(chan struct{})
+	d := &testDriver{descriptor: validTestDescriptor(), run: func(ctx context.Context, _ pluginapi.Host) error {
+		<-ctx.Done()
+		close(driverCanceled)
+		return ctx.Err()
+	}}
+	runtime, err := New(d, c, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := startHandshake(t, runtime, c, validTestStartup())
+	c.failNextReceive(receiveErr)
+	// Unblock an already-waiting Receive so it observes the injected failure on
+	// its next iteration without relying on a sleep.
+	c.toRuntime <- mustMessage(t, protocol.ActiveChanged{Active: false})
+	if err := awaitResult(t, done); !errors.Is(err, receiveErr) {
+		t.Fatalf("Run() error = %v, want receive error", err)
+	}
+	select {
+	case <-driverCanceled:
+	case <-time.After(testTimeout):
+		t.Fatal("post-Ready receive failure did not cancel driver")
+	}
+}
+
+func TestRuntimeSpontaneousContextCanceledIsDriverError(t *testing.T) {
+	c := newMemoryConn(8)
+	d := &testDriver{descriptor: validTestDescriptor(), run: func(context.Context, pluginapi.Host) error {
+		return context.Canceled
+	}}
+	runtime, err := New(d, c, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := startHandshake(t, runtime, c, validTestStartup())
+	if err := awaitResult(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want spontaneous context.Canceled", err)
+	}
+	got := receiveMessage(t, c)
+	if got.Type != protocol.MessageError || got.Payload.(protocol.Error).Code != "driver_error" {
+		t.Fatalf("driver notice = %#v, want driver_error", got)
+	}
+}
+
+func TestRuntimeReadySendFailureDoesNotStartDriver(t *testing.T) {
+	c := newMemoryConn(8)
+	readyErr := errors.New("ready send failed")
+	c.sendErrAt, c.sendErr = 2, readyErr
+	d := &testDriver{descriptor: validTestDescriptor()}
+	runtime, err := New(d, c, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(context.Background()) }()
+	if got := receiveMessage(t, c); got.Type != protocol.MessageHello {
+		t.Fatalf("first message = %v, want Hello", got.Type)
+	}
+	c.toRuntime <- mustMessage(t, protocol.Initialize{Startup: validTestStartup()})
+	if err := awaitResult(t, done); !errors.Is(err, readyErr) {
+		t.Fatalf("Run() error = %v, want Ready send error", err)
+	}
+	if d.runCalls.Load() != 0 {
+		t.Fatalf("driver Run calls = %d, want 0", d.runCalls.Load())
+	}
+	got := receiveMessage(t, c)
+	if got.Type != protocol.MessageError || got.Payload.(protocol.Error).Code != "protocol_error" {
+		t.Fatalf("Ready failure notice = %#v, want protocol_error", got)
 	}
 }
 

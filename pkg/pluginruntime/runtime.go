@@ -149,10 +149,11 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	driverDone := make(chan error, 1)
+	terminal := newTerminalState()
+	driverDone := make(chan driverResult, 1)
 	readerDone := make(chan readerResult, 1)
-	go func() { driverDone <- r.driver.Run(childCtx, host) }()
-	go func() { readerDone <- r.readControls(childCtx, host) }()
+	go func() { driverDone <- terminal.driverReturned(r.driver.Run(childCtx, host)) }()
+	go func() { readerDone <- r.readControls(childCtx, host, terminal) }()
 	defer host.closeEvents()
 
 	select {
@@ -161,21 +162,29 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 		r.awaitStops(driverDone, readerDone)
 		return ctx.Err()
 
-	case driverErr := <-driverDone:
+	case driver := <-driverDone:
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			cancel()
 			<-readerDone
 			return ctxErr
 		}
+		if driver.shutdownAccepted {
+			cancel()
+			reader := <-readerDone
+			if !reader.shutdown {
+				return errors.New("pluginruntime: accepted shutdown was not completed by control reader")
+			}
+			return r.finishAcceptedShutdown(driver.err)
+		}
 		// A driver return owns completion, so cancellation after observing the
 		// result cannot turn a spontaneous context.Canceled into success.
 		cancel()
 		<-readerDone
-		if driverErr == nil {
+		if driver.err == nil {
 			return nil
 		}
-		r.sendErrorNotice("driver_error", driverErr)
-		return driverErr
+		r.sendErrorNotice("driver_error", driver.err)
+		return driver.err
 
 	case reader := <-readerDone:
 		cancel()
@@ -195,30 +204,43 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 	}
 }
 
-func (r *Runtime) finishShutdown(driverDone <-chan error) error {
+func (r *Runtime) finishShutdown(driverDone <-chan driverResult) error {
 	timer := time.NewTimer(r.config.ShutdownTimeout)
 	defer timer.Stop()
 
 	var result error
 	select {
-	case driverErr := <-driverDone:
-		if driverErr != nil && !errors.Is(driverErr, context.Canceled) {
-			r.sendErrorNotice("driver_error", driverErr)
-			result = driverErr
-		}
+	case driver := <-driverDone:
+		result = r.classifyShutdownDriverError(driver.err)
 	case <-timer.C:
 		result = ErrShutdownTimeout
 	}
+	return r.sendShutdownAck(result)
+}
 
+func (r *Runtime) finishAcceptedShutdown(driverErr error) error {
+	return r.sendShutdownAck(r.classifyShutdownDriverError(driverErr))
+}
+
+func (r *Runtime) classifyShutdownDriverError(driverErr error) error {
+	if driverErr != nil && !errors.Is(driverErr, context.Canceled) {
+		r.sendErrorNotice("driver_error", driverErr)
+		return driverErr
+	}
+	return nil
+}
+
+func (r *Runtime) sendShutdownAck(result error) error {
 	ackCtx, cancel := context.WithTimeout(context.Background(), r.config.ShutdownTimeout)
 	defer cancel()
 	if err := r.send(ackCtx, protocol.ShutdownAck{}); err != nil {
+		r.sendErrorNotice("protocol_error", err)
 		result = errors.Join(result, err)
 	}
 	return result
 }
 
-func (r *Runtime) awaitStops(driverDone <-chan error, readerDone <-chan readerResult) {
+func (r *Runtime) awaitStops(driverDone <-chan driverResult, readerDone <-chan readerResult) {
 	timer := time.NewTimer(r.config.ShutdownTimeout)
 	defer timer.Stop()
 	for driverDone != nil || readerDone != nil {
@@ -233,7 +255,7 @@ func (r *Runtime) awaitStops(driverDone <-chan error, readerDone <-chan readerRe
 	}
 }
 
-func (r *Runtime) awaitDriver(driverDone <-chan error) {
+func (r *Runtime) awaitDriver(driverDone <-chan driverResult) {
 	timer := time.NewTimer(r.config.ShutdownTimeout)
 	defer timer.Stop()
 	select {
@@ -265,7 +287,37 @@ type readerResult struct {
 	shutdown bool
 }
 
-func (r *Runtime) readControls(ctx context.Context, host *runtimeHost) readerResult {
+type driverResult struct {
+	err              error
+	shutdownAccepted bool
+}
+
+type terminalState struct {
+	mu               sync.Mutex
+	shutdownAccepted bool
+}
+
+func newTerminalState() *terminalState { return &terminalState{} }
+
+func (s *terminalState) driverReturned(err error) driverResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return driverResult{err: err, shutdownAccepted: s.shutdownAccepted}
+}
+
+func (s *terminalState) deliverShutdown(events chan<- pluginapi.ControlEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	select {
+	case events <- pluginapi.ShutdownRequested{}:
+		s.shutdownAccepted = true
+		return nil
+	default:
+		return ErrControlBackpressure
+	}
+}
+
+func (r *Runtime) readControls(ctx context.Context, host *runtimeHost, terminal *terminalState) readerResult {
 	for {
 		message, err := r.conn.Receive(ctx)
 		if err != nil {
@@ -285,7 +337,9 @@ func (r *Runtime) readControls(ctx context.Context, host *runtimeHost) readerRes
 		case protocol.ActiveChanged:
 			event = host.applyActive(payload.Active)
 		case protocol.Shutdown:
-			event = pluginapi.ShutdownRequested{}
+			if err := terminal.deliverShutdown(host.events); err != nil {
+				return readerResult{err: err}
+			}
 			shutdown = true
 		default:
 			err = fmt.Errorf("pluginruntime: unexpected control message %T", message.Payload)
