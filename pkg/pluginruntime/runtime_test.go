@@ -25,6 +25,11 @@ type memoryConn struct {
 	closed      chan struct{}
 	closeOnce   sync.Once
 	closeCalls  atomic.Int32
+	activeSends atomic.Int32
+	maxSends    atomic.Int32
+
+	postReadySendStarted chan struct{}
+	sendStartedOnce      sync.Once
 
 	mu           sync.Mutex
 	sendCalls    int
@@ -33,6 +38,7 @@ type memoryConn struct {
 	sendErr      error
 	receiveErr   error
 	closeErr     error
+	sendDelay    time.Duration
 }
 
 func newMemoryConn(capacity int) *memoryConn {
@@ -44,13 +50,36 @@ func newMemoryConn(capacity int) *memoryConn {
 }
 
 func (c *memoryConn) Send(ctx context.Context, message protocol.Message) error {
+	active := c.activeSends.Add(1)
+	defer c.activeSends.Add(-1)
+	for {
+		maximum := c.maxSends.Load()
+		if active <= maximum || c.maxSends.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+
 	c.mu.Lock()
 	c.sendCalls++
 	call := c.sendCalls
-	errAt, sendErr := c.sendErrAt, c.sendErr
+	errAt, sendErr, sendDelay := c.sendErrAt, c.sendErr, c.sendDelay
 	c.mu.Unlock()
+	if call >= 3 && c.postReadySendStarted != nil {
+		c.sendStartedOnce.Do(func() { close(c.postReadySendStarted) })
+	}
 	if errAt != 0 && call == errAt {
 		return sendErr
+	}
+	if sendDelay > 0 {
+		timer := time.NewTimer(sendDelay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.closed:
+			return io.ErrClosedPipe
+		}
 	}
 	select {
 	case c.fromRuntime <- message:
@@ -200,6 +229,423 @@ func awaitClosed(t *testing.T, events <-chan pluginapi.ControlEvent) {
 		}
 	case <-time.After(testTimeout):
 		t.Fatal("timed out waiting for event channel close")
+	}
+}
+
+func TestLatestFrameSlotRejectsZeroGeneration(t *testing.T) {
+	slot := NewLatestFrameSlot()
+	if slot.Store(pendingFrame{}) {
+		t.Fatal("Store(zero generation) = true")
+	}
+	if _, ok := slot.Load(); ok {
+		t.Fatal("Load() found a zero-generation frame")
+	}
+	select {
+	case <-slot.Notify():
+		t.Fatal("zero-generation Store signaled notification")
+	default:
+	}
+}
+
+func TestLatestFrameSlotNotifiesOverwritesAndConsumes(t *testing.T) {
+	slot := NewLatestFrameSlot()
+	first := pendingFrame{
+		Generation:   1,
+		Subscription: validTestStartup().Subscription,
+		Frame:        trackingmodel.TrackingFrame{Sequence: 1},
+	}
+	second := pendingFrame{
+		Generation: 2,
+		Subscription: pluginapi.Subscription{
+			Generation:   2,
+			Capabilities: trackingmodel.CapabilityExpression,
+		},
+		Frame: trackingmodel.TrackingFrame{Sequence: 2},
+	}
+	if !slot.Store(first) || !slot.Store(second) {
+		t.Fatal("Store(valid frame) = false")
+	}
+	first.Frame.Sequence = 99
+	second.Frame.Sequence = 99
+	second.Subscription.Generation = 99
+
+	if got := cap(slot.Notify()); got != 1 {
+		t.Fatalf("notification capacity = %d, want 1", got)
+	}
+	select {
+	case <-slot.Notify():
+	default:
+		t.Fatal("Store did not signal notification")
+	}
+	select {
+	case <-slot.Notify():
+		t.Fatal("overwrite queued more than one notification")
+	default:
+	}
+	got, ok := slot.Load()
+	if !ok || got.Generation != 2 || got.Subscription.Generation != 2 || got.Frame.Sequence != 2 {
+		t.Fatalf("Load() = (%+v, %v), want copied newest frame", got, ok)
+	}
+	if _, ok := slot.Load(); ok {
+		t.Fatal("second Load() found already-consumed frame")
+	}
+}
+
+func TestLatestFrameSlotClearAndClearBefore(t *testing.T) {
+	makeFrame := func(generation uint64) pendingFrame {
+		return pendingFrame{Generation: generation, Subscription: pluginapi.Subscription{Generation: generation}}
+	}
+
+	t.Run("clear older generation", func(t *testing.T) {
+		slot := NewLatestFrameSlot()
+		slot.Store(makeFrame(2))
+		slot.ClearBefore(3)
+		if _, ok := slot.Load(); ok {
+			t.Fatal("ClearBefore retained an older generation")
+		}
+	})
+
+	t.Run("retain same or newer generation", func(t *testing.T) {
+		slot := NewLatestFrameSlot()
+		slot.Store(makeFrame(3))
+		slot.ClearBefore(3)
+		if got, ok := slot.Load(); !ok || got.Generation != 3 {
+			t.Fatalf("Load() = (%+v, %v), want generation 3", got, ok)
+		}
+		select {
+		case <-slot.Notify():
+			t.Fatal("Load left a stale notification")
+		default:
+		}
+	})
+
+	t.Run("clear all", func(t *testing.T) {
+		slot := NewLatestFrameSlot()
+		slot.Store(makeFrame(4))
+		slot.Clear()
+		if _, ok := slot.Load(); ok {
+			t.Fatal("Clear retained pending frame")
+		}
+	})
+}
+
+func TestRuntimeHostPublishFrameUsesAtomicSubscriptionSnapshot(t *testing.T) {
+	startup := validTestStartup()
+	host := newRuntimeHost(startup, 1, 1)
+	frame := trackingmodel.TrackingFrame{Sequence: 7, Capabilities: trackingmodel.CapabilityEye}
+
+	result := make(chan bool, 1)
+	go func() { result <- host.PublishFrame(frame) }()
+	select {
+	case accepted := <-result:
+		if !accepted {
+			t.Fatal("PublishFrame(valid active frame) = false")
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("PublishFrame blocked")
+	}
+
+	pending, ok := host.frames.Load()
+	if !ok || pending.Generation != startup.Subscription.Generation || pending.Subscription != startup.Subscription || pending.Frame != frame {
+		t.Fatalf("pending frame = (%+v, %v), want generation-tagged snapshot", pending, ok)
+	}
+}
+
+func TestRuntimeHostPublishFrameRejectsUnavailableStates(t *testing.T) {
+	tests := []struct {
+		name    string
+		startup pluginapi.Startup
+		stop    bool
+	}{
+		{"inactive", func() pluginapi.Startup { s := validTestStartup(); s.Active = false; return s }(), false},
+		{"zero generation", func() pluginapi.Startup { s := validTestStartup(); s.Subscription.Generation = 0; return s }(), false},
+		{"empty capabilities", func() pluginapi.Startup { s := validTestStartup(); s.Subscription.Capabilities = 0; return s }(), false},
+		{"stopped", validTestStartup(), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host := newRuntimeHost(tt.startup, 1, 1)
+			if tt.stop {
+				host.stop()
+			}
+			if host.PublishFrame(trackingmodel.TrackingFrame{}) {
+				t.Fatal("PublishFrame(unavailable host) = true")
+			}
+			if _, ok := host.frames.Load(); ok {
+				t.Fatal("rejected frame was stored")
+			}
+		})
+	}
+}
+
+func TestRuntimeHostSubscriptionAndActivationClearPendingFrames(t *testing.T) {
+	t.Run("new generation clears older frame", func(t *testing.T) {
+		host := newRuntimeHost(validTestStartup(), 1, 1)
+		if !host.PublishFrame(trackingmodel.TrackingFrame{Sequence: 1}) {
+			t.Fatal("PublishFrame() = false")
+		}
+		next := pluginapi.Subscription{Generation: 2, Capabilities: trackingmodel.CapabilityExpression}
+		if _, err := host.applySubscription(next); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := host.frames.Load(); ok {
+			t.Fatal("new subscription retained older pending frame")
+		}
+	})
+
+	t.Run("deactivation clears all frames", func(t *testing.T) {
+		host := newRuntimeHost(validTestStartup(), 1, 1)
+		if !host.PublishFrame(trackingmodel.TrackingFrame{Sequence: 1}) {
+			t.Fatal("PublishFrame() = false")
+		}
+		host.applyActive(false)
+		if _, ok := host.frames.Load(); ok {
+			t.Fatal("deactivation retained pending frame")
+		}
+	})
+}
+
+func TestRuntimeHostSubscriptionRaceCannotSendOldGeneration(t *testing.T) {
+	for attempt := 0; attempt < 100; attempt++ {
+		host := newRuntimeHost(validTestStartup(), 1, 1)
+		start := make(chan struct{})
+		published := make(chan struct{})
+		go func() {
+			<-start
+			host.PublishFrame(trackingmodel.TrackingFrame{Sequence: 1})
+			close(published)
+		}()
+		close(start)
+		next := pluginapi.Subscription{Generation: 2, Capabilities: trackingmodel.CapabilityExpression}
+		if _, err := host.applySubscription(next); err != nil {
+			t.Fatal(err)
+		}
+		<-published
+		if len(host.frames.Notify()) == 0 {
+			continue
+		}
+
+		c := newMemoryConn(1)
+		runtime := &Runtime{conn: c, config: testConfig()}
+		cancel, writerDone := startOutboundWriter(t, runtime, host)
+		message := receiveMessage(t, c)
+		cancel()
+		_ = awaitResult(t, writerDone)
+		frame, ok := message.Payload.(protocol.TrackingFrame)
+		if !ok || frame.Generation != 2 {
+			t.Fatalf("attempt %d sent %#v, want generation 2 or no frame", attempt, message.Payload)
+		}
+	}
+}
+
+func TestRuntimeHostStatusIsValidatedAndLatestOnly(t *testing.T) {
+	host := newRuntimeHost(validTestStartup(), 1, 1)
+	host.PublishStatus(pluginapi.DeviceStatus{State: pluginapi.DeviceReady, Message: "old"})
+	host.PublishStatus(pluginapi.DeviceStatus{State: "invalid", Message: "ignored"})
+	want := pluginapi.DeviceStatus{State: pluginapi.DeviceError, Message: "camera lost"}
+	host.PublishStatus(want)
+
+	select {
+	case <-host.statusNotify:
+	default:
+		t.Fatal("valid status did not signal notification")
+	}
+	select {
+	case <-host.statusNotify:
+		t.Fatal("status overwrite queued more than one notification")
+	default:
+	}
+	if got, ok := host.loadStatus(); !ok || got != want {
+		t.Fatalf("loadStatus() = (%+v, %v), want latest valid status", got, ok)
+	}
+	if _, ok := host.loadStatus(); ok {
+		t.Fatal("loadStatus() returned consumed status")
+	}
+
+	host.stop()
+	host.PublishStatus(pluginapi.DeviceStatus{State: pluginapi.DeviceReady})
+	if _, ok := host.loadStatus(); ok {
+		t.Fatal("post-stop status was retained")
+	}
+}
+
+func TestRuntimeHostLogIsBoundedNonblockingAndCountsDrops(t *testing.T) {
+	host := newRuntimeHost(validTestStartup(), 1, 1)
+	host.Log(pluginapi.LogInfo, "queued")
+	done := make(chan struct{})
+	go func() {
+		host.Log(pluginapi.LogError, "dropped")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(testTimeout):
+		t.Fatal("Log blocked on a full queue")
+	}
+
+	select {
+	case got := <-host.logs:
+		if got.Level != pluginapi.LogInfo || got.Message != "queued" {
+			t.Fatalf("queued log = %+v", got)
+		}
+	default:
+		t.Fatal("first log was not queued")
+	}
+	if got := host.droppedLogs.Load(); got != 1 {
+		t.Fatalf("dropped count = %d, want 1", got)
+	}
+
+	host.Log(pluginapi.LogLevel("trace"), "invalid level")
+	host.Log(pluginapi.LogInfo, " \t")
+	host.stop()
+	host.Log(pluginapi.LogInfo, "after stop")
+	select {
+	case got := <-host.logs:
+		t.Fatalf("invalid or post-stop log queued: %+v", got)
+	default:
+	}
+	if got := host.droppedLogs.Load(); got != 1 {
+		t.Fatalf("invalid/post-stop calls changed dropped count to %d", got)
+	}
+}
+
+func startOutboundWriter(t *testing.T, runtime *Runtime, host *runtimeHost) (context.CancelFunc, <-chan error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runtime.writeOutbound(ctx, host, time.Now()) }()
+	return cancel, done
+}
+
+func TestOutboundWriterTrimsFrameWithStoredSubscription(t *testing.T) {
+	c := newMemoryConn(8)
+	cfg := testConfig()
+	runtime := &Runtime{conn: c, config: cfg}
+	startup := validTestStartup()
+	startup.Subscription = pluginapi.Subscription{
+		Generation:   9,
+		Capabilities: trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression,
+		Eye:          trackingmodel.EyeValidLeftGaze,
+		Expressions:  trackingmodel.ExpressionMaskOf(trackingmodel.ExpressionJawOpen),
+	}
+	host := newRuntimeHost(startup, 1, 1)
+	frame := trackingmodel.TrackingFrame{
+		Sequence:     17,
+		Capabilities: trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression,
+		Eye: trackingmodel.EyeSample{
+			Valid:     trackingmodel.EyeValidLeftGaze | trackingmodel.EyeValidRightGaze,
+			LeftGaze:  trackingmodel.Vec2{X: 1, Y: 2},
+			RightGaze: trackingmodel.Vec2{X: 3, Y: 4},
+		},
+	}
+	frame.Expressions.Valid = trackingmodel.ExpressionMaskOf(
+		trackingmodel.ExpressionJawOpen,
+		trackingmodel.ExpressionBrowPinchRight,
+	)
+	frame.Expressions.Values[trackingmodel.ExpressionJawOpen] = 0.75
+	frame.Expressions.Values[trackingmodel.ExpressionBrowPinchRight] = 0.5
+	if !host.PublishFrame(frame) {
+		t.Fatal("PublishFrame() = false")
+	}
+
+	cancel, writerDone := startOutboundWriter(t, runtime, host)
+	message := receiveMessage(t, c)
+	cancel()
+	if err := awaitResult(t, writerDone); !errors.Is(err, context.Canceled) {
+		t.Fatalf("writer error = %v, want context.Canceled", err)
+	}
+	payload, ok := message.Payload.(protocol.TrackingFrame)
+	if !ok {
+		t.Fatalf("payload = %T, want protocol.TrackingFrame", message.Payload)
+	}
+	if payload.Generation != 9 || payload.Frame.Sequence != 17 {
+		t.Fatalf("tracking frame metadata = %+v", payload)
+	}
+	if payload.Frame.Eye.Valid != trackingmodel.EyeValidLeftGaze || payload.Frame.Eye.LeftGaze != frame.Eye.LeftGaze || payload.Frame.Eye.RightGaze != (trackingmodel.Vec2{}) {
+		t.Fatalf("trimmed eye = %+v", payload.Frame.Eye)
+	}
+	if !payload.Frame.Expressions.Valid.Has(trackingmodel.ExpressionJawOpen) || payload.Frame.Expressions.Valid.Has(trackingmodel.ExpressionBrowPinchRight) {
+		t.Fatalf("trimmed expression validity = %+v", payload.Frame.Expressions.Valid)
+	}
+	if payload.Frame.Expressions.Values[trackingmodel.ExpressionJawOpen] != 0.75 || payload.Frame.Expressions.Values[trackingmodel.ExpressionBrowPinchRight] != 0 {
+		t.Fatalf("trimmed expression values = %+v", payload.Frame.Expressions.Values)
+	}
+}
+
+func TestOutboundWriterSendsLatestStatus(t *testing.T) {
+	c := newMemoryConn(4)
+	runtime := &Runtime{conn: c, config: testConfig()}
+	host := newRuntimeHost(validTestStartup(), 1, 1)
+	host.PublishStatus(pluginapi.DeviceStatus{State: pluginapi.DeviceInitializing})
+	want := pluginapi.DeviceStatus{State: pluginapi.DeviceError, Message: "camera unavailable"}
+	host.PublishStatus(want)
+
+	cancel, writerDone := startOutboundWriter(t, runtime, host)
+	message := receiveMessage(t, c)
+	cancel()
+	_ = awaitResult(t, writerDone)
+	if got, ok := message.Payload.(protocol.Status); !ok || got.Status != want {
+		t.Fatalf("status payload = %#v, want %#v", message.Payload, want)
+	}
+}
+
+func TestOutboundWriterReportsDroppedLogsOnNextEntry(t *testing.T) {
+	c := newMemoryConn(4)
+	runtime := &Runtime{conn: c, config: testConfig()}
+	host := newRuntimeHost(validTestStartup(), 1, 1)
+	host.Log(pluginapi.LogInfo, "retained")
+	host.Log(pluginapi.LogWarn, "dropped")
+
+	cancel, writerDone := startOutboundWriter(t, runtime, host)
+	message := receiveMessage(t, c)
+	cancel()
+	_ = awaitResult(t, writerDone)
+	if got, ok := message.Payload.(protocol.Log); !ok || got.Level != pluginapi.LogInfo || got.Message != "retained" || got.Dropped != 1 {
+		t.Fatalf("log payload = %#v", message.Payload)
+	}
+}
+
+func TestOutboundWriterRestoresDroppedLogsWhenSendFails(t *testing.T) {
+	c := newMemoryConn(1)
+	sendErr := errors.New("log send failed")
+	c.sendErrAt, c.sendErr = 1, sendErr
+	runtime := &Runtime{conn: c, config: testConfig()}
+	host := newRuntimeHost(validTestStartup(), 1, 1)
+	host.Log(pluginapi.LogInfo, "retained")
+	host.Log(pluginapi.LogWarn, "dropped")
+
+	_, writerDone := startOutboundWriter(t, runtime, host)
+	if err := awaitResult(t, writerDone); !errors.Is(err, sendErr) {
+		t.Fatalf("writer error = %v, want send error", err)
+	}
+	if got := host.droppedLogs.Load(); got != 1 {
+		t.Fatalf("restored dropped count = %d, want 1", got)
+	}
+}
+
+func TestOutboundWriterHeartbeatCadenceAndMonotonicUptime(t *testing.T) {
+	c := newMemoryConn(8)
+	cfg := testConfig()
+	cfg.HeartbeatInterval = 5 * time.Millisecond
+	runtime := &Runtime{conn: c, config: cfg}
+	host := newRuntimeHost(validTestStartup(), 1, 1)
+	cancel, writerDone := startOutboundWriter(t, runtime, host)
+
+	var previous uint64
+	for i := 0; i < 3; i++ {
+		message := receiveMessage(t, c)
+		heartbeat, ok := message.Payload.(protocol.Heartbeat)
+		if !ok {
+			t.Fatalf("payload %d = %T, want protocol.Heartbeat", i, message.Payload)
+		}
+		if i > 0 && heartbeat.UptimeMS <= previous {
+			t.Fatalf("heartbeat uptime %d = %d, want greater than %d", i, heartbeat.UptimeMS, previous)
+		}
+		previous = heartbeat.UptimeMS
+	}
+	cancel()
+	if err := awaitResult(t, writerDone); !errors.Is(err, context.Canceled) {
+		t.Fatalf("writer error = %v, want context.Canceled", err)
 	}
 }
 
@@ -695,6 +1141,93 @@ func TestRuntimeReadySendFailureDoesNotStartDriver(t *testing.T) {
 	}
 }
 
+func TestRuntimeOutboundFailuresCancelDriverAndReportProtocolError(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*RuntimeConfig)
+		publish   func(pluginapi.Host)
+	}{
+		{
+			name: "frame",
+			publish: func(host pluginapi.Host) {
+				if !host.PublishFrame(trackingmodel.TrackingFrame{Capabilities: trackingmodel.CapabilityEye}) {
+					panic("test frame was rejected")
+				}
+			},
+		},
+		{name: "status", publish: func(host pluginapi.Host) { host.PublishStatus(pluginapi.DeviceStatus{State: pluginapi.DeviceReady}) }},
+		{name: "log", publish: func(host pluginapi.Host) { host.Log(pluginapi.LogInfo, "writer failure") }},
+		{name: "heartbeat", configure: func(cfg *RuntimeConfig) { cfg.HeartbeatInterval = time.Millisecond }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newMemoryConn(8)
+			sendErr := errors.New(tt.name + " send failed")
+			c.sendErrAt, c.sendErr = 3, sendErr
+			driverCanceled := make(chan struct{})
+			d := &testDriver{descriptor: validTestDescriptor(), run: func(ctx context.Context, host pluginapi.Host) error {
+				if tt.publish != nil {
+					tt.publish(host)
+				}
+				<-ctx.Done()
+				close(driverCanceled)
+				return ctx.Err()
+			}}
+			cfg := testConfig()
+			if tt.configure != nil {
+				tt.configure(&cfg)
+			}
+			runtime, err := New(d, c, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := startHandshake(t, runtime, c, validTestStartup())
+			if err := awaitResult(t, done); !errors.Is(err, sendErr) {
+				t.Fatalf("Run() error = %v, want outbound send error", err)
+			}
+			select {
+			case <-driverCanceled:
+			case <-time.After(testTimeout):
+				t.Fatal("outbound failure did not cancel driver")
+			}
+			message := receiveMessage(t, c)
+			if message.Type != protocol.MessageError || message.Payload.(protocol.Error).Code != "protocol_error" {
+				t.Fatalf("terminal notice = %#v, want protocol_error", message)
+			}
+		})
+	}
+}
+
+func TestRuntimeNeverCallsConnSendConcurrently(t *testing.T) {
+	c := newMemoryConn(8)
+	c.sendDelay = 100 * time.Millisecond
+	c.postReadySendStarted = make(chan struct{})
+	driverErr := errors.New("driver stopped after writer send began")
+	missedWriter := errors.New("writer did not send")
+	d := &testDriver{descriptor: validTestDescriptor(), run: func(ctx context.Context, host pluginapi.Host) error {
+		host.Log(pluginapi.LogInfo, "force a writer send")
+		select {
+		case <-c.postReadySendStarted:
+			return driverErr
+		case <-time.After(50 * time.Millisecond):
+			return missedWriter
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}}
+	runtime, err := New(d, c, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := startHandshake(t, runtime, c, validTestStartup())
+	if err := awaitResult(t, done); !errors.Is(err, driverErr) {
+		t.Fatalf("Run() error = %v, want driver error after writer started", err)
+	}
+	if got := c.maxSends.Load(); got != 1 {
+		t.Fatalf("maximum concurrent Conn.Send calls = %d, want 1", got)
+	}
+}
+
 func TestRuntimeShutdownTimeoutIsBounded(t *testing.T) {
 	c := newMemoryConn(8)
 	release := make(chan struct{})
@@ -888,7 +1421,7 @@ func TestMainFactoryPaths(t *testing.T) {
 	}
 }
 
-func TestTransitionalPublicationMethodsAreConcurrencySafe(t *testing.T) {
+func TestRuntimePostStopPublicationMethodsAreConcurrencySafe(t *testing.T) {
 	c := newMemoryConn(8)
 	hostReady := make(chan pluginapi.Host, 1)
 	release := make(chan struct{})
@@ -899,27 +1432,27 @@ func TestTransitionalPublicationMethodsAreConcurrencySafe(t *testing.T) {
 	}
 	done := startHandshake(t, runtime, c, validTestStartup())
 	host := <-hostReady
+	close(release)
+	if err := awaitResult(t, done); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
 	var wg sync.WaitGroup
 	for i := 0; i < 32; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if host.PublishFrame(trackingmodel.TrackingFrame{}) {
-				t.Error("transitional PublishFrame returned true")
+				t.Error("post-stop PublishFrame returned true")
 			}
 			host.PublishStatus(pluginapi.DeviceStatus{State: pluginapi.DeviceReady})
-			host.Log(pluginapi.LogInfo, "safe transitional no-op")
+			host.Log(pluginapi.LogInfo, "safe post-stop no-op")
 			_ = host.Startup()
 			_ = host.Events()
 		}()
 	}
 	wg.Wait()
-	close(release)
-	if err := awaitResult(t, done); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
 	if sends, _ := c.calls(); sends != 2 {
-		t.Fatalf("transitional publications sent messages: total sends=%d, want handshake-only 2", sends)
+		t.Fatalf("post-stop publications sent messages: total sends=%d, want handshake-only 2", sends)
 	}
 }
 

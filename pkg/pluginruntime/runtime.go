@@ -138,7 +138,8 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 
 	startup := cloneStartup(initialize.Startup)
 	startup.Subscription = startup.Subscription.Normalize()
-	host := newRuntimeHost(startup, r.config.ControlQueue)
+	host := newRuntimeHost(startup, r.config.ControlQueue, r.config.LogQueue)
+	defer host.stop()
 	if err := r.send(ctx, protocol.Ready{}); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -152,55 +153,108 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 	terminal := newTerminalState()
 	driverDone := make(chan driverResult, 1)
 	readerDone := make(chan readerResult, 1)
+	writerDone := make(chan error, 1)
+	writerStarted := time.Now()
+	go func() { writerDone <- r.writeOutbound(childCtx, host, writerStarted) }()
 	go func() { driverDone <- terminal.driverReturned(r.driver.Run(childCtx, host)) }()
 	go func() { readerDone <- r.readControls(childCtx, host, terminal) }()
-	defer host.closeEvents()
 
 	select {
 	case <-ctx.Done():
 		cancel()
+		writerErr, joined := r.awaitWriter(writerDone)
 		r.awaitStops(driverDone, readerDone)
-		return ctx.Err()
+		if !joined {
+			return errors.Join(ctx.Err(), ErrShutdownTimeout)
+		}
+		return errors.Join(ctx.Err(), relevantWriterError(writerErr))
 
 	case driver := <-driverDone:
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			cancel()
+			writerErr, joined := r.awaitWriter(writerDone)
 			<-readerDone
-			return ctxErr
+			if !joined {
+				return errors.Join(ctxErr, ErrShutdownTimeout)
+			}
+			return errors.Join(ctxErr, relevantWriterError(writerErr))
 		}
 		if driver.shutdownAccepted {
 			cancel()
+			writerErr, joined := r.awaitWriter(writerDone)
 			reader := <-readerDone
 			if !reader.shutdown {
 				return errors.New("pluginruntime: accepted shutdown was not completed by control reader")
 			}
-			return r.finishAcceptedShutdown(driver.err)
+			if !joined {
+				return errors.Join(driver.err, ErrShutdownTimeout)
+			}
+			result := r.finishAcceptedShutdown(driver.err)
+			if writerErr = relevantWriterError(writerErr); writerErr != nil {
+				r.sendErrorNotice("protocol_error", writerErr)
+				result = errors.Join(result, writerErr)
+			}
+			return result
 		}
 		// A driver return owns completion, so cancellation after observing the
 		// result cannot turn a spontaneous context.Canceled into success.
 		cancel()
+		writerErr, joined := r.awaitWriter(writerDone)
 		<-readerDone
+		if !joined {
+			return errors.Join(driver.err, ErrShutdownTimeout)
+		}
+		writerErr = relevantWriterError(writerErr)
 		if driver.err == nil {
-			return nil
+			if writerErr != nil {
+				r.sendErrorNotice("protocol_error", writerErr)
+			}
+			return writerErr
 		}
 		r.sendErrorNotice("driver_error", driver.err)
-		return driver.err
+		if writerErr != nil {
+			r.sendErrorNotice("protocol_error", writerErr)
+		}
+		return errors.Join(driver.err, writerErr)
 
 	case reader := <-readerDone:
 		cancel()
+		writerErr, joined := r.awaitWriter(writerDone)
+		if !joined {
+			r.awaitDriver(driverDone)
+			return errors.Join(reader.err, ErrShutdownTimeout)
+		}
+		writerErr = relevantWriterError(writerErr)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			r.awaitDriver(driverDone)
-			return ctxErr
+			return errors.Join(ctxErr, writerErr)
 		}
 		if reader.shutdown {
-			return r.finishShutdown(driverDone)
+			result := r.finishShutdown(driverDone)
+			if writerErr != nil {
+				r.sendErrorNotice("protocol_error", writerErr)
+				result = errors.Join(result, writerErr)
+			}
+			return result
 		}
 		r.awaitDriver(driverDone)
 		if reader.err == nil {
 			reader.err = errors.New("pluginruntime: control reader stopped unexpectedly")
 		}
 		r.sendErrorNotice("protocol_error", reader.err)
-		return reader.err
+		return errors.Join(reader.err, writerErr)
+
+	case writerErr := <-writerDone:
+		cancel()
+		r.awaitStops(driverDone, readerDone)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if writerErr == nil {
+			writerErr = errors.New("pluginruntime: outbound writer stopped unexpectedly")
+		}
+		r.sendErrorNotice("protocol_error", writerErr)
+		return writerErr
 	}
 }
 
@@ -261,6 +315,77 @@ func (r *Runtime) awaitDriver(driverDone <-chan driverResult) {
 	select {
 	case <-driverDone:
 	case <-timer.C:
+	}
+}
+
+func (r *Runtime) awaitWriter(writerDone <-chan error) (error, bool) {
+	timer := time.NewTimer(r.config.ShutdownTimeout)
+	defer timer.Stop()
+	select {
+	case err := <-writerDone:
+		return err, true
+	case <-timer.C:
+		return nil, false
+	}
+}
+
+func relevantWriterError(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
+}
+
+func (r *Runtime) writeOutbound(ctx context.Context, host *runtimeHost, started time.Time) error {
+	ticker := time.NewTicker(r.config.HeartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case <-host.frames.Notify():
+			pending, ok := host.frames.Load()
+			if !ok {
+				continue
+			}
+			payload := protocol.TrackingFrame{
+				Generation: pending.Generation,
+				Frame:      pending.Subscription.TrimFrame(pending.Frame),
+			}
+			if err := r.send(ctx, payload); err != nil {
+				return fmt.Errorf("pluginruntime: send tracking frame: %w", err)
+			}
+
+		case <-host.statusNotify:
+			status, ok := host.loadStatus()
+			if !ok {
+				continue
+			}
+			if err := r.send(ctx, protocol.Status{Status: status}); err != nil {
+				return fmt.Errorf("pluginruntime: send status: %w", err)
+			}
+
+		case entry := <-host.logs:
+			dropped := host.droppedLogs.Swap(0)
+			entry.Dropped = dropped
+			if err := r.send(ctx, entry); err != nil {
+				if dropped != 0 {
+					host.droppedLogs.Add(dropped)
+				}
+				return fmt.Errorf("pluginruntime: send log: %w", err)
+			}
+
+		case <-ticker.C:
+			elapsed := time.Since(started).Milliseconds()
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			if err := r.send(ctx, protocol.Heartbeat{UptimeMS: uint64(elapsed)}); err != nil {
+				return fmt.Errorf("pluginruntime: send heartbeat: %w", err)
+			}
+		}
 	}
 }
 
@@ -361,14 +486,27 @@ func (r *Runtime) readControls(ctx context.Context, host *runtimeHost, terminal 
 }
 
 type runtimeHost struct {
-	mu      sync.RWMutex
-	startup pluginapi.Startup
-	events  chan pluginapi.ControlEvent
-	closed  sync.Once
+	mu            sync.RWMutex
+	startup       pluginapi.Startup
+	events        chan pluginapi.ControlEvent
+	frames        *LatestFrameSlot
+	statusNotify  chan struct{}
+	status        pluginapi.DeviceStatus
+	statusPending bool
+	logs          chan protocol.Log
+	droppedLogs   atomic.Uint64
+	stopped       bool
+	closed        sync.Once
 }
 
-func newRuntimeHost(startup pluginapi.Startup, capacity int) *runtimeHost {
-	return &runtimeHost{startup: cloneStartup(startup), events: make(chan pluginapi.ControlEvent, capacity)}
+func newRuntimeHost(startup pluginapi.Startup, controlCapacity, logCapacity int) *runtimeHost {
+	return &runtimeHost{
+		startup:      cloneStartup(startup),
+		events:       make(chan pluginapi.ControlEvent, controlCapacity),
+		frames:       NewLatestFrameSlot(),
+		statusNotify: make(chan struct{}, 1),
+		logs:         make(chan protocol.Log, logCapacity),
+	}
 }
 
 func cloneStartup(startup pluginapi.Startup) pluginapi.Startup {
@@ -384,14 +522,64 @@ func (h *runtimeHost) Startup() pluginapi.Startup {
 
 func (h *runtimeHost) Events() <-chan pluginapi.ControlEvent { return h.events }
 
-// PublishFrame is intentionally inert until Task 7 adds coalesced frame delivery.
-func (h *runtimeHost) PublishFrame(trackingmodel.TrackingFrame) bool { return false }
+func (h *runtimeHost) PublishFrame(frame trackingmodel.TrackingFrame) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	subscription := h.startup.Subscription
+	if h.stopped || !h.startup.Active || subscription.Generation == 0 || subscription.Capabilities == 0 {
+		return false
+	}
+	return h.frames.Store(pendingFrame{
+		Generation:   subscription.Generation,
+		Subscription: subscription,
+		Frame:        frame,
+	})
+}
 
-// PublishStatus is intentionally inert until Task 7 adds telemetry delivery.
-func (h *runtimeHost) PublishStatus(pluginapi.DeviceStatus) {}
+func (h *runtimeHost) PublishStatus(status pluginapi.DeviceStatus) {
+	if status.Validate() != nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.stopped {
+		return
+	}
+	h.status = status
+	h.statusPending = true
+	select {
+	case h.statusNotify <- struct{}{}:
+	default:
+	}
+}
 
-// Log is intentionally inert until Task 7 adds bounded log delivery.
-func (h *runtimeHost) Log(pluginapi.LogLevel, string) {}
+func (h *runtimeHost) loadStatus() (pluginapi.DeviceStatus, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.statusPending {
+		return pluginapi.DeviceStatus{}, false
+	}
+	status := h.status
+	h.status = pluginapi.DeviceStatus{}
+	h.statusPending = false
+	return status, true
+}
+
+func (h *runtimeHost) Log(level pluginapi.LogLevel, message string) {
+	if level.Validate() != nil || strings.TrimSpace(message) == "" {
+		return
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.stopped {
+		return
+	}
+	select {
+	case h.logs <- protocol.Log{Level: level, Message: message}:
+	default:
+		h.droppedLogs.Add(1)
+	}
+}
 
 func (h *runtimeHost) applyConfig(next pluginapi.Config) (pluginapi.ControlEvent, error) {
 	next = next.Clone()
@@ -427,6 +615,7 @@ func (h *runtimeHost) applySubscription(next pluginapi.Subscription) (pluginapi.
 		return nil, fmt.Errorf("pluginruntime: subscription generation %d conflicts with current subscription", next.Generation)
 	default:
 		h.startup.Subscription = next
+		h.frames.ClearBefore(next.Generation)
 		return pluginapi.SubscriptionChanged{Subscription: next}, nil
 	}
 }
@@ -438,9 +627,24 @@ func (h *runtimeHost) applyActive(active bool) pluginapi.ControlEvent {
 		return nil
 	}
 	h.startup.Active = active
+	if !active {
+		h.frames.Clear()
+	}
 	return pluginapi.ActiveChanged{Active: active}
 }
 
-func (h *runtimeHost) closeEvents() { h.closed.Do(func() { close(h.events) }) }
+func (h *runtimeHost) stop() {
+	h.mu.Lock()
+	h.stopped = true
+	h.frames.Clear()
+	h.status = pluginapi.DeviceStatus{}
+	h.statusPending = false
+	select {
+	case <-h.statusNotify:
+	default:
+	}
+	h.mu.Unlock()
+	h.closed.Do(func() { close(h.events) })
+}
 
 var _ pluginapi.Host = (*runtimeHost)(nil)
