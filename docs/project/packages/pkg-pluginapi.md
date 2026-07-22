@@ -6,17 +6,23 @@ milestone: M1
 depends_on: [pkg-trackingmodel]
 checks:
   - id: package-tests
-    description: Plugin API package builds and tests
+    description: Plugin API package tests pass
     type: command
     command: go-test
     args: [./pkg/pluginapi]
+    weight: 3
+    required: true
+  - id: package-race-tests
+    description: Plugin API package race tests pass
+    type: command
+    command: go-test-race
+    args: [./pkg/pluginapi]
     weight: 2
     required: true
-  - id: driver-contract
-    description: Driver and environment contracts exist
-    type: symbol
-    path: pkg/pluginapi/plugin.go
-    pattern: 'type Driver interface'
+  - id: example-driver
+    description: Example driver test exists
+    type: file
+    path: pkg/pluginapi/example_test.go
     weight: 2
     required: true
 ---
@@ -24,29 +30,42 @@ checks:
 
 ## Purpose
 Define the stable API implemented by vendor tracking plugins.
+
 ## Responsibilities
-Describe plugins, expose lifecycle environment, publish frames/status/logs, and receive commands.
+Describe plugins, expose Host and Startup, publish frames, typed status and logs, validate typed controls, and deliver mixed configuration, subscription, and active-state controls.
+
 ## Non-responsibilities
-IPC framing and host policy are hidden from plugin authors.
+IPC framing, host process policy, and log persistence are hidden from plugin authors.
+
 ## Current implementation
-Driver, environment, configuration, commands, status, descriptor, and logging types exist.
+Driver, Host, Startup, typed controls, configuration, commands, status, descriptor, subscriptions, and logging types are implemented.
+
 ## Public/internal interfaces
 All exported types are part of the plugin author contract.
+
 ## Owned data
-Serializable configuration and status values only.
+Serializable configuration and status values only; trimming makes published configuration and subscription data immutable to callers, and this package owns no LogStore.
+
 ## Dependencies
 Depends on the public tracking model.
+
 ## Concurrency and lifecycle
-Drivers run under context cancellation; environment publishing is safe for driver workers.
+Drivers run under context cancellation; Host publishing is safe for driver workers.
+
 ## Error handling
-Driver errors terminate the run and status/log APIs report device conditions.
+Control, configuration, subscription, and status validation return explicit errors; Host methods communicate bounded publication outcomes.
+
 ## Performance constraints
-Frame publication should support latest-frame/drop behavior without blocking device callbacks.
+Frame publication supports latest-frame/drop behavior without blocking device callbacks.
+
 ## Security boundaries
-Plugins receive only their scoped configuration and commands.
+Plugins receive only scoped configuration and typed controls.
+
 ## Required tests
-API compatibility, JSON contracts, and example driver compilation.
+Executable package and race tests cover API contracts, validation, mixed subscriptions, immutable trimming, JSON behavior, and driver use; the named example driver file is integration evidence only.
+
 ## Known gaps
-Selective subscription is not yet represented in the public command contract.
+No public API implementation gap remains.
+
 ## Completion definition
-Third-party drivers compile against a versioned, documented, tested API.
+Third-party drivers compile against a versioned, documented, fully tested API with Host/Startup and typed controls.

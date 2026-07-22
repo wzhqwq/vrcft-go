@@ -22,29 +22,42 @@ checks:
 
 ## Purpose
 Provide stable identities and semantics for VRCFT output parameters.
+
 ## Responsibilities
-Define ParameterID, value types, ranges, encodings, lookup, and address helpers.
+Define ParameterID, value types, ranges, encodings, lookup, address helpers, and the generated parameter catalog.
+
 ## Non-responsibilities
-Parsing source YAML and runtime evaluation belong elsewhere.
+Parsing source YAML, numeric parameter evaluation, and executable dependency closure belong elsewhere.
+
 ## Current implementation
 Generated definitions and typed lookup helpers are implemented.
+
 ## Public/internal interfaces
 Definitions, lookup, address resolution, binary resolution, and clamp helpers.
+
 ## Owned data
 The generated immutable parameter catalog.
+
 ## Dependencies
-Generated from the authoritative parameter spec.
+Generated from the authoritative parameter spec. `internal/parameterdeps` imports this catalog to compute executable dependency closure; this package does not depend on it, avoiding a reverse specification cycle.
+
 ## Concurrency and lifecycle
 Data is immutable and safe for concurrent reads.
+
 ## Error handling
-Unknown IDs and names return explicit false/error results.
+Unknown IDs and names return explicit false or error results.
+
 ## Performance constraints
 ID-indexed access is constant-time and allocation-free.
+
 ## Security boundaries
 Generated addresses are normalized and bounded by the source schema.
+
 ## Required tests
 Definition counts, ID stability, lookup, ranges, and generation parity.
+
 ## Known gaps
-Generation parity is enforced at subsystem level rather than package runtime.
+No package-runtime gap is implied by catalog generation; executable dependency closure is owned by `internal/parameterdeps`.
+
 ## Completion definition
 All generated definitions match the accepted spec deterministically.

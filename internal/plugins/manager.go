@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
 
@@ -46,7 +47,7 @@ type Event struct {
 	PluginID string
 
 	Snapshot *RuntimeSnapshot
-	Log      *LogEntry
+	Log      *pluginapi.LogEntry
 	Frame    *trackingmodel.TrackingFrame
 }
 

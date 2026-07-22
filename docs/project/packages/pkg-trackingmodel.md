@@ -5,53 +5,66 @@ path: pkg/trackingmodel
 milestone: M1
 checks:
   - id: package-tests
-    description: Tracking model package builds and tests
+    description: Tracking model package tests pass
     type: command
     command: go-test
     args: [./pkg/trackingmodel]
+    weight: 3
+    required: true
+  - id: package-race-tests
+    description: Tracking model package race tests pass
+    type: command
+    command: go-test-race
+    args: [./pkg/trackingmodel]
     weight: 2
     required: true
-  - id: frame-contract
-    description: TrackingFrame contract exists
-    type: symbol
-    path: pkg/trackingmodel/frame.go
-    pattern: 'type TrackingFrame struct'
-    weight: 2
-    required: true
-  - id: compatibility-tests
-    description: Tracking frame compatibility tests exist
+  - id: expression-tests
+    description: Expression contract tests exist
     type: file
-    path: pkg/trackingmodel/frame_test.go
+    path: pkg/trackingmodel/expression_test.go
     weight: 2
     required: true
 ---
 # Package: pkg/trackingmodel
 
 ## Purpose
-Provide the shared canonical tracking data contract across process boundaries.
+Provide the shared canonical primitive tracking data contract across process boundaries.
+
 ## Responsibilities
-Define capabilities, validity masks, eye samples, expression IDs/sets, timestamps, sequences, and received-frame metadata.
+Define the complete 76 primitive expression IDs, fixed-size validity masks, safe expression accessors, eye samples, capabilities, timestamps, sequences, and received-frame metadata.
+
 ## Non-responsibilities
-Vendor conversion, routing, filtering, and parameter evaluation are outside the model.
+Vendor conversion, routing, filtering, and numeric parameter evaluation are outside the model.
+
 ## Current implementation
-TrackingFrame, eye/expression data, capabilities, and received metadata exist.
+TrackingFrame, eye and expression data, fixed masks, safe accessors, capabilities, and received metadata are implemented and tested.
+
 ## Public/internal interfaces
-All exported value types used by plugin API and protocol.
+All exported value types used by plugin API and protocol are public contracts.
+
 ## Owned data
-Schema definitions only; instances are owned by producers/consumers.
+Schema definitions only; instances are owned by producers and consumers.
+
 ## Dependencies
-No project package dependencies.
+No project package dependencies; `internal/parameterdeps` consumes these primitives to prove dependency coverage.
+
 ## Concurrency and lifecycle
 Frames are values transferred as immutable snapshots.
+
 ## Error handling
-Validity masks express absent fields; consumers reject invalid timestamps/sequences.
+Validity masks express absent fields, and safe accessors reject out-of-range IDs.
+
 ## Performance constraints
-Layout remains bounded and suitable for frequent serialization.
+Fixed masks and bounded layouts support frequent serialization without dynamic primitive growth.
+
 ## Security boundaries
-Counts and indices are fixed to prevent unbounded payloads.
+Fixed counts and indices prevent unbounded payloads.
+
 ## Required tests
-Layout/limits, validity helpers, compatibility, and serialization round trips.
+Executable package and race tests cover expression IDs, fixed masks, safe accessors, layout, limits, and serialization behavior; the named expression test file is integration evidence only.
+
 ## Known gaps
-No compatibility test file currently protects the public contract.
+No tracking-model package implementation gap is known.
+
 ## Completion definition
-The cross-process tracking schema is versioned, bounded, and regression-tested.
+All 76 primitive IDs, fixed masks, and safe accessors are stable, bounded, and covered by executable tests plus `internal/parameterdeps` dependency closure.
