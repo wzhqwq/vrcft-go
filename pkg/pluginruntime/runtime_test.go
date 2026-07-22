@@ -1356,6 +1356,67 @@ func TestRuntimeWriterFailurePreservesAndReportsConcurrentDriverError(t *testing
 	}
 }
 
+func TestRuntimeWriterPrimaryCollectsAndReportsConcurrentReaderFailure(t *testing.T) {
+	c := newMemoryConn(8)
+	runtime := &Runtime{conn: c, config: testConfig()}
+	writerErr := errors.New("writer primary failure")
+	readerErr := errors.New("reader failed during writer shutdown")
+	driverDone := make(chan driverResult, 1)
+	readerDone := make(chan readerResult, 1)
+	driverDone <- driverResult{err: context.Canceled}
+	readerDone <- readerResult{err: readerErr}
+
+	err := runtime.finishWriterPrimary(nil, writerErr, driverDone, readerDone)
+	if !errors.Is(err, writerErr) || !errors.Is(err, readerErr) {
+		t.Fatalf("finishWriterPrimary() error = %v, want writer primary joined with reader error", err)
+	}
+	notices := runtimeNotices(t, c)
+	requireNotice(t, notices, "protocol_error", writerErr.Error(), 1)
+	requireNotice(t, notices, "protocol_error", readerErr.Error(), 1)
+	if got := c.maxSends.Load(); got != 1 {
+		t.Fatalf("maximum concurrent Conn.Send calls = %d, want 1", got)
+	}
+}
+
+func TestRuntimeWriterPrimaryHonorsAcceptedShutdown(t *testing.T) {
+	c := newMemoryConn(8)
+	runtime := &Runtime{conn: c, config: testConfig()}
+	writerErr := errors.New("writer failed during accepted shutdown")
+	driverDone := make(chan driverResult, 1)
+	readerDone := make(chan readerResult, 1)
+	driverDone <- driverResult{err: context.Canceled, shutdownAccepted: true}
+	readerDone <- readerResult{shutdown: true}
+
+	err := runtime.finishWriterPrimary(nil, writerErr, driverDone, readerDone)
+	if !errors.Is(err, writerErr) {
+		t.Fatalf("finishWriterPrimary() error = %v, want writer error", err)
+	}
+	var writerNotices, acknowledgements int
+	for {
+		select {
+		case message := <-c.fromRuntime:
+			switch payload := message.Payload.(type) {
+			case protocol.Error:
+				if payload.Code == "protocol_error" && strings.Contains(payload.Message, writerErr.Error()) {
+					writerNotices++
+				}
+			case protocol.ShutdownAck:
+				acknowledgements++
+			default:
+				t.Fatalf("terminal payload = %T, want writer notice or ShutdownAck", payload)
+			}
+		default:
+			if writerNotices != 1 || acknowledgements != 1 {
+				t.Fatalf("writer notices=%d acknowledgements=%d, want exactly one each", writerNotices, acknowledgements)
+			}
+			if got := c.maxSends.Load(); got != 1 {
+				t.Fatalf("maximum concurrent Conn.Send calls = %d, want 1", got)
+			}
+			return
+		}
+	}
+}
+
 func TestRuntimeNeverCallsConnSendConcurrently(t *testing.T) {
 	c := newMemoryConn(8)
 	c.sendDelay = 100 * time.Millisecond

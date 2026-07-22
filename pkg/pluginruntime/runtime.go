@@ -163,7 +163,7 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 	case <-ctx.Done():
 		cancel()
 		writerErr, joined := r.awaitWriter(writerDone)
-		_, _ = r.awaitStops(driverDone, readerDone)
+		_ = r.awaitStops(driverDone, readerDone)
 		if !joined {
 			return errors.Join(ctx.Err(), ErrShutdownTimeout)
 		}
@@ -231,20 +231,7 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 
 	case writerErr := <-writerDone:
 		cancel()
-		driver, driverStopped := r.awaitStops(driverDone, readerDone)
-		if writerErr == nil {
-			writerErr = errors.New("pluginruntime: outbound writer stopped unexpectedly")
-		}
-		writerErr = r.reportWriterError(writerErr)
-		var driverErr error
-		if driverStopped && driver.err != nil && !errors.Is(driver.err, context.Canceled) {
-			driverErr = driver.err
-			r.sendErrorNotice("driver_error", driverErr)
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return errors.Join(ctxErr, writerErr, driverErr)
-		}
-		return errors.Join(writerErr, driverErr)
+		return r.finishWriterPrimary(ctx.Err(), writerErr, driverDone, readerDone)
 	}
 }
 
@@ -284,23 +271,30 @@ func (r *Runtime) sendShutdownAck(result error) error {
 	return result
 }
 
-func (r *Runtime) awaitStops(driverDone <-chan driverResult, readerDone <-chan readerResult) (driverResult, bool) {
+type stopResults struct {
+	driver        driverResult
+	driverStopped bool
+	reader        readerResult
+	readerStopped bool
+}
+
+func (r *Runtime) awaitStops(driverDone <-chan driverResult, readerDone <-chan readerResult) stopResults {
 	timer := time.NewTimer(r.config.ShutdownTimeout)
 	defer timer.Stop()
-	var driver driverResult
-	driverStopped := false
+	var results stopResults
 	for driverDone != nil || readerDone != nil {
 		select {
-		case driver = <-driverDone:
+		case results.driver = <-driverDone:
 			driverDone = nil
-			driverStopped = true
-		case <-readerDone:
+			results.driverStopped = true
+		case results.reader = <-readerDone:
 			readerDone = nil
+			results.readerStopped = true
 		case <-timer.C:
-			return driver, driverStopped
+			return results
 		}
 	}
-	return driver, driverStopped
+	return results
 }
 
 func (r *Runtime) awaitDriver(driverDone <-chan driverResult) {
@@ -336,6 +330,47 @@ func (r *Runtime) reportWriterError(err error) error {
 		r.sendErrorNotice("protocol_error", err)
 	}
 	return err
+}
+
+func (r *Runtime) finishWriterPrimary(
+	ctxErr error,
+	writerErr error,
+	driverDone <-chan driverResult,
+	readerDone <-chan readerResult,
+) error {
+	results := r.awaitStops(driverDone, readerDone)
+	if writerErr == nil {
+		writerErr = errors.New("pluginruntime: outbound writer stopped unexpectedly")
+	}
+	writerErr = r.reportWriterError(writerErr)
+
+	result := writerErr
+	if ctxErr != nil {
+		result = errors.Join(ctxErr, writerErr)
+	}
+
+	if (results.readerStopped && results.reader.shutdown) ||
+		(results.driverStopped && results.driver.shutdownAccepted) {
+		var shutdownErr error
+		if results.driverStopped {
+			shutdownErr = r.finishAcceptedShutdown(results.driver.err)
+		} else {
+			shutdownErr = r.sendShutdownAck(ErrShutdownTimeout)
+		}
+		return errors.Join(result, shutdownErr)
+	}
+
+	var readerErr error
+	if results.readerStopped && results.reader.err != nil && !errors.Is(results.reader.err, context.Canceled) {
+		readerErr = results.reader.err
+		r.sendErrorNotice("protocol_error", readerErr)
+	}
+	var driverErr error
+	if results.driverStopped && results.driver.err != nil && !errors.Is(results.driver.err, context.Canceled) {
+		driverErr = results.driver.err
+		r.sendErrorNotice("driver_error", driverErr)
+	}
+	return errors.Join(result, readerErr, driverErr)
 }
 
 func (r *Runtime) writeOutbound(ctx context.Context, host *runtimeHost, started time.Time) error {
