@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,14 +32,16 @@ type memoryConn struct {
 	postReadySendStarted chan struct{}
 	sendStartedOnce      sync.Once
 
-	mu           sync.Mutex
-	sendCalls    int
-	receiveCalls int
-	sendErrAt    int
-	sendErr      error
-	receiveErr   error
-	closeErr     error
-	sendDelay    time.Duration
+	mu                   sync.Mutex
+	sendCalls            int
+	receiveCalls         int
+	sendErrAt            int
+	sendErr              error
+	sendErrAfterCancelAt int
+	sendErrAfterCancel   error
+	receiveErr           error
+	closeErr             error
+	sendDelay            time.Duration
 }
 
 func newMemoryConn(capacity int) *memoryConn {
@@ -62,13 +65,19 @@ func (c *memoryConn) Send(ctx context.Context, message protocol.Message) error {
 	c.mu.Lock()
 	c.sendCalls++
 	call := c.sendCalls
-	errAt, sendErr, sendDelay := c.sendErrAt, c.sendErr, c.sendDelay
+	errAt, sendErr := c.sendErrAt, c.sendErr
+	errAfterCancelAt, errAfterCancel := c.sendErrAfterCancelAt, c.sendErrAfterCancel
+	sendDelay := c.sendDelay
 	c.mu.Unlock()
 	if call >= 3 && c.postReadySendStarted != nil {
 		c.sendStartedOnce.Do(func() { close(c.postReadySendStarted) })
 	}
 	if errAt != 0 && call == errAt {
 		return sendErr
+	}
+	if errAfterCancelAt != 0 && call == errAfterCancelAt {
+		<-ctx.Done()
+		return errAfterCancel
 	}
 	if sendDelay > 0 {
 		timer := time.NewTimer(sendDelay)
@@ -197,8 +206,13 @@ func receiveMessage(t *testing.T, c *memoryConn) protocol.Message {
 
 func startHandshake(t *testing.T, runtime *Runtime, c *memoryConn, startup pluginapi.Startup) <-chan error {
 	t.Helper()
+	return startHandshakeContext(t, runtime, c, startup, context.Background())
+}
+
+func startHandshakeContext(t *testing.T, runtime *Runtime, c *memoryConn, startup pluginapi.Startup, ctx context.Context) <-chan error {
+	t.Helper()
 	done := make(chan error, 1)
-	go func() { done <- runtime.Run(context.Background()) }()
+	go func() { done <- runtime.Run(ctx) }()
 	if got := receiveMessage(t, c); got.Type != protocol.MessageHello {
 		t.Fatalf("first message type = %v, want Hello", got.Type)
 	}
@@ -207,6 +221,36 @@ func startHandshake(t *testing.T, runtime *Runtime, c *memoryConn, startup plugi
 		t.Fatalf("second message type = %v, want Ready", got.Type)
 	}
 	return done
+}
+
+func runtimeNotices(t *testing.T, c *memoryConn) []protocol.Error {
+	t.Helper()
+	var notices []protocol.Error
+	for {
+		select {
+		case message := <-c.fromRuntime:
+			notice, ok := message.Payload.(protocol.Error)
+			if !ok {
+				t.Fatalf("terminal payload = %T, want protocol.Error", message.Payload)
+			}
+			notices = append(notices, notice)
+		default:
+			return notices
+		}
+	}
+}
+
+func requireNotice(t *testing.T, notices []protocol.Error, code, messagePart string, want int) {
+	t.Helper()
+	count := 0
+	for _, notice := range notices {
+		if notice.Code == code && strings.Contains(notice.Message, messagePart) {
+			count++
+		}
+	}
+	if count != want {
+		t.Fatalf("notices matching code=%q message~%q = %d, want %d; all=%+v", code, messagePart, count, want, notices)
+	}
 }
 
 func awaitResult(t *testing.T, done <-chan error) error {
@@ -406,18 +450,24 @@ func TestRuntimeHostSubscriptionAndActivationClearPendingFrames(t *testing.T) {
 }
 
 func TestRuntimeHostSubscriptionRaceCannotSendOldGeneration(t *testing.T) {
+	sent := 0
 	for attempt := 0; attempt < 100; attempt++ {
 		host := newRuntimeHost(validTestStartup(), 1, 1)
 		start := make(chan struct{})
-		published := make(chan struct{})
+		published := make(chan bool, 1)
+		applied := make(chan error, 1)
 		go func() {
 			<-start
-			host.PublishFrame(trackingmodel.TrackingFrame{Sequence: 1})
-			close(published)
+			published <- host.PublishFrame(trackingmodel.TrackingFrame{Sequence: 1})
+		}()
+		next := pluginapi.Subscription{Generation: 2, Capabilities: trackingmodel.CapabilityExpression}
+		go func() {
+			<-start
+			_, err := host.applySubscription(next)
+			applied <- err
 		}()
 		close(start)
-		next := pluginapi.Subscription{Generation: 2, Capabilities: trackingmodel.CapabilityExpression}
-		if _, err := host.applySubscription(next); err != nil {
+		if err := <-applied; err != nil {
 			t.Fatal(err)
 		}
 		<-published
@@ -435,6 +485,10 @@ func TestRuntimeHostSubscriptionRaceCannotSendOldGeneration(t *testing.T) {
 		if !ok || frame.Generation != 2 {
 			t.Fatalf("attempt %d sent %#v, want generation 2 or no frame", attempt, message.Payload)
 		}
+		sent++
+	}
+	if sent == 0 {
+		t.Fatal("subscription race never exercised the outbound send path")
 	}
 }
 
@@ -546,6 +600,15 @@ func TestOutboundWriterTrimsFrameWithStoredSubscription(t *testing.T) {
 	frame.Expressions.Values[trackingmodel.ExpressionBrowPinchRight] = 0.5
 	if !host.PublishFrame(frame) {
 		t.Fatal("PublishFrame() = false")
+	}
+	current := startup.Subscription
+	current.Eye = trackingmodel.EyeValidRightGaze
+	current.Expressions = trackingmodel.ExpressionMaskOf(trackingmodel.ExpressionBrowPinchRight)
+	host.mu.Lock()
+	host.startup.Subscription = current
+	host.mu.Unlock()
+	if got := host.Startup().Subscription; got != current {
+		t.Fatalf("current host subscription = %+v, want changed selection %+v", got, current)
 	}
 
 	cancel, writerDone := startOutboundWriter(t, runtime, host)
@@ -1198,6 +1261,101 @@ func TestRuntimeOutboundFailuresCancelDriverAndReportProtocolError(t *testing.T)
 	}
 }
 
+func TestRuntimeExternalCancellationPreservesAndReportsConcurrentWriterError(t *testing.T) {
+	c := newMemoryConn(8)
+	c.postReadySendStarted = make(chan struct{})
+	writerErr := errors.New("writer failed while external cancellation won")
+	c.sendErrAfterCancelAt, c.sendErrAfterCancel = 3, writerErr
+	d := &testDriver{descriptor: validTestDescriptor(), run: func(ctx context.Context, host pluginapi.Host) error {
+		host.Log(pluginapi.LogInfo, "block writer until cancellation")
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	runtime, err := New(d, c, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := startHandshakeContext(t, runtime, c, validTestStartup(), ctx)
+	select {
+	case <-c.postReadySendStarted:
+	case <-time.After(testTimeout):
+		t.Fatal("writer send did not start")
+	}
+	cancel()
+	err = awaitResult(t, done)
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, writerErr) {
+		t.Fatalf("Run() error = %v, want external cancellation joined with writer error", err)
+	}
+	notices := runtimeNotices(t, c)
+	requireNotice(t, notices, "protocol_error", writerErr.Error(), 1)
+	if got := c.maxSends.Load(); got != 1 {
+		t.Fatalf("maximum concurrent Conn.Send calls = %d, want 1", got)
+	}
+}
+
+func TestRuntimeReaderFailurePreservesAndReportsConcurrentWriterError(t *testing.T) {
+	c := newMemoryConn(8)
+	c.postReadySendStarted = make(chan struct{})
+	writerErr := errors.New("writer failed after reader cancellation")
+	readerErr := errors.New("reader failed while writer was blocked")
+	c.sendErrAfterCancelAt, c.sendErrAfterCancel = 3, writerErr
+	d := &testDriver{descriptor: validTestDescriptor(), run: func(ctx context.Context, host pluginapi.Host) error {
+		host.Log(pluginapi.LogInfo, "block writer until reader fails")
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	runtime, err := New(d, c, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := startHandshake(t, runtime, c, validTestStartup())
+	select {
+	case <-c.postReadySendStarted:
+	case <-time.After(testTimeout):
+		t.Fatal("writer send did not start")
+	}
+	c.failNextReceive(readerErr)
+	c.toRuntime <- mustMessage(t, protocol.ActiveChanged{Active: false})
+	err = awaitResult(t, done)
+	if !errors.Is(err, readerErr) || !errors.Is(err, writerErr) {
+		t.Fatalf("Run() error = %v, want reader and writer errors", err)
+	}
+	notices := runtimeNotices(t, c)
+	requireNotice(t, notices, "protocol_error", readerErr.Error(), 1)
+	requireNotice(t, notices, "protocol_error", writerErr.Error(), 1)
+	if got := c.maxSends.Load(); got != 1 {
+		t.Fatalf("maximum concurrent Conn.Send calls = %d, want 1", got)
+	}
+}
+
+func TestRuntimeWriterFailurePreservesAndReportsConcurrentDriverError(t *testing.T) {
+	c := newMemoryConn(8)
+	writerErr := errors.New("writer failed before canceling driver")
+	driverErr := errors.New("driver failed during writer cancellation")
+	c.sendErrAt, c.sendErr = 3, writerErr
+	d := &testDriver{descriptor: validTestDescriptor(), run: func(ctx context.Context, host pluginapi.Host) error {
+		host.Log(pluginapi.LogInfo, "fail writer")
+		<-ctx.Done()
+		return driverErr
+	}}
+	runtime, err := New(d, c, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := startHandshake(t, runtime, c, validTestStartup())
+	err = awaitResult(t, done)
+	if !errors.Is(err, writerErr) || !errors.Is(err, driverErr) {
+		t.Fatalf("Run() error = %v, want writer primary joined with driver error", err)
+	}
+	notices := runtimeNotices(t, c)
+	requireNotice(t, notices, "protocol_error", writerErr.Error(), 1)
+	requireNotice(t, notices, "driver_error", driverErr.Error(), 1)
+	if got := c.maxSends.Load(); got != 1 {
+		t.Fatalf("maximum concurrent Conn.Send calls = %d, want 1", got)
+	}
+}
+
 func TestRuntimeNeverCallsConnSendConcurrently(t *testing.T) {
 	c := newMemoryConn(8)
 	c.sendDelay = 100 * time.Millisecond
@@ -1432,27 +1590,48 @@ func TestRuntimePostStopPublicationMethodsAreConcurrencySafe(t *testing.T) {
 	}
 	done := startHandshake(t, runtime, c, validTestStartup())
 	host := <-hostReady
+
+	const publishers = 32
+	var started sync.WaitGroup
+	started.Add(publishers)
+	var wg sync.WaitGroup
+	for i := 0; i < publishers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if !host.PublishFrame(trackingmodel.TrackingFrame{}) {
+				t.Error("PublishFrame was rejected before stop began")
+				started.Done()
+				return
+			}
+			started.Done()
+			for {
+				host.PublishStatus(pluginapi.DeviceStatus{State: pluginapi.DeviceReady})
+				host.Log(pluginapi.LogInfo, "overlap stop transition")
+				_ = host.Startup()
+				if !host.PublishFrame(trackingmodel.TrackingFrame{}) {
+					if _, ok := <-host.Events(); ok {
+						t.Error("event channel remained open after stopped state became visible")
+					}
+					host.PublishStatus(pluginapi.DeviceStatus{State: pluginapi.DeviceReady})
+					host.Log(pluginapi.LogInfo, "post-stop no-op")
+					return
+				}
+				goruntime.Gosched()
+			}
+		}()
+	}
+	started.Wait()
 	close(release)
 	if err := awaitResult(t, done); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	var wg sync.WaitGroup
-	for i := 0; i < 32; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if host.PublishFrame(trackingmodel.TrackingFrame{}) {
-				t.Error("post-stop PublishFrame returned true")
-			}
-			host.PublishStatus(pluginapi.DeviceStatus{State: pluginapi.DeviceReady})
-			host.Log(pluginapi.LogInfo, "safe post-stop no-op")
-			_ = host.Startup()
-			_ = host.Events()
-		}()
-	}
 	wg.Wait()
-	if sends, _ := c.calls(); sends != 2 {
-		t.Fatalf("post-stop publications sent messages: total sends=%d, want handshake-only 2", sends)
+	if host.PublishFrame(trackingmodel.TrackingFrame{}) {
+		t.Fatal("post-stop PublishFrame returned true")
+	}
+	if got := c.maxSends.Load(); got != 1 {
+		t.Fatalf("maximum concurrent Conn.Send calls = %d, want 1", got)
 	}
 }
 

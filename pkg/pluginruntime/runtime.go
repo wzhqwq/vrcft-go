@@ -163,11 +163,11 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 	case <-ctx.Done():
 		cancel()
 		writerErr, joined := r.awaitWriter(writerDone)
-		r.awaitStops(driverDone, readerDone)
+		_, _ = r.awaitStops(driverDone, readerDone)
 		if !joined {
 			return errors.Join(ctx.Err(), ErrShutdownTimeout)
 		}
-		return errors.Join(ctx.Err(), relevantWriterError(writerErr))
+		return errors.Join(ctx.Err(), r.reportWriterError(writerErr))
 
 	case driver := <-driverDone:
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -177,7 +177,7 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 			if !joined {
 				return errors.Join(ctxErr, ErrShutdownTimeout)
 			}
-			return errors.Join(ctxErr, relevantWriterError(writerErr))
+			return errors.Join(ctxErr, r.reportWriterError(writerErr))
 		}
 		if driver.shutdownAccepted {
 			cancel()
@@ -189,12 +189,8 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 			if !joined {
 				return errors.Join(driver.err, ErrShutdownTimeout)
 			}
-			result := r.finishAcceptedShutdown(driver.err)
-			if writerErr = relevantWriterError(writerErr); writerErr != nil {
-				r.sendErrorNotice("protocol_error", writerErr)
-				result = errors.Join(result, writerErr)
-			}
-			return result
+			writerErr = r.reportWriterError(writerErr)
+			return errors.Join(r.finishAcceptedShutdown(driver.err), writerErr)
 		}
 		// A driver return owns completion, so cancellation after observing the
 		// result cannot turn a spontaneous context.Canceled into success.
@@ -204,17 +200,11 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 		if !joined {
 			return errors.Join(driver.err, ErrShutdownTimeout)
 		}
-		writerErr = relevantWriterError(writerErr)
+		writerErr = r.reportWriterError(writerErr)
 		if driver.err == nil {
-			if writerErr != nil {
-				r.sendErrorNotice("protocol_error", writerErr)
-			}
 			return writerErr
 		}
 		r.sendErrorNotice("driver_error", driver.err)
-		if writerErr != nil {
-			r.sendErrorNotice("protocol_error", writerErr)
-		}
 		return errors.Join(driver.err, writerErr)
 
 	case reader := <-readerDone:
@@ -224,18 +214,13 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 			r.awaitDriver(driverDone)
 			return errors.Join(reader.err, ErrShutdownTimeout)
 		}
-		writerErr = relevantWriterError(writerErr)
+		writerErr = r.reportWriterError(writerErr)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			r.awaitDriver(driverDone)
 			return errors.Join(ctxErr, writerErr)
 		}
 		if reader.shutdown {
-			result := r.finishShutdown(driverDone)
-			if writerErr != nil {
-				r.sendErrorNotice("protocol_error", writerErr)
-				result = errors.Join(result, writerErr)
-			}
-			return result
+			return errors.Join(r.finishShutdown(driverDone), writerErr)
 		}
 		r.awaitDriver(driverDone)
 		if reader.err == nil {
@@ -246,15 +231,20 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 
 	case writerErr := <-writerDone:
 		cancel()
-		r.awaitStops(driverDone, readerDone)
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
+		driver, driverStopped := r.awaitStops(driverDone, readerDone)
 		if writerErr == nil {
 			writerErr = errors.New("pluginruntime: outbound writer stopped unexpectedly")
 		}
-		r.sendErrorNotice("protocol_error", writerErr)
-		return writerErr
+		writerErr = r.reportWriterError(writerErr)
+		var driverErr error
+		if driverStopped && driver.err != nil && !errors.Is(driver.err, context.Canceled) {
+			driverErr = driver.err
+			r.sendErrorNotice("driver_error", driverErr)
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(ctxErr, writerErr, driverErr)
+		}
+		return errors.Join(writerErr, driverErr)
 	}
 }
 
@@ -294,19 +284,23 @@ func (r *Runtime) sendShutdownAck(result error) error {
 	return result
 }
 
-func (r *Runtime) awaitStops(driverDone <-chan driverResult, readerDone <-chan readerResult) {
+func (r *Runtime) awaitStops(driverDone <-chan driverResult, readerDone <-chan readerResult) (driverResult, bool) {
 	timer := time.NewTimer(r.config.ShutdownTimeout)
 	defer timer.Stop()
+	var driver driverResult
+	driverStopped := false
 	for driverDone != nil || readerDone != nil {
 		select {
-		case <-driverDone:
+		case driver = <-driverDone:
 			driverDone = nil
+			driverStopped = true
 		case <-readerDone:
 			readerDone = nil
 		case <-timer.C:
-			return
+			return driver, driverStopped
 		}
 	}
+	return driver, driverStopped
 }
 
 func (r *Runtime) awaitDriver(driverDone <-chan driverResult) {
@@ -332,6 +326,14 @@ func (r *Runtime) awaitWriter(writerDone <-chan error) (error, bool) {
 func relevantWriterError(err error) error {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return nil
+	}
+	return err
+}
+
+func (r *Runtime) reportWriterError(err error) error {
+	err = relevantWriterError(err)
+	if err != nil {
+		r.sendErrorNotice("protocol_error", err)
 	}
 	return err
 }
