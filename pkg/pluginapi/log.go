@@ -1,6 +1,10 @@
 package pluginapi
 
-import "time"
+import (
+	"errors"
+	"strings"
+	"time"
+)
 
 type LogLevel string
 
@@ -11,6 +15,15 @@ const (
 	LogError LogLevel = "error"
 )
 
+func (l LogLevel) Validate() error {
+	switch l {
+	case LogDebug, LogInfo, LogWarn, LogError:
+		return nil
+	default:
+		return errors.New("LogLevel is unknown")
+	}
+}
+
 type LogEntry struct {
 	Sequence uint64
 	Time     time.Time
@@ -19,7 +32,12 @@ type LogEntry struct {
 	Message  string
 }
 
-type LogStore interface {
-	Append(entry LogEntry)
-	List(pluginID string, after uint64, limit int) []LogEntry
+func (e LogEntry) Validate() error {
+	if err := e.Level.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(e.Message) == "" {
+		return errors.New("LogEntry.Message must be nonblank")
+	}
+	return nil
 }

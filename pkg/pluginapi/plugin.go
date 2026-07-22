@@ -3,23 +3,31 @@ package pluginapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
 
+const APIVersion uint16 = 1
+
 type Driver interface {
 	Descriptor() Descriptor
-
-	Run(ctx context.Context, env Environment) error
+	Run(context.Context, Host) error
 }
 
-type Environment interface {
-	InitialConfig() Config
-	Commands() <-chan Command
+type Host interface {
+	Startup() Startup
+	Events() <-chan ControlEvent
+	PublishFrame(trackingmodel.TrackingFrame) bool
+	PublishStatus(DeviceStatus)
+	Log(LogLevel, string)
+}
 
-	PublishFrame(frame trackingmodel.TrackingFrame) bool
-	PublishStatus(status DeviceStatus)
-	Log(level LogLevel, message string)
+type Startup struct {
+	Active       bool
+	Config       Config
+	Subscription Subscription
 }
 
 type Config struct {
@@ -27,19 +35,26 @@ type Config struct {
 	Data     json.RawMessage
 }
 
-type CommandType uint8
+func (c Config) Clone() Config {
+	clone := Config{Revision: c.Revision}
+	if c.Data != nil {
+		clone.Data = make(json.RawMessage, len(c.Data))
+		copy(clone.Data, c.Data)
+	}
+	return clone
+}
 
-const (
-	CommandSetActive CommandType = iota + 1
-	CommandReconfigure
-	CommandShutdown
-)
-
-type Command struct {
-	Type CommandType
-
-	Active bool
-	Config Config
+func (c Config) Validate() error {
+	if len(c.Data) == 0 {
+		return nil
+	}
+	if c.Revision == 0 {
+		return errors.New("Config.Revision must be positive when Data is nonempty")
+	}
+	if !json.Valid(c.Data) {
+		return errors.New("Config.Data must contain valid JSON")
+	}
+	return nil
 }
 
 type DeviceState string
@@ -54,4 +69,18 @@ const (
 type DeviceStatus struct {
 	State   DeviceState
 	Message string
+}
+
+func (s DeviceStatus) Validate() error {
+	switch s.State {
+	case DeviceInitializing, DeviceReady, DeviceDisconnected:
+		return nil
+	case DeviceError:
+		if strings.TrimSpace(s.Message) == "" {
+			return errors.New("DeviceStatus.Message must be nonblank for error state")
+		}
+		return nil
+	default:
+		return errors.New("DeviceStatus.State is unknown")
+	}
 }
