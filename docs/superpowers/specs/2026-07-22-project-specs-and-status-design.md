@@ -19,12 +19,14 @@ The initial catalog covers all packages returned by `go list ./...`:
 
 - repository root;
 - `cmd/paramgen`;
+- `cmd/projectstatus`;
 - `internal/application`;
 - `internal/ipc`;
 - `internal/osc`;
 - `internal/parameters`;
 - `internal/paramgen`;
 - `internal/plugins`;
+- `internal/projectstatus`;
 - `internal/processing`;
 - `internal/specparser`;
 - `internal/tracking`;

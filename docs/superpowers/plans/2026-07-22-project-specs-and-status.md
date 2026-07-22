@@ -513,7 +513,7 @@ git commit -m "feat(projectstatus): add project status command"
 **Files:**
 - Create: `docs/project/README.md`
 - Create: `docs/project/milestones.md`
-- Create: all 15 files under `docs/project/packages/`
+- Create: all 17 files under `docs/project/packages/`
 - Create: all 4 files under `docs/project/subsystems/`
 - Test: `internal/projectstatus/catalog_integration_test.go`
 
@@ -531,7 +531,7 @@ func TestRepositoryCatalogCoversEveryPackage(t *testing.T) {
     packages, err := DiscoverGoPackages(context.Background(), root, NewRunner(root))
     if err != nil { t.Fatal(err) }
     if err := ValidateCatalog(catalog, packages); err != nil { t.Fatal(err) }
-    if got, want := len(catalog.Specs), 19; got != want {
+    if got, want := len(catalog.Specs), 21; got != want {
         t.Fatalf("specs = %d, want %d", got, want)
     }
 }
@@ -591,7 +591,7 @@ package cannot meet its product role independently.
 
 Run: `go test ./internal/projectstatus -run 'TestRepositoryCatalog|TestParseSpec'`
 
-Expected: PASS with exactly 19 initial specs and no unknown dependencies.
+Expected: PASS with exactly 21 initial specs and no unknown dependencies.
 
 - [ ] **Step 7: Commit**
 
