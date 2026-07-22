@@ -1,5 +1,20 @@
 # README
 
+## Project specifications and status
+
+- [Project architecture and package specifications](docs/project/README.md)
+- [Milestones](docs/project/milestones.md)
+- [Generated project status](docs/project/status.md)
+
+Refresh the evidence-backed status with:
+
+```powershell
+go run ./cmd/projectstatus
+go run ./cmd/projectstatus -write
+go run ./cmd/projectstatus -format json
+go run ./cmd/projectstatus -check
+```
+
 ## About
 
 This is the official Wails Svelte-TS template.

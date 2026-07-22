@@ -53,8 +53,28 @@ func TestBuildStatusAggregatesWeights(t *testing.T) {
 	if status.PassedWeight != 3 || status.TotalWeight != 5 || status.Progress != 60 {
 		t.Fatalf("project weights = %#v", status)
 	}
-	if len(status.Milestones) != 2 || status.Milestones[0].ID != "M1" || status.Specs[0].ID != "a" {
+	if len(status.Milestones) != 8 || status.Milestones[1].ID != "M1" || status.Specs[0].ID != "a" {
 		t.Fatalf("status is not sorted: %#v", status)
+	}
+}
+
+func TestBuildStatusIncludesEveryMilestone(t *testing.T) {
+	status := BuildStatus(StatusInput{})
+	if got, want := len(status.Milestones), 8; got != want {
+		t.Fatalf("milestones = %d, want %d: %#v", got, want, status.Milestones)
+	}
+	if status.Milestones[5].ID != "M5" || status.Milestones[5].State != StateNotStarted {
+		t.Fatalf("M5 = %#v", status.Milestones[5])
+	}
+}
+
+func TestBuildStatusNextActionFollowsMilestoneOrder(t *testing.T) {
+	status := BuildStatus(StatusInput{Results: []SpecResult{
+		{Spec: Spec{ID: "a", Milestone: "M6"}, Checks: []CheckResult{{CheckID: "late", State: CheckFailed, Weight: 1, Required: true}}},
+		{Spec: Spec{ID: "z", Milestone: "M1"}, Checks: []CheckResult{{CheckID: "early", State: CheckFailed, Weight: 1, Required: true}}},
+	}})
+	if status.NextAction == nil || status.NextAction.SpecID != "z" {
+		t.Fatalf("next action = %#v", status.NextAction)
 	}
 }
 

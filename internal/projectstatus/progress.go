@@ -68,6 +68,11 @@ func CalculateSpecStatus(previous State, result SpecResult) SpecStatus {
 		Milestone: result.Spec.Milestone, DependsOn: append([]string(nil), result.Spec.DependsOn...),
 		Checks: append([]CheckResult(nil), result.Checks...),
 	}
+	for index := range status.Checks {
+		if status.Checks[index].SpecID == "" {
+			status.Checks[index].SpecID = result.Spec.ID
+		}
+	}
 	requiredPassed := true
 	blocked := false
 	for _, check := range result.Checks {
@@ -130,7 +135,16 @@ func BuildStatus(input StatusInput) Status {
 		}
 		return status.Specs[i].ID < status.Specs[j].ID
 	})
+	milestoneBySpec := make(map[string]string, len(status.Specs))
+	for _, spec := range status.Specs {
+		milestoneBySpec[spec.ID] = spec.Milestone
+	}
 	sort.Slice(status.FailedRequired, func(i, j int) bool {
+		leftMilestone := milestoneBySpec[status.FailedRequired[i].SpecID]
+		rightMilestone := milestoneBySpec[status.FailedRequired[j].SpecID]
+		if leftMilestone != rightMilestone {
+			return leftMilestone < rightMilestone
+		}
 		if status.FailedRequired[i].SpecID != status.FailedRequired[j].SpecID {
 			return status.FailedRequired[i].SpecID < status.FailedRequired[j].SpecID
 		}
@@ -147,8 +161,12 @@ func BuildStatus(input StatusInput) Status {
 }
 
 func aggregateMilestones(specs []SpecStatus) []MilestoneStatus {
-	byID := make(map[string]*MilestoneStatus)
+	byID := make(map[string]*MilestoneStatus, 8)
 	states := make(map[string][]State)
+	for index := 0; index <= 7; index++ {
+		id := "M" + string(rune('0'+index))
+		byID[id] = &MilestoneStatus{ID: id, State: StateNotStarted}
+	}
 	for _, spec := range specs {
 		milestone := byID[spec.Milestone]
 		if milestone == nil {

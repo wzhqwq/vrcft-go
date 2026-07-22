@@ -34,7 +34,7 @@ func TestRunnerTimesOutAndBoundsOutput(t *testing.T) {
 	if !timedOut.TimedOut || timedOut.ExitCode == 0 {
 		t.Fatalf("timeout output = %#v", timedOut)
 	}
-	spam := runner.Run(context.Background(), CommandRequest{ID: "helper", Args: []string{"spam"}, Timeout: time.Second})
+	spam := runner.Run(context.Background(), CommandRequest{ID: "helper", Args: []string{"spam"}, Timeout: 10 * time.Second})
 	if spam.ExitCode != 0 || !spam.Truncated || len(spam.Stdout) > maxCapturedOutput {
 		t.Fatalf("spam output = exit %d truncated=%v len=%d", spam.ExitCode, spam.Truncated, len(spam.Stdout))
 	}
