@@ -44,13 +44,13 @@ Driver, Host, Startup, typed controls, configuration, commands, status, descript
 All exported types are part of the plugin author contract.
 
 ## Owned data
-Serializable configuration and status values only; trimming makes published configuration and subscription data immutable to callers, and this package owns no LogStore.
+Serializable configuration and status values only. `Config.Clone` provides independent ownership of configuration bytes, and this package owns no LogStore.
 
 ## Dependencies
 Depends on the public tracking model.
 
 ## Concurrency and lifecycle
-Drivers run under context cancellation; Host publishing is safe for driver workers.
+Drivers run under context cancellation; Host publishing is safe for driver workers. `Subscription.TrimFrame` does not mutate either input and returns a filtered tracking-frame copy.
 
 ## Error handling
 Control, configuration, subscription, and status validation return explicit errors; Host methods communicate bounded publication outcomes.

@@ -32,19 +32,19 @@ Build direct and derived dependency plans, close leaf dependencies, union requir
 Numeric parameter evaluation and avatar planning are outside this package.
 
 ## Current implementation
-Dependency planning, acyclic leaf closure, required-input union, and cycle, missing, and orphan validation are implemented.
+A fixed package-global dependency table keyed by generated `ParameterID` provides direct dependencies, acyclic leaf closure, and required primitive-input unions.
 
 ## Public/internal interfaces
-Dependency-plan and closure APIs consumed by parameter catalog validation and downstream planning.
+Lookup and leaf-union APIs expose the package-global table to callers.
 
 ## Owned data
-In-memory direct and derived dependency plans and primitive-input sets.
+The fixed package-global dependency table, its derived leaf closures, and primitive-input unions keyed by generated `ParameterID`.
 
 ## Dependencies
-Consumes generated `internal/parameters` catalog entries, parsed `internal/specparser` semantics, and `pkg/trackingmodel` primitive IDs.
+Uses generated `internal/parameters` IDs and `pkg/trackingmodel` primitive IDs at runtime. Tests use `internal/specparser` to load the YAML specification and prove complete dependency coverage.
 
 ## Concurrency and lifecycle
-Plans are constructed per input document and can be read immutably after validation.
+The fixed table is initialized as package data and read immutably for the process lifetime.
 
 ## Error handling
 Cycles, missing dependencies, and orphan primitives are reported with dependency context.
