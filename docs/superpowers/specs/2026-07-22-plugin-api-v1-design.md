@@ -35,6 +35,18 @@ or OSC output. Those components consume the contracts established here.
 operations to test, set, normalize, intersect, and detect an empty mask. This
 prevents `pluginapi` and `protocol` from duplicating private layout constants.
 
+The current `ExpressionID` declaration is incomplete: it contains only 12
+values, only 10 of which directly match names among the 88 detailed float
+parameters in `spec/vrcft_osc_parameters.yaml`. The `// ...` marker is not a
+contract, and the separate `MaxExpressionCount`/`ExpressionData` representation
+is unused and duplicates `ExpressionSet`.
+
+The v1 model must replace that placeholder with the complete set of primitive
+expression inputs required by the parameter specification and remove the
+obsolete duplicate representation. Parameters carried by `EyeSample` and
+parameters calculated by combining primitive inputs are not duplicated in
+`ExpressionSet`.
+
 ### `pkg/pluginapi`
 
 `pkg/pluginapi` is the complete API visible to plugin authors. It owns:
@@ -150,6 +162,30 @@ operation. Trimming clears unsubscribed capabilities and validity bits and
 zeroes corresponding eye and expression values, preventing unwanted fields
 from crossing IPC even when a driver publishes a full device frame.
 
+## Parameter Coverage Contract
+
+`spec/vrcft_osc_parameters.yaml` is the authoritative list of OSC outputs, but
+an OSC output is not necessarily a primitive tracking input. The tracking model
+therefore does not create one `ExpressionID` for every YAML entry. Instead, the
+implementation defines an explicit dependency mapping with these rules:
+
+- direct eye outputs name the `EyeSample` fields and validity bits they require;
+- direct expression outputs name one primitive `ExpressionID`;
+- combined detailed and simplified outputs name all primitive dependencies and
+  their evaluation operation;
+- tracking-active Boolean outputs depend on capability and source state rather
+  than an expression slot.
+
+Every float parameter in both `detailed_parameters` and
+`simplified_parameters` must have a dependency entry. Every dependency must
+refer to a real `EyeSample` field or an `ExpressionID` below `ExpressionCount`.
+Every primitive expression ID must be used by at least one parameter or carry an
+explicit interoperability justification. Cycles are invalid.
+
+Coverage is checked from the YAML source during tests, not by comparing only
+the declared counts. This guarantees that adding or renaming a parameter in the
+spec fails tests until tracking input and evaluation coverage are updated.
+
 ### Publication semantics
 
 `PublishFrame` is safe for device callback workers and does not block on IPC.
@@ -264,7 +300,15 @@ cancellation during shutdown is not reported as a driver failure.
 ## Testing
 
 `pkg/trackingmodel` tests cover mask set/test/intersection, out-of-range IDs,
-empty masks, and clearing unused tail bits.
+empty masks, clearing unused tail bits, uniqueness and stability of expression
+IDs, and removal of the obsolete `ExpressionData` representation.
+
+A repository-level coverage test loads `spec/vrcft_osc_parameters.yaml` and
+proves that all 88 detailed and 36 simplified float parameters have an acyclic
+dependency path to valid `EyeSample` fields or primitive expression IDs. The
+test reports missing parameter names individually and rejects orphan primitive
+IDs. Expected counts are read from the parsed specification rather than copied
+into production code.
 
 `pkg/pluginapi` tests cover every exported validation rule, subscription
 normalization and membership, full-group and field-level trimming, value
@@ -295,11 +339,13 @@ go vet ./pkg/trackingmodel ./pkg/pluginapi ./pkg/protocol ./pkg/pluginruntime
 
 ## Delivery Order
 
-1. Add shared tracking masks and frame trimming primitives.
-2. Replace the provisional plugin API with the validated v1 contract.
-3. Define protocol v1 messages and the connection abstraction.
-4. Implement the plugin runtime lifecycle and control path.
-5. Implement selective latest-frame delivery, status/log/heartbeat behavior,
+1. Complete the primitive tracking model and executable YAML parameter coverage
+   map, removing the duplicate expression representation.
+2. Add shared tracking masks and frame trimming primitives.
+3. Replace the provisional plugin API with the validated v1 contract.
+4. Define protocol v1 messages and the connection abstraction.
+5. Implement the plugin runtime lifecycle and control path.
+6. Implement selective latest-frame delivery, status/log/heartbeat behavior,
    and end-to-end in-memory integration tests.
-6. Update package specifications so completion requires behavioral and race
+7. Update package specifications so completion requires behavioral and race
    tests rather than symbol presence.
