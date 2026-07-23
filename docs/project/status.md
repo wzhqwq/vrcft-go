@@ -1,8 +1,8 @@
 # Project Status
 
-- Generated: 2026-07-23T18:14:11Z
-- Commit: `1a7c15735c91cb44bf8c560831a55c4edba4ba88`
-- Source fingerprint: `ce5a251114f1661ae71beaae0560cfdb820357a6ccc8aecdaa0f2a7302e8f1c8`
+- Generated: 2026-07-23T18:18:39Z
+- Commit: `53a91158932b722e808843abcbc753d2e4a501e6`
+- Source fingerprint: `5a221c91f73cdb7bbed54a44530cfaa104a304547a01d9e86a629564699cb4a2`
 - Dirty: `false`
 - State: `blocked`
 - Progress: 78.2% (104/133 weight)
@@ -57,7 +57,7 @@
 - `end-to-end/pipeline-components` (blocked): aggregate member incomplete: internal-application:tracking-wired
 - `internal-application/tracking-wired` (failed): required symbol not found
 - `frontend/project-status-view` (failed): required symbol not found
-- `frontend/type-check` (failed): 02:14:08 [vite-plugin-svelte] !!! Support for vite 8 beta in vite-plugin-svelte is experimental (rolldown: 1.1.5, vite: 8.1.5) !!! See https://github.com/sveltejs/vite-plugin-svelte/issues/1143 for a list of known issues and to report feedb…
+- `frontend/type-check` (failed): 02:18:36 [vite-plugin-svelte] !!! Support for vite 8 beta in vite-plugin-svelte is experimental (rolldown: 1.1.5, vite: 8.1.5) !!! See https://github.com/sveltejs/vite-plugin-svelte/issues/1143 for a list of known issues and to report feedb…
 
 ## Next Action
 
