@@ -86,6 +86,12 @@ func (c *streamConn) classifyOperationError(ctx context.Context, err error) erro
 		}
 		return ctxErr
 	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		var timeout net.Error
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			return context.DeadlineExceeded
+		}
+	}
 	if isFatal || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 		_ = c.Close()
 	}

@@ -16,6 +16,22 @@ import (
 
 const ipcTestTimeout = 2 * time.Second
 
+type deadlineLagContext struct {
+	deadline time.Time
+	done     chan struct{}
+}
+
+func (c deadlineLagContext) Deadline() (time.Time, bool) { return c.deadline, true }
+func (c deadlineLagContext) Done() <-chan struct{}       { return c.done }
+func (deadlineLagContext) Err() error                    { return nil }
+func (deadlineLagContext) Value(any) any                 { return nil }
+
+type testTimeoutError struct{}
+
+func (testTimeoutError) Error() string   { return "test timeout" }
+func (testTimeoutError) Timeout() bool   { return true }
+func (testTimeoutError) Temporary() bool { return true }
+
 func receiveAsync(conn protocol.Conn) <-chan struct {
 	message protocol.Message
 	err     error
@@ -103,6 +119,17 @@ func TestStreamConnBlockedOperationsHonorContext(t *testing.T) {
 			t.Fatalf("Send() error = %v, want deadline exceeded", err)
 		}
 	})
+}
+
+func TestStreamConnMapsExpiredContextDeadlineBeforeContextTimerFires(t *testing.T) {
+	conn := &streamConn{}
+	ctx := deadlineLagContext{
+		deadline: time.Now().Add(-time.Millisecond),
+		done:     make(chan struct{}),
+	}
+	if err := conn.classifyOperationError(ctx, testTimeoutError{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("classifyOperationError() = %v, want context.DeadlineExceeded", err)
+	}
 }
 
 func TestStreamConnCloseUnblocksReceiveAndIsIdempotent(t *testing.T) {
