@@ -56,8 +56,11 @@ func SourceFingerprint(root string) (string, error) {
 func ignoredFingerprintDir(relative string) bool {
 	parts := strings.Split(relative, "/")
 	for _, part := range parts {
+		if strings.HasSuffix(part, "-gocache") {
+			return true
+		}
 		switch part {
-		case ".git", ".worktrees", "node_modules", "dist", ".cache":
+		case ".git", ".worktrees", ".superpowers", "node_modules", "dist", ".cache":
 			return true
 		}
 	}
