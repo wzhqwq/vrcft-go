@@ -148,8 +148,11 @@ Rules:
 - writes loop until the entire header and payload have been written;
 - the payload is encoded and decoded by `pkg/protocol`, preserving strict
   message validation;
-- malformed, oversized, or invalid messages make the connection unusable and
-  close it, because stream synchronization is no longer trusted;
+- malformed inbound frames and failures after a partial write make the
+  connection unusable and close it, because stream synchronization is no
+  longer trusted;
+- an outbound message rejected by protocol or size validation before any byte
+  is written leaves the connection usable;
 - framing never adds its own token or message type.
 
 `pkg/protocol` exports `MaxMessageSize` as `MaxPayloadSize + 256`, replacing its
@@ -314,8 +317,9 @@ Tests must close every listener and connection through `t.Cleanup`.
 ### Non-Windows coverage
 
 Build-tagged tests verify that `Listen` and `Connect` return
-`ErrUnsupportedPlatform`. CI or a local verification command cross-compiles the
-package for at least `linux/amd64`.
+`ErrUnsupportedPlatform`. Non-Windows CI runs those tests. Windows verification
+cross-compiles the test binary for at least `linux/amd64` with `go test -c`;
+Windows does not attempt to execute the foreign binary.
 
 ### Runtime integration tests
 
@@ -336,7 +340,8 @@ The implementation is complete when:
 - `go test ./...` passes on Windows;
 - `go test -race ./internal/ipc ./pkg/protocol ./pkg/pluginruntime` passes;
 - `go vet ./internal/ipc ./pkg/protocol ./pkg/pluginruntime` passes;
-- `GOOS=linux GOARCH=amd64 go test ./internal/ipc` builds and passes;
+- `GOOS=linux GOARCH=amd64 go test -c ./internal/ipc` builds on Windows, and
+  non-Windows CI runs `go test ./internal/ipc`;
 - `go run ./cmd/projectstatus -check` reports no stale status;
 - `docs/project/packages/internal-ipc.md` and
   `docs/project/packages/pkg-pluginruntime.md` describe the implemented
