@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 
@@ -23,6 +24,9 @@ type oneShotListener struct {
 
 	closeOnce sync.Once
 	closeErr  error
+
+	shutdownOnce sync.Once
+	shutdownErr  error
 }
 
 var _ Listener = (*oneShotListener)(nil)
@@ -77,7 +81,25 @@ func (l *oneShotListener) Accept(ctx context.Context) (protocol.Conn, error) {
 }
 
 func (l *oneShotListener) Close() error {
-	return l.closeUnderlying()
+	l.shutdownOnce.Do(func() {
+		listenerErr := l.closeUnderlying()
+		<-l.ready
+
+		l.mu.Lock()
+		var pending net.Conn
+		if l.result.err == nil && l.result.conn != nil && !l.consumed {
+			pending = l.result.conn
+			l.result = listenerResult{err: net.ErrClosed}
+		}
+		l.mu.Unlock()
+
+		var pendingErr error
+		if pending != nil {
+			pendingErr = pending.Close()
+		}
+		l.shutdownErr = errors.Join(listenerErr, pendingErr)
+	})
+	return l.shutdownErr
 }
 
 func (l *oneShotListener) closeUnderlying() error {

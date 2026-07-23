@@ -132,6 +132,29 @@ func TestOneShotListenerCloseWakesAcceptAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestOneShotListenerCloseReleasesUnclaimedConnection(t *testing.T) {
+	raw := newControlledListener()
+	listener := newOneShotListener(raw).(*oneShotListener)
+	server, client := net.Pipe()
+	defer client.Close()
+	raw.outcomes <- acceptOutcome{conn: server}
+	select {
+	case <-listener.ready:
+	case <-time.After(ipcTestTimeout):
+		t.Fatal("underlying Accept did not complete")
+	}
+
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := listener.Accept(context.Background()); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Accept(after closing unclaimed connection) error = %v, want net.ErrClosed", err)
+	}
+	if _, err := client.Write([]byte("probe")); err == nil {
+		t.Fatal("peer write succeeded after listener leaked unclaimed connection")
+	}
+}
+
 func TestOneShotListenerConcurrentAcceptHasSingleWinner(t *testing.T) {
 	raw := newControlledListener()
 	listener := newOneShotListener(raw)

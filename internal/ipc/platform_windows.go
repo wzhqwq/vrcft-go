@@ -69,8 +69,8 @@ func pipeSecurityDescriptor(sid string) string {
 func windowsPipeConfig(sid string) *winio.PipeConfig {
 	return &winio.PipeConfig{
 		SecurityDescriptor: pipeSecurityDescriptor(sid),
-		MessageMode:       false,
-		InputBufferSize:   windowsPipeBufferSize,
-		OutputBufferSize:  windowsPipeBufferSize,
+		MessageMode:        false,
+		InputBufferSize:    windowsPipeBufferSize,
+		OutputBufferSize:   windowsPipeBufferSize,
 	}
 }
