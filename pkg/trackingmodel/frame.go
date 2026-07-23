@@ -1,5 +1,7 @@
 package trackingmodel
 
+import "errors"
+
 type Vec2 struct {
 	X float32
 	Y float32
@@ -21,6 +23,13 @@ const (
 	EyeValidLeftPupil
 	EyeValidRightPupil
 )
+
+const knownEyeValid = EyeValidLeftGaze |
+	EyeValidRightGaze |
+	EyeValidLeftOpenness |
+	EyeValidRightOpenness |
+	EyeValidLeftPupil |
+	EyeValidRightPupil
 
 type TrackingFrame struct {
 	Sequence      uint64
@@ -47,4 +56,71 @@ type EyeSample struct {
 
 	LeftPupilDilation  float32
 	RightPupilDilation float32
+}
+
+// Validate rejects tracking metadata that cannot be represented by the v1
+// capability and validity contracts.
+func (f TrackingFrame) Validate() error {
+	const knownCapabilities = CapabilityEye | CapabilityExpression
+	if f.Capabilities&^knownCapabilities != 0 {
+		return errors.New("TrackingFrame.Capabilities contains unknown capability bits")
+	}
+	if f.Eye.Valid&^knownEyeValid != 0 {
+		return errors.New("TrackingFrame.Eye.Valid contains unknown eye bits")
+	}
+	if f.Expressions.Valid != f.Expressions.Valid.Normalize() {
+		return errors.New("TrackingFrame.Expressions.Valid contains expression tail bits")
+	}
+	if !f.Capabilities.Has(CapabilityEye) && f.Eye.Valid != 0 {
+		return errors.New("TrackingFrame.Eye.Valid requires CapabilityEye")
+	}
+	if !f.Capabilities.Has(CapabilityExpression) && !f.Expressions.Valid.IsZero() {
+		return errors.New("TrackingFrame.Expressions.Valid requires CapabilityExpression")
+	}
+	return nil
+}
+
+// Canonicalize validates f and clears values that are not marked valid.
+func (f TrackingFrame) Canonicalize() (TrackingFrame, error) {
+	if err := f.Validate(); err != nil {
+		return TrackingFrame{}, err
+	}
+	if !f.Capabilities.Has(CapabilityEye) {
+		f.Eye = EyeSample{}
+	} else {
+		zeroInvalidEyeValues(&f.Eye)
+	}
+	if !f.Capabilities.Has(CapabilityExpression) {
+		f.Expressions = ExpressionSet{}
+	} else {
+		for id := ExpressionID(0); id < ExpressionCount; id++ {
+			if !f.Expressions.Valid.Has(id) {
+				f.Expressions.Values[id] = 0
+			}
+		}
+	}
+	return f, nil
+}
+
+func zeroInvalidEyeValues(eye *EyeSample) {
+	if eye.Valid&EyeValidLeftGaze == 0 {
+		eye.LeftGaze = Vec2{}
+	}
+	if eye.Valid&EyeValidRightGaze == 0 {
+		eye.RightGaze = Vec2{}
+	}
+	if eye.Valid&EyeValidLeftOpenness == 0 {
+		eye.LeftOpenness = 0
+	}
+	if eye.Valid&EyeValidRightOpenness == 0 {
+		eye.RightOpenness = 0
+	}
+	if eye.Valid&EyeValidLeftPupil == 0 {
+		eye.LeftPupilDiameterMM = 0
+		eye.LeftPupilDilation = 0
+	}
+	if eye.Valid&EyeValidRightPupil == 0 {
+		eye.RightPupilDiameterMM = 0
+		eye.RightPupilDilation = 0
+	}
 }

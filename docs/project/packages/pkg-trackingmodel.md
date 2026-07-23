@@ -31,13 +31,13 @@ checks:
 Provide the shared canonical primitive tracking data contract across process boundaries.
 
 ## Responsibilities
-Define the complete 76 primitive expression IDs, fixed-size validity masks, safe expression accessors, eye samples, capabilities, timestamps, sequences, and received-frame metadata.
+Define the complete 76 primitive expression IDs, fixed-size validity masks, safe expression accessors, eye samples, capabilities, timestamps, sequences, received-frame metadata, and shared tracking-frame validation/canonicalization.
 
 ## Non-responsibilities
 Vendor conversion, routing, filtering, and numeric parameter evaluation are outside the model.
 
 ## Current implementation
-TrackingFrame, eye and expression data, fixed masks, safe accessors, capabilities, and received metadata are implemented and tested.
+TrackingFrame, eye and expression data, fixed masks, safe accessors, capabilities, received metadata, and malformed-frame rejection/canonicalization are implemented and tested.
 
 ## Public/internal interfaces
 All exported value types used by plugin API and protocol are public contracts.
@@ -52,7 +52,7 @@ No project package dependencies; `internal/parameterdeps` consumes these primiti
 Frames are values transferred as immutable snapshots.
 
 ## Error handling
-Validity masks express absent fields, and safe accessors reject out-of-range IDs.
+Validity masks express absent fields, safe accessors reject out-of-range IDs, and frame validation rejects unknown or capability-inconsistent validity bits.
 
 ## Performance constraints
 Fixed masks and bounded layouts support frequent serialization without dynamic primitive growth.
@@ -61,7 +61,7 @@ Fixed masks and bounded layouts support frequent serialization without dynamic p
 Fixed counts and indices prevent unbounded payloads.
 
 ## Required tests
-Executable package and race tests cover expression IDs, fixed masks, safe accessors, layout, limits, and serialization behavior; the named expression test file is integration evidence only.
+Executable package and race tests cover every stable expression ID/name pair, fixed masks, safe accessors, frame validation/canonicalization, layout, limits, and serialization behavior; the named expression test file is integration evidence only.
 
 ## Known gaps
 No tracking-model package implementation gap is known.

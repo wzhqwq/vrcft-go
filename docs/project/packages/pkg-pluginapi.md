@@ -50,10 +50,10 @@ Serializable configuration and status values only. `Config.Clone` provides indep
 Depends on the public tracking model.
 
 ## Concurrency and lifecycle
-Drivers run under context cancellation; Host publishing is safe for driver workers. `Subscription.TrimFrame` does not mutate either input and returns a filtered tracking-frame copy.
+Drivers run under context cancellation; Host publishing is safe for driver workers. `Host.Startup` remains the immutable initialization snapshot while typed control events communicate later state. `Subscription.TrimFrame` does not mutate either input and returns a filtered copy containing only known subscribed capabilities and validity.
 
 ## Error handling
-Control, configuration, subscription, and status validation return explicit errors; Host methods communicate bounded publication outcomes.
+Descriptor SemVer 2.0, control, configuration, subscription, and status validation return explicit errors; zero-length configuration data is canonicalized to nil and Host methods communicate bounded publication outcomes.
 
 ## Performance constraints
 Frame publication supports latest-frame/drop behavior without blocking device callbacks.

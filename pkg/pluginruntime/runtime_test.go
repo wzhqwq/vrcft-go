@@ -44,6 +44,47 @@ type memoryConn struct {
 	sendDelay            time.Duration
 }
 
+type orderedTerminalConn struct {
+	*memoryConn
+	receiveCalls  atomic.Int32
+	readerStarted chan struct{}
+	releaseReader chan struct{}
+	readerErr     error
+	afterCancel   bool
+}
+
+func (c *orderedTerminalConn) Receive(ctx context.Context) (protocol.Message, error) {
+	if c.receiveCalls.Add(1) == 1 {
+		return c.memoryConn.Receive(ctx)
+	}
+	close(c.readerStarted)
+	if c.afterCancel {
+		<-ctx.Done()
+	} else {
+		select {
+		case <-c.releaseReader:
+		case <-c.closed:
+			return protocol.Message{}, io.EOF
+		}
+	}
+	return protocol.Message{}, c.readerErr
+}
+
+type closeOnlyReceiveConn struct {
+	*memoryConn
+	receiveCalls  atomic.Int32
+	readerStarted chan struct{}
+}
+
+func (c *closeOnlyReceiveConn) Receive(ctx context.Context) (protocol.Message, error) {
+	if c.receiveCalls.Add(1) == 1 {
+		return c.memoryConn.Receive(ctx)
+	}
+	close(c.readerStarted)
+	<-c.closed
+	return protocol.Message{}, io.EOF
+}
+
 func newMemoryConn(capacity int) *memoryConn {
 	return &memoryConn{
 		toRuntime:   make(chan protocol.Message, capacity),
@@ -422,6 +463,122 @@ func TestRuntimeHostPublishFrameRejectsUnavailableStates(t *testing.T) {
 	}
 }
 
+func TestRuntimeHostPublishFrameRejectsMalformedFramesBeforeSlot(t *testing.T) {
+	expressionTail := trackingmodel.ExpressionMask{}
+	expressionTail.Words[len(expressionTail.Words)-1] = uint64(1) << (trackingmodel.ExpressionCount % 64)
+	tests := []struct {
+		name  string
+		frame trackingmodel.TrackingFrame
+	}{
+		{
+			name:  "unknown capability",
+			frame: trackingmodel.TrackingFrame{Capabilities: trackingmodel.Capability(1 << 20)},
+		},
+		{
+			name: "unknown eye validity",
+			frame: trackingmodel.TrackingFrame{
+				Capabilities: trackingmodel.CapabilityEye,
+				Eye:          trackingmodel.EyeSample{Valid: trackingmodel.EyeValid(1 << 15)},
+			},
+		},
+		{
+			name: "expression tail",
+			frame: trackingmodel.TrackingFrame{
+				Capabilities: trackingmodel.CapabilityExpression,
+				Expressions:  trackingmodel.ExpressionSet{Valid: expressionTail},
+			},
+		},
+		{
+			name:  "eye validity in disabled group",
+			frame: trackingmodel.TrackingFrame{Eye: trackingmodel.EyeSample{Valid: trackingmodel.EyeValidLeftGaze}},
+		},
+		{
+			name:  "expression validity in disabled group",
+			frame: trackingmodel.TrackingFrame{Expressions: trackingmodel.ExpressionSet{Valid: trackingmodel.ExpressionMaskOf(trackingmodel.ExpressionJawOpen)}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host := newRuntimeHost(validTestStartup(), 1, 1)
+			if host.PublishFrame(tt.frame) {
+				t.Fatal("PublishFrame(malformed frame) = true")
+			}
+			if _, ok := host.frames.Load(); ok {
+				t.Fatal("malformed frame entered LatestFrameSlot")
+			}
+		})
+	}
+}
+
+func TestRuntimeHostPublishFrameStoresCanonicalFrameAndAcceptsDropout(t *testing.T) {
+	host := newRuntimeHost(validTestStartup(), 1, 1)
+	frame := trackingmodel.TrackingFrame{
+		Capabilities: trackingmodel.CapabilityEye,
+		Eye: trackingmodel.EyeSample{
+			Valid:        trackingmodel.EyeValidLeftGaze,
+			LeftGaze:     trackingmodel.Vec2{X: 1, Y: 2},
+			RightGaze:    trackingmodel.Vec2{X: 3, Y: 4},
+			LeftOpenness: 0.5,
+		},
+	}
+	if !host.PublishFrame(frame) {
+		t.Fatal("PublishFrame(valid frame) = false")
+	}
+	pending, ok := host.frames.Load()
+	if !ok {
+		t.Fatal("valid frame was not stored")
+	}
+	if pending.Frame.Eye.RightGaze != (trackingmodel.Vec2{}) || pending.Frame.Eye.LeftOpenness != 0 {
+		t.Fatalf("stored frame was not canonicalized: %+v", pending.Frame)
+	}
+
+	if !host.PublishFrame(trackingmodel.TrackingFrame{Sequence: 2}) {
+		t.Fatal("PublishFrame(valid dropout) = false")
+	}
+	pending, ok = host.frames.Load()
+	if !ok || pending.Frame.Sequence != 2 {
+		t.Fatalf("stored dropout = (%+v, %t), want sequence 2", pending, ok)
+	}
+}
+
+func TestRuntimeRejectsInvalidFrameWithoutTerminating(t *testing.T) {
+	c := newMemoryConn(8)
+	hostReady := make(chan pluginapi.Host, 1)
+	d := &testDriver{descriptor: validTestDescriptor(), run: func(ctx context.Context, host pluginapi.Host) error {
+		hostReady <- host
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	runtime, err := New(d, c, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := startHandshake(t, runtime, c, validTestStartup())
+	host := <-hostReady
+	invalid := trackingmodel.TrackingFrame{
+		Capabilities: trackingmodel.CapabilityEye,
+		Eye:          trackingmodel.EyeSample{Valid: trackingmodel.EyeValid(1 << 15)},
+	}
+	if host.PublishFrame(invalid) {
+		t.Fatal("PublishFrame(invalid frame) = true")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("runtime terminated after invalid frame: %v", err)
+	case message := <-c.fromRuntime:
+		t.Fatalf("invalid frame produced wire message %#v", message)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	c.toRuntime <- mustMessage(t, protocol.Shutdown{})
+	if err := awaitResult(t, done); err != nil {
+		t.Fatalf("Run() after later shutdown error = %v", err)
+	}
+	if got := receiveMessage(t, c); got.Type != protocol.MessageShutdownAck {
+		t.Fatalf("terminal message = %#v, want ShutdownAck", got)
+	}
+}
+
 func TestRuntimeHostSubscriptionAndActivationClearPendingFrames(t *testing.T) {
 	t.Run("new generation clears older frame", func(t *testing.T) {
 		host := newRuntimeHost(validTestStartup(), 1, 1)
@@ -447,6 +604,23 @@ func TestRuntimeHostSubscriptionAndActivationClearPendingFrames(t *testing.T) {
 			t.Fatal("deactivation retained pending frame")
 		}
 	})
+}
+
+func TestRuntimeHostTreatsNilAndEmptyConfigDataAsSameRevisionDuplicate(t *testing.T) {
+	startup := validTestStartup()
+	startup.Config = pluginapi.Config{Revision: 2}
+	host := newRuntimeHost(startup, 1, 1)
+
+	event, err := host.applyConfig(pluginapi.Config{Revision: 2, Data: json.RawMessage{}})
+	if err != nil {
+		t.Fatalf("applyConfig(empty duplicate) error = %v", err)
+	}
+	if event != nil {
+		t.Fatalf("applyConfig(empty duplicate) event = %#v, want nil", event)
+	}
+	if host.current.Config.Data != nil {
+		t.Fatalf("current Config.Data = %#v, want canonical nil", host.current.Config.Data)
+	}
 }
 
 func TestRuntimeHostSubscriptionRaceCannotSendOldGeneration(t *testing.T) {
@@ -605,9 +779,9 @@ func TestOutboundWriterTrimsFrameWithStoredSubscription(t *testing.T) {
 	current.Eye = trackingmodel.EyeValidRightGaze
 	current.Expressions = trackingmodel.ExpressionMaskOf(trackingmodel.ExpressionBrowPinchRight)
 	host.mu.Lock()
-	host.startup.Subscription = current
+	host.current.Subscription = current
 	host.mu.Unlock()
-	if got := host.Startup().Subscription; got != current {
+	if got := host.current.Subscription; got != current {
 		t.Fatalf("current host subscription = %+v, want changed selection %+v", got, current)
 	}
 
@@ -723,6 +897,8 @@ func TestNewValidationAndNoIOBeforeRun(t *testing.T) {
 	validDriver := &testDriver{descriptor: validTestDescriptor()}
 	validConn := newMemoryConn(1)
 	validCfg := testConfig()
+	var typedNilDriver *testDriver
+	var typedNilConn *memoryConn
 
 	tests := []struct {
 		name   string
@@ -731,7 +907,9 @@ func TestNewValidationAndNoIOBeforeRun(t *testing.T) {
 		cfg    RuntimeConfig
 	}{
 		{"nil driver", nil, validConn, validCfg},
+		{"typed nil driver", typedNilDriver, validConn, validCfg},
 		{"nil conn", validDriver, nil, validCfg},
+		{"typed nil conn", validDriver, typedNilConn, validCfg},
 		{"blank token", validDriver, validConn, func() RuntimeConfig { c := validCfg; c.Token = " \t"; return c }()},
 		{"zero control queue", validDriver, validConn, func() RuntimeConfig { c := validCfg; c.ControlQueue = 0; return c }()},
 		{"zero log queue", validDriver, validConn, func() RuntimeConfig { c := validCfg; c.LogQueue = 0; return c }()},
@@ -810,7 +988,7 @@ func TestRuntimeHandshakeOrderAndValues(t *testing.T) {
 	}
 }
 
-func TestRuntimeStartupSnapshotsAreDefensiveAndAtomic(t *testing.T) {
+func TestRuntimeStartupSnapshotIsImmutableAndCurrentStateDrivesPublication(t *testing.T) {
 	c := newMemoryConn(8)
 	hostReady := make(chan pluginapi.Host, 1)
 	release := make(chan struct{})
@@ -828,6 +1006,7 @@ func TestRuntimeStartupSnapshotsAreDefensiveAndAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	startup := validTestStartup()
+	wantInitial := cloneStartup(startup)
 	done := startHandshake(t, runtime, c, startup)
 	host := <-hostReady
 	startup.Config.Data[2] = 'X'
@@ -842,14 +1021,45 @@ func TestRuntimeStartupSnapshotsAreDefensiveAndAtomic(t *testing.T) {
 
 	update := pluginapi.Config{Revision: 2, Data: json.RawMessage(`{"gain":2}`)}
 	c.toRuntime <- mustMessage(t, protocol.ConfigChanged{Config: update})
+	currentSubscription := pluginapi.Subscription{
+		Generation:   2,
+		Capabilities: trackingmodel.CapabilityExpression,
+		Expressions:  trackingmodel.ExpressionMaskOf(trackingmodel.ExpressionJawOpen),
+	}
+	c.toRuntime <- mustMessage(t, protocol.ActiveChanged{Active: false})
+	c.toRuntime <- mustMessage(t, protocol.SubscriptionChanged{Subscription: currentSubscription})
+	for i := 0; i < 3; i++ {
+		select {
+		case <-host.Events():
+		case <-time.After(testTimeout):
+			t.Fatalf("control event %d not delivered", i)
+		}
+	}
+	update.Data[2] = 'Z'
+	if got := host.Startup(); !reflect.DeepEqual(got, wantInitial) {
+		t.Fatalf("Startup() after controls = %+v, want immutable initialization snapshot %+v", got, wantInitial)
+	}
+	if host.PublishFrame(trackingmodel.TrackingFrame{Capabilities: trackingmodel.CapabilityExpression}) {
+		t.Fatal("PublishFrame() accepted a frame while current active state was false")
+	}
+
+	c.toRuntime <- mustMessage(t, protocol.ActiveChanged{Active: true})
 	select {
 	case <-host.Events():
 	case <-time.After(testTimeout):
-		t.Fatal("config event not delivered")
+		t.Fatal("reactivation event not delivered")
 	}
-	update.Data[2] = 'Z'
-	if got := host.Startup(); got.Config.Revision != 2 || string(got.Config.Data) != `{"gain":2}` {
-		t.Fatalf("updated Startup = %+v", got)
+	frame := trackingmodel.TrackingFrame{Capabilities: trackingmodel.CapabilityExpression}
+	frame.Expressions.Set(trackingmodel.ExpressionJawOpen, 0.75)
+	if !host.PublishFrame(frame) {
+		t.Fatal("PublishFrame() rejected a frame after current state was reactivated")
+	}
+	pending, ok := host.(*runtimeHost).frames.Load()
+	if !ok || pending.Generation != currentSubscription.Generation || pending.Subscription != currentSubscription || pending.Frame != frame {
+		t.Fatalf("pending frame = (%+v, %t), want current subscription snapshot and frame", pending, ok)
+	}
+	if got := host.Startup(); !reflect.DeepEqual(got, wantInitial) {
+		t.Fatalf("Startup() after publication = %+v, want immutable initialization snapshot %+v", got, wantInitial)
 	}
 	close(release)
 	if err := awaitResult(t, done); err != nil {
@@ -1261,6 +1471,33 @@ func TestRuntimeOutboundFailuresCancelDriverAndReportProtocolError(t *testing.T)
 	}
 }
 
+func TestRuntimeTypedConnRejectsOversizedOutboundPayloadBeforeSend(t *testing.T) {
+	c := newMemoryConn(8)
+	fallbackErr := errors.New("typed connection accepted oversized payload")
+	d := &testDriver{descriptor: validTestDescriptor(), run: func(ctx context.Context, host pluginapi.Host) error {
+		host.Log(pluginapi.LogInfo, strings.Repeat("x", protocol.MaxPayloadSize))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+			return fallbackErr
+		}
+	}}
+	runtime, err := New(d, c, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := startHandshake(t, runtime, c, validTestStartup())
+	err = awaitResult(t, done)
+	if errors.Is(err, fallbackErr) || err == nil || !strings.Contains(err.Error(), "encoded payload size") {
+		t.Fatalf("Run() error = %v, want typed payload size rejection", err)
+	}
+	message := receiveMessage(t, c)
+	if message.Type != protocol.MessageError || message.Payload.(protocol.Error).Code != "protocol_error" {
+		t.Fatalf("terminal message = %#v, want protocol_error without oversized Log send", message)
+	}
+}
+
 func TestRuntimeExternalCancellationPreservesAndReportsConcurrentWriterError(t *testing.T) {
 	c := newMemoryConn(8)
 	c.postReadySendStarted = make(chan struct{})
@@ -1329,6 +1566,59 @@ func TestRuntimeReaderFailurePreservesAndReportsConcurrentWriterError(t *testing
 	}
 }
 
+func TestRuntimeCollectsDriverAndReaderFailuresInBothTerminalOrders(t *testing.T) {
+	tests := []struct {
+		name        string
+		driverFirst bool
+	}{
+		{name: "driver selected first", driverFirst: true},
+		{name: "reader selected first", driverFirst: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := newMemoryConn(16)
+			driverErr := errors.New("simultaneous driver failure")
+			readerErr := errors.New("simultaneous reader failure")
+			conn := &orderedTerminalConn{
+				memoryConn:    base,
+				readerStarted: make(chan struct{}),
+				releaseReader: make(chan struct{}),
+				readerErr:     readerErr,
+				afterCancel:   tt.driverFirst,
+			}
+			releaseDriver := make(chan struct{})
+			d := &testDriver{descriptor: validTestDescriptor(), run: func(ctx context.Context, _ pluginapi.Host) error {
+				if tt.driverFirst {
+					<-conn.readerStarted
+					<-releaseDriver
+				} else {
+					<-ctx.Done()
+				}
+				return driverErr
+			}}
+			runtime, err := New(d, conn, testConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := startHandshake(t, runtime, base, validTestStartup())
+			<-conn.readerStarted
+			if tt.driverFirst {
+				close(releaseDriver)
+			} else {
+				close(conn.releaseReader)
+			}
+
+			err = awaitResult(t, done)
+			if !errors.Is(err, driverErr) || !errors.Is(err, readerErr) {
+				t.Fatalf("Run() error = %v, want joined driver and reader failures", err)
+			}
+			notices := runtimeNotices(t, base)
+			requireNotice(t, notices, "driver_error", driverErr.Error(), 1)
+			requireNotice(t, notices, "protocol_error", readerErr.Error(), 1)
+		})
+	}
+}
+
 func TestRuntimeWriterFailurePreservesAndReportsConcurrentDriverError(t *testing.T) {
 	c := newMemoryConn(8)
 	writerErr := errors.New("writer failed before canceling driver")
@@ -1361,14 +1651,14 @@ func TestRuntimeWriterPrimaryCollectsAndReportsConcurrentReaderFailure(t *testin
 	runtime := &Runtime{conn: c, config: testConfig()}
 	writerErr := errors.New("writer primary failure")
 	readerErr := errors.New("reader failed during writer shutdown")
-	driverDone := make(chan driverResult, 1)
-	readerDone := make(chan readerResult, 1)
-	driverDone <- driverResult{err: context.Canceled}
-	readerDone <- readerResult{err: readerErr}
+	outcome := terminalOutcome{primary: terminalWriter}
+	outcome.record(terminalEvent{worker: terminalWriter, writerErr: writerErr}, false)
+	outcome.record(terminalEvent{worker: terminalDriver, driver: driverResult{err: context.Canceled}}, false)
+	outcome.record(terminalEvent{worker: terminalReader, reader: readerResult{err: readerErr}}, false)
 
-	err := runtime.finishWriterPrimary(nil, writerErr, driverDone, readerDone)
+	err := runtime.finishTerminal(nil, outcome)
 	if !errors.Is(err, writerErr) || !errors.Is(err, readerErr) {
-		t.Fatalf("finishWriterPrimary() error = %v, want writer primary joined with reader error", err)
+		t.Fatalf("finishTerminal() error = %v, want writer primary joined with reader error", err)
 	}
 	notices := runtimeNotices(t, c)
 	requireNotice(t, notices, "protocol_error", writerErr.Error(), 1)
@@ -1382,14 +1672,14 @@ func TestRuntimeWriterPrimaryHonorsAcceptedShutdown(t *testing.T) {
 	c := newMemoryConn(8)
 	runtime := &Runtime{conn: c, config: testConfig()}
 	writerErr := errors.New("writer failed during accepted shutdown")
-	driverDone := make(chan driverResult, 1)
-	readerDone := make(chan readerResult, 1)
-	driverDone <- driverResult{err: context.Canceled, shutdownAccepted: true}
-	readerDone <- readerResult{shutdown: true}
+	outcome := terminalOutcome{primary: terminalWriter}
+	outcome.record(terminalEvent{worker: terminalWriter, writerErr: writerErr}, false)
+	outcome.record(terminalEvent{worker: terminalDriver, driver: driverResult{err: context.Canceled, shutdownAccepted: true}}, false)
+	outcome.record(terminalEvent{worker: terminalReader, reader: readerResult{shutdown: true}}, false)
 
-	err := runtime.finishWriterPrimary(nil, writerErr, driverDone, readerDone)
+	err := runtime.finishTerminal(nil, outcome)
 	if !errors.Is(err, writerErr) {
-		t.Fatalf("finishWriterPrimary() error = %v, want writer error", err)
+		t.Fatalf("finishTerminal() error = %v, want writer error", err)
 	}
 	var writerNotices, acknowledgements int
 	for {
@@ -1472,6 +1762,44 @@ func TestRuntimeShutdownTimeoutIsBounded(t *testing.T) {
 	}
 	if got := receiveMessage(t, c); got.Type != protocol.MessageShutdownAck {
 		t.Fatalf("message = %v, want ShutdownAck", got.Type)
+	}
+}
+
+func TestRuntimeClosesOnceToBoundReceiveThatIgnoresCancellation(t *testing.T) {
+	base := newMemoryConn(8)
+	closeErr := errors.New("close after shutdown deadline failed")
+	base.closeErr = closeErr
+	conn := &closeOnlyReceiveConn{
+		memoryConn:    base,
+		readerStarted: make(chan struct{}),
+	}
+	driverErr := errors.New("driver stopped while reader ignored cancellation")
+	d := &testDriver{descriptor: validTestDescriptor(), run: func(context.Context, pluginapi.Host) error {
+		<-conn.readerStarted
+		return driverErr
+	}}
+	cfg := testConfig()
+	cfg.ShutdownTimeout = 40 * time.Millisecond
+	runtime, err := New(d, conn, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := startHandshake(t, runtime, base, validTestStartup())
+	started := time.Now()
+	select {
+	case err = <-done:
+	case <-time.After(500 * time.Millisecond):
+		_ = base.Close()
+		t.Fatal("Run() did not close a Receive implementation that ignored context cancellation")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("Run() took %v, want bounded shutdown", elapsed)
+	}
+	if !errors.Is(err, driverErr) || !errors.Is(err, ErrShutdownTimeout) || !errors.Is(err, closeErr) {
+		t.Fatalf("Run() error = %v, want driver, shutdown-timeout, and close errors", err)
+	}
+	if got := base.closeCalls.Load(); got != 1 {
+		t.Fatalf("Close calls = %d, want exactly 1", got)
 	}
 }
 

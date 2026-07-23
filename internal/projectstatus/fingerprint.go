@@ -56,7 +56,7 @@ func SourceFingerprint(root string) (string, error) {
 func ignoredFingerprintDir(relative string) bool {
 	parts := strings.Split(relative, "/")
 	for _, part := range parts {
-		if strings.HasSuffix(part, "-gocache") {
+		if strings.HasPrefix(part, ".") && strings.HasSuffix(part, "-gocache") {
 			return true
 		}
 		switch part {

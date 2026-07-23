@@ -82,9 +82,11 @@ func TestMessageRoundTrips(t *testing.T) {
 		{"tracking frame", TrackingFrame{Generation: 1, Frame: frame}, MessageTrackingFrame},
 		{"status", Status{Status: pluginapi.DeviceStatus{State: pluginapi.DeviceReady}}, MessageStatus},
 		{"log", Log{Level: pluginapi.LogInfo, Message: "started", Dropped: 3}, MessageLog},
+		{"log zero dropped", Log{Level: pluginapi.LogInfo, Message: "started", Dropped: 0}, MessageLog},
 		{"config changed", ConfigChanged{Config: config}, MessageConfigChanged},
 		{"subscription changed", SubscriptionChanged{Subscription: validSubscription()}, MessageSubscriptionChanged},
 		{"active changed false", ActiveChanged{Active: false}, MessageActiveChanged},
+		{"active changed true", ActiveChanged{Active: true}, MessageActiveChanged},
 		{"shutdown", Shutdown{}, MessageShutdown},
 		{"shutdown ack", ShutdownAck{}, MessageShutdownAck},
 		{"error", Error{Code: "bad_state", Message: "not ready"}, MessageError},
@@ -155,6 +157,25 @@ func TestExplicitNullConfigDataRoundTrips(t *testing.T) {
 	}
 }
 
+func TestZeroLengthConfigDataRoundTripsAsCanonicalNil(t *testing.T) {
+	payload := ConfigChanged{Config: pluginapi.Config{Revision: 1, Data: json.RawMessage{}}}
+	message, err := NewMessage(payload)
+	if err != nil {
+		t.Fatalf("NewMessage() error = %v", err)
+	}
+	data, err := json.Marshal(message)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var decoded Message
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got := decoded.Payload.(ConfigChanged).Config.Data; got != nil {
+		t.Fatalf("decoded Config.Data = %#v, want canonical nil", got)
+	}
+}
+
 func TestNewMessageRejectsUnknownAndPointerPayloads(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -198,6 +219,8 @@ func TestMessageValidateRejectsHeaderAndPayloadMismatch(t *testing.T) {
 func TestPayloadValidation(t *testing.T) {
 	badDescriptor := validDescriptor()
 	badDescriptor.ID = ""
+	expressionTail := trackingmodel.ExpressionMask{}
+	expressionTail.Words[len(expressionTail.Words)-1] = uint64(1) << (trackingmodel.ExpressionCount % 64)
 	tests := []struct {
 		name    string
 		payload any
@@ -208,6 +231,10 @@ func TestPayloadValidation(t *testing.T) {
 		{"initialize config", Initialize{Startup: pluginapi.Startup{Config: pluginapi.Config{Revision: 1, Data: json.RawMessage(`{`)}}}},
 		{"initialize subscription", Initialize{Startup: pluginapi.Startup{Active: true}}},
 		{"tracking unknown capability", TrackingFrame{Generation: 1, Frame: trackingmodel.TrackingFrame{Capabilities: trackingmodel.Capability(1 << 30)}}},
+		{"tracking unknown eye validity", TrackingFrame{Generation: 1, Frame: trackingmodel.TrackingFrame{Capabilities: trackingmodel.CapabilityEye, Eye: trackingmodel.EyeSample{Valid: trackingmodel.EyeValid(1 << 15)}}}},
+		{"tracking expression tail", TrackingFrame{Generation: 1, Frame: trackingmodel.TrackingFrame{Capabilities: trackingmodel.CapabilityExpression, Expressions: trackingmodel.ExpressionSet{Valid: expressionTail}}}},
+		{"tracking eye validity without capability", TrackingFrame{Generation: 1, Frame: trackingmodel.TrackingFrame{Eye: trackingmodel.EyeSample{Valid: trackingmodel.EyeValidLeftGaze}}}},
+		{"tracking expression validity without capability", TrackingFrame{Generation: 1, Frame: trackingmodel.TrackingFrame{Expressions: trackingmodel.ExpressionSet{Valid: trackingmodel.ExpressionMaskOf(trackingmodel.ExpressionJawOpen)}}}},
 		{"status", Status{Status: pluginapi.DeviceStatus{State: "unknown"}}},
 		{"log level", Log{Level: "verbose", Message: "message"}},
 		{"log blank message", Log{Level: pluginapi.LogInfo, Message: " \n"}},
@@ -258,6 +285,59 @@ func TestJSONUnmarshalRejectsInvalidEnvelopeAndPayload(t *testing.T) {
 	}
 }
 
+func TestJSONUnmarshalRequiresExactTrackingArrayWidths(t *testing.T) {
+	maskWidth := len((trackingmodel.ExpressionMask{}).Words)
+	valueWidth := int(trackingmodel.ExpressionCount)
+	exactMask := numericJSONArray(maskWidth)
+	exactValues := numericJSONArray(valueWidth)
+
+	tests := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "initialize short expression mask",
+			data: `{"version":1,"type":2,"payload":{"startup":{"Active":false,"Config":{"Revision":0},"Subscription":{"Generation":0,"Capabilities":0,"Eye":0,"Expressions":{"Words":` + numericJSONArray(maskWidth-1) + `}}}}}`,
+		},
+		{
+			name: "initialize long expression mask",
+			data: `{"version":1,"type":2,"payload":{"startup":{"Active":false,"Config":{"Revision":0},"Subscription":{"Generation":0,"Capabilities":0,"Eye":0,"Expressions":{"Words":` + numericJSONArray(maskWidth+1) + `}}}}}`,
+		},
+		{
+			name: "subscription short expression mask",
+			data: `{"version":1,"type":9,"payload":{"subscription":{"Generation":1,"Capabilities":2,"Eye":0,"Expressions":{"Words":` + numericJSONArray(maskWidth-1) + `}}}}`,
+		},
+		{
+			name: "subscription long expression mask",
+			data: `{"version":1,"type":9,"payload":{"subscription":{"Generation":1,"Capabilities":2,"Eye":0,"Expressions":{"Words":` + numericJSONArray(maskWidth+1) + `}}}}`,
+		},
+		{
+			name: "tracking frame short expression validity",
+			data: `{"version":1,"type":5,"payload":{"generation":1,"frame":{"Capabilities":2,"Expressions":{"Values":` + exactValues + `,"Valid":{"Words":` + numericJSONArray(maskWidth-1) + `}}}}}`,
+		},
+		{
+			name: "tracking frame long expression validity",
+			data: `{"version":1,"type":5,"payload":{"generation":1,"frame":{"Capabilities":2,"Expressions":{"Values":` + exactValues + `,"Valid":{"Words":` + numericJSONArray(maskWidth+1) + `}}}}}`,
+		},
+		{
+			name: "tracking frame short expression values",
+			data: `{"version":1,"type":5,"payload":{"generation":1,"frame":{"Capabilities":2,"Expressions":{"Values":` + numericJSONArray(valueWidth-1) + `,"Valid":{"Words":` + exactMask + `}}}}}`,
+		},
+		{
+			name: "tracking frame long expression values",
+			data: `{"version":1,"type":5,"payload":{"generation":1,"frame":{"Capabilities":2,"Expressions":{"Values":` + numericJSONArray(valueWidth+1) + `,"Valid":{"Words":` + exactMask + `}}}}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var message Message
+			if err := json.Unmarshal([]byte(tt.data), &message); err == nil {
+				t.Fatal("Unmarshal() error = nil, want exact-width rejection")
+			}
+		})
+	}
+}
+
 func TestJSONPayloadSizeLimit(t *testing.T) {
 	base, err := json.Marshal(Log{Level: pluginapi.LogInfo, Message: "x"})
 	if err != nil {
@@ -273,6 +353,12 @@ func TestJSONPayloadSizeLimit(t *testing.T) {
 	}
 
 	exactMessage := Message{Version: Version, Type: MessageLog, Payload: exact}
+	if err := exactMessage.Validate(); err != nil {
+		t.Fatalf("Validate(exact limit) error = %v", err)
+	}
+	if _, err := NewMessage(exact); err != nil {
+		t.Fatalf("NewMessage(exact limit) error = %v", err)
+	}
 	data, err := json.Marshal(exactMessage)
 	if err != nil {
 		t.Fatalf("Marshal(exact limit) error = %v", err)
@@ -284,7 +370,14 @@ func TestJSONPayloadSizeLimit(t *testing.T) {
 
 	tooLarge := exact
 	tooLarge.Message += "x"
-	if _, err := json.Marshal(Message{Version: Version, Type: MessageLog, Payload: tooLarge}); err == nil {
+	tooLargeMessage := Message{Version: Version, Type: MessageLog, Payload: tooLarge}
+	if err := tooLargeMessage.Validate(); err == nil {
+		t.Fatal("Validate(over limit) error = nil")
+	}
+	if _, err := NewMessage(tooLarge); err == nil {
+		t.Fatal("NewMessage(over limit) error = nil")
+	}
+	if _, err := json.Marshal(tooLargeMessage); err == nil {
 		t.Fatal("Marshal(over limit) error = nil")
 	}
 
@@ -325,7 +418,7 @@ func TestJSONDecodeOwnsConfigData(t *testing.T) {
 }
 
 func TestJSONDecodeOwnsInitializeConfigData(t *testing.T) {
-	input := []byte(`{"version":1,"type":2,"payload":{"startup":{"Active":false,"Config":{"Revision":1,"Data":{"gain":0.5}},"Subscription":{"Generation":0,"Capabilities":0,"Eye":0,"Expressions":{"Words":[0,0,0,0]}}}}}`)
+	input := []byte(`{"version":1,"type":2,"payload":{"startup":{"Active":false,"Config":{"Revision":1,"Data":{"gain":0.5}},"Subscription":{"Generation":0,"Capabilities":0,"Eye":0,"Expressions":{"Words":[0,0]}}}}}`)
 	var message Message
 	if err := json.Unmarshal(input, &message); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
@@ -361,4 +454,11 @@ func mustJSON(t *testing.T, value any) []byte {
 		t.Fatalf("Marshal(%T) error = %v", value, err)
 	}
 	return data
+}
+
+func numericJSONArray(length int) string {
+	if length == 0 {
+		return "[]"
+	}
+	return "[" + strings.TrimSuffix(strings.Repeat("0,", length), ",") + "]"
 }

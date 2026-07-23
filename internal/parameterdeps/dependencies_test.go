@@ -1,6 +1,7 @@
 package parameterdeps
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,10 +77,14 @@ func TestRepresentativeDirectPlans(t *testing.T) {
 		id   parameters.ParameterID
 		want Inputs
 	}{
-		{"left gaze", parameters.ParameterEyeLeftX, Inputs{Eye: trackingmodel.EyeValidLeftGaze}},
-		{"right gaze", parameters.ParameterEyeRightY, Inputs{Eye: trackingmodel.EyeValidRightGaze}},
-		{"left eyelid", parameters.ParameterEyeLidLeft, Inputs{Eye: trackingmodel.EyeValidLeftOpenness}},
-		{"pupil dilation", parameters.ParameterPupilDilation, Inputs{Eye: trackingmodel.EyeValidLeftPupil | trackingmodel.EyeValidRightPupil}},
+		{"left gaze x", parameters.ParameterEyeLeftX, Inputs{Eye: EyeFieldsOf(EyeFieldLeftGazeX)}},
+		{"left gaze y", parameters.ParameterEyeLeftY, Inputs{Eye: EyeFieldsOf(EyeFieldLeftGazeY)}},
+		{"right gaze x", parameters.ParameterEyeRightX, Inputs{Eye: EyeFieldsOf(EyeFieldRightGazeX)}},
+		{"right gaze y", parameters.ParameterEyeRightY, Inputs{Eye: EyeFieldsOf(EyeFieldRightGazeY)}},
+		{"left eyelid", parameters.ParameterEyeLidLeft, Inputs{Eye: EyeFieldsOf(EyeFieldLeftOpenness)}},
+		{"pupil dilation", parameters.ParameterPupilDilation, Inputs{Eye: EyeFieldsOf(EyeFieldLeftPupilDilation, EyeFieldRightPupilDilation)}},
+		{"right pupil diameter", parameters.ParameterPupilDiameterRight, Inputs{Eye: EyeFieldsOf(EyeFieldRightPupilDiameter)}},
+		{"left pupil diameter", parameters.ParameterPupilDiameterLeft, Inputs{Eye: EyeFieldsOf(EyeFieldLeftPupilDiameter)}},
 		{"expression", parameters.ParameterJawOpen, Inputs{Expressions: trackingmodel.ExpressionMaskOf(trackingmodel.ExpressionJawOpen)}},
 	}
 	for _, tt := range tests {
@@ -92,6 +97,89 @@ func TestRepresentativeDirectPlans(t *testing.T) {
 				t.Fatalf("Plan(%d) = %+v, want direct %+v", tt.id, plan, tt.want)
 			}
 		})
+	}
+}
+
+func TestEyeFieldLeavesConvertToSubscriptionValidity(t *testing.T) {
+	tests := []struct {
+		field EyeField
+		want  trackingmodel.EyeValid
+	}{
+		{EyeFieldLeftGazeX, trackingmodel.EyeValidLeftGaze},
+		{EyeFieldLeftGazeY, trackingmodel.EyeValidLeftGaze},
+		{EyeFieldRightGazeX, trackingmodel.EyeValidRightGaze},
+		{EyeFieldRightGazeY, trackingmodel.EyeValidRightGaze},
+		{EyeFieldLeftOpenness, trackingmodel.EyeValidLeftOpenness},
+		{EyeFieldRightOpenness, trackingmodel.EyeValidRightOpenness},
+		{EyeFieldLeftPupilDiameter, trackingmodel.EyeValidLeftPupil},
+		{EyeFieldRightPupilDiameter, trackingmodel.EyeValidRightPupil},
+		{EyeFieldLeftPupilDilation, trackingmodel.EyeValidLeftPupil},
+		{EyeFieldRightPupilDilation, trackingmodel.EyeValidRightPupil},
+	}
+	var all EyeFields
+	var wantAll trackingmodel.EyeValid
+	for _, tt := range tests {
+		fields := EyeFieldsOf(tt.field)
+		if !fields.Has(tt.field) {
+			t.Errorf("EyeFieldsOf(%d).Has() = false", tt.field)
+		}
+		if got := fields.EyeValid(); got != tt.want {
+			t.Errorf("EyeFieldsOf(%d).EyeValid() = %#x, want %#x", tt.field, got, tt.want)
+		}
+		all |= fields
+		wantAll |= tt.want
+	}
+	if got := (Inputs{Eye: all}).RequiredEyeValid(); got != wantAll {
+		t.Fatalf("Inputs.RequiredEyeValid() = %#x, want %#x", got, wantAll)
+	}
+}
+
+func TestPlansCoverEveryTrackingActiveParameter(t *testing.T) {
+	doc, _, err := specparser.LoadFile(filepath.Join("..", "..", "spec", "vrcft_osc_parameters.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]ActiveState{
+		"EyeTrackingActive":        ActiveStateEyeTracking,
+		"ExpressionTrackingActive": ActiveStateExpressionTracking,
+		"LipTrackingActive":        ActiveStateLipTracking,
+	}
+	ids := make([]parameters.ParameterID, 0, len(doc.TrackingActiveParameters))
+	for _, spec := range doc.TrackingActiveParameters {
+		state, ok := want[spec.Name]
+		if !ok {
+			t.Fatalf("unexpected tracking-active parameter %q", spec.Name)
+		}
+		if spec.ValueType != "bool" {
+			t.Fatalf("%s value_type = %q, want bool", spec.OSCName, spec.ValueType)
+		}
+		id, ok := parameters.LookupOSCName(spec.OSCName)
+		if !ok {
+			t.Fatalf("LookupOSCName(%q) failed", spec.OSCName)
+		}
+		plan, ok := Plan(id)
+		expected := Inputs{Active: ActiveStatesOf(state)}
+		if !ok || plan.Operation != OperationDirect || len(plan.DependsOn) != 0 || plan.Inputs != expected {
+			t.Errorf("Plan(%s) = %+v, want direct active-state leaf %+v", spec.OSCName, plan, expected)
+			continue
+		}
+		leaves, err := ResolveLeaves(id)
+		if err != nil || leaves != expected {
+			t.Errorf("ResolveLeaves(%s) = %+v, %v, want %+v", spec.OSCName, leaves, err, expected)
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) != len(want) {
+		t.Fatalf("tracking-active plans = %d, want %d", len(ids), len(want))
+	}
+	required, err := RequiredInputs(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range want {
+		if !required.Active.Has(state) {
+			t.Errorf("RequiredInputs() omitted active state %d", state)
+		}
 	}
 }
 
@@ -168,7 +256,7 @@ func TestResolveLeavesReportsCycle(t *testing.T) {
 func TestResolveLeavesRejectsUnknownID(t *testing.T) {
 	id := parameters.ParameterCount + 10
 	_, err := ResolveLeaves(id)
-	if err == nil || !strings.Contains(err.Error(), "137") {
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprint(id)) {
 		t.Fatalf("ResolveLeaves(%d) error = %v, want identity", id, err)
 	}
 }
@@ -179,7 +267,7 @@ func TestRequiredInputsUnionsLeavesAndPropagatesErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Inputs{
-		Eye:         trackingmodel.EyeValidLeftGaze,
+		Eye:         EyeFieldsOf(EyeFieldLeftGazeX),
 		Expressions: trackingmodel.ExpressionMaskOf(trackingmodel.ExpressionJawOpen),
 	}
 	if got != want {

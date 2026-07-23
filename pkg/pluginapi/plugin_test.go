@@ -25,6 +25,27 @@ func TestDescriptorValidate(t *testing.T) {
 	}
 }
 
+func TestDescriptorValidateAcceptsSemVerTwoPrereleaseAndBuildSyntax(t *testing.T) {
+	for _, version := range []string{
+		"1.0.0-alpha",
+		"1.0.0-alpha.1",
+		"1.0.0-0.3.7",
+		"1.0.0-x.7.z.92",
+		"1.0.0-x-y-z.--",
+		"1.0.0+20130313144700",
+		"1.0.0-beta+exp.sha.5114f85",
+		"0.0.0-rc.1+build.001",
+	} {
+		t.Run(version, func(t *testing.T) {
+			descriptor := validDescriptor()
+			descriptor.Version = version
+			if err := descriptor.Validate(); err != nil {
+				t.Fatalf("Validate(%q) error = %v", version, err)
+			}
+		})
+	}
+}
+
 func TestDescriptorValidateRejectsInvalidFields(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -44,6 +65,13 @@ func TestDescriptorValidateRejectsInvalidFields(t *testing.T) {
 		{"version has leading zero", func(d *Descriptor) { d.Version = "01.2.3" }, "Version"},
 		{"version has sign", func(d *Descriptor) { d.Version = "+1.2.3" }, "Version"},
 		{"version has negative component", func(d *Descriptor) { d.Version = "1.-2.3" }, "Version"},
+		{"version has empty prerelease", func(d *Descriptor) { d.Version = "1.2.3-" }, "Version"},
+		{"version has empty prerelease identifier", func(d *Descriptor) { d.Version = "1.2.3-alpha..1" }, "Version"},
+		{"version has prerelease numeric leading zero", func(d *Descriptor) { d.Version = "1.2.3-01" }, "Version"},
+		{"version has empty build", func(d *Descriptor) { d.Version = "1.2.3+" }, "Version"},
+		{"version has empty build identifier", func(d *Descriptor) { d.Version = "1.2.3+build..1" }, "Version"},
+		{"version has invalid identifier character", func(d *Descriptor) { d.Version = "1.2.3-alpha_1" }, "Version"},
+		{"version has duplicate build separator", func(d *Descriptor) { d.Version = "1.2.3+one+two" }, "Version"},
 		{"capabilities are empty", func(d *Descriptor) { d.Capabilities = 0 }, "Capabilities"},
 		{"capabilities are unknown", func(d *Descriptor) { d.Capabilities = 1 << 10 }, "Capabilities"},
 		{"capabilities include unknown", func(d *Descriptor) { d.Capabilities |= 1 << 10 }, "Capabilities"},
@@ -72,8 +100,8 @@ func TestConfigClonePreservesNilAndDeepCopiesData(t *testing.T) {
 
 	emptyConfig := Config{Revision: 5, Data: json.RawMessage{}}
 	emptyClone := emptyConfig.Clone()
-	if emptyClone.Data == nil || len(emptyClone.Data) != 0 {
-		t.Fatalf("Clone().Data = %#v, want non-nil empty slice", emptyClone.Data)
+	if emptyClone.Data != nil {
+		t.Fatalf("Clone().Data = %#v, want canonical nil", emptyClone.Data)
 	}
 
 	original := Config{Revision: 6, Data: json.RawMessage(`{"enabled":true}`)}

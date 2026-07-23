@@ -38,22 +38,22 @@ Perform handshake, initialize the driver, deliver ordered controls, selectively 
 Device mapping belongs to the driver; process supervision belongs to the host; concrete endpoint construction belongs to internal IPC.
 
 ## Current implementation
-Runtime state, handshake, ordered controls, latest-frame selective delivery, single-writer operation, heartbeat/status/log handling, bounded shutdown, and `Main(driver) error` are implemented.
+Immutable initialization and mutable current state, handshake, ordered controls, validated latest-frame selective delivery, single-writer operation, heartbeat/status/log handling, deadline-bound terminal arbitration, and `Main(driver) error` are implemented.
 
 ## Public/internal interfaces
 `Main(driver) error` and the runtime-managed implementation of `pluginapi.Host`.
 
 ## Owned data
-Plugin connection, initial configuration, ordered control channel, latest-frame slot, writer state, and cancellation.
+Plugin connection, immutable initial and mutable current host snapshots, ordered control channel, latest-frame slot, writer state, and cancellation.
 
 ## Dependencies
 Depends on plugin API, protocol, and tracking model.
 
 ## Concurrency and lifecycle
-Driver, command, heartbeat, frame, and writer workers share one cancellation scope and terminate within bounded shutdown policy.
+Driver, control-reader, heartbeat/frame writer workers share one cancellation scope. One terminal collector retains all worker failures, enforces the shutdown deadline, and closes a cancellation-insensitive connection exactly once when needed.
 
 ## Error handling
-Protocol failure cancels the driver and returns a meaningful process exit; shutdown acknowledgement and close errors are handled within the bounded lifecycle.
+Protocol failure and malformed publication cancel or reject at their documented boundaries; substantive worker failures, shutdown acknowledgement failures, timeout, and close errors are preserved within the bounded lifecycle.
 
 ## Performance constraints
 Only the latest pending subscribed frame is serialized; stale frames are overwritten before the single writer sends them.

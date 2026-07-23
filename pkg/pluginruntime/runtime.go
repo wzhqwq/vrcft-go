@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strings"
 	"sync"
@@ -45,6 +46,19 @@ type Runtime struct {
 	conn       protocol.Conn
 	config     RuntimeConfig
 	run        atomic.Bool
+}
+
+type runtimeConnectionCloser struct {
+	conn protocol.Conn
+	once sync.Once
+	err  error
+}
+
+func (c *runtimeConnectionCloser) Close() error {
+	c.once.Do(func() {
+		c.err = c.conn.Close()
+	})
+	return c.err
 }
 
 func New(driver pluginapi.Driver, conn protocol.Conn, cfg RuntimeConfig) (*Runtime, error) {
@@ -93,8 +107,9 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 	if !r.run.CompareAndSwap(false, true) {
 		return ErrRuntimeAlreadyRun
 	}
+	closer := &runtimeConnectionCloser{conn: r.conn}
 	defer func() {
-		if closeErr := r.conn.Close(); closeErr != nil {
+		if closeErr := closer.Close(); closeErr != nil && !errors.Is(result, closeErr) {
 			result = errors.Join(result, closeErr)
 		}
 	}()
@@ -151,114 +166,35 @@ func (r *Runtime) Run(ctx context.Context) (result error) {
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	terminal := newTerminalState()
-	driverDone := make(chan driverResult, 1)
-	readerDone := make(chan readerResult, 1)
-	writerDone := make(chan error, 1)
+	terminalDone := make(chan terminalEvent, 3)
 	writerStarted := time.Now()
-	go func() { writerDone <- r.writeOutbound(childCtx, host, writerStarted) }()
-	go func() { driverDone <- terminal.driverReturned(r.driver.Run(childCtx, host)) }()
-	go func() { readerDone <- r.readControls(childCtx, host, terminal) }()
+	go func() {
+		terminalDone <- terminalEvent{worker: terminalWriter, writerErr: r.writeOutbound(childCtx, host, writerStarted)}
+	}()
+	go func() {
+		terminalDone <- terminalEvent{worker: terminalDriver, driver: terminal.driverReturned(r.driver.Run(childCtx, host))}
+	}()
+	go func() {
+		terminalDone <- terminalEvent{worker: terminalReader, reader: r.readControls(childCtx, host, terminal)}
+	}()
 
+	var first terminalEvent
+	var hasFirst bool
 	select {
 	case <-ctx.Done():
-		cancel()
-		writerErr, joined := r.awaitWriter(writerDone)
-		_ = r.awaitStops(driverDone, readerDone)
-		if !joined {
-			return errors.Join(ctx.Err(), ErrShutdownTimeout)
-		}
-		return errors.Join(ctx.Err(), r.reportWriterError(writerErr))
-
-	case driver := <-driverDone:
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			cancel()
-			writerErr, joined := r.awaitWriter(writerDone)
-			<-readerDone
-			if !joined {
-				return errors.Join(ctxErr, ErrShutdownTimeout)
-			}
-			return errors.Join(ctxErr, r.reportWriterError(writerErr))
-		}
-		if driver.shutdownAccepted {
-			cancel()
-			writerErr, joined := r.awaitWriter(writerDone)
-			reader := <-readerDone
-			if !reader.shutdown {
-				return errors.New("pluginruntime: accepted shutdown was not completed by control reader")
-			}
-			if !joined {
-				return errors.Join(driver.err, ErrShutdownTimeout)
-			}
-			writerErr = r.reportWriterError(writerErr)
-			return errors.Join(r.finishAcceptedShutdown(driver.err), writerErr)
-		}
-		// A driver return owns completion, so cancellation after observing the
-		// result cannot turn a spontaneous context.Canceled into success.
-		cancel()
-		writerErr, joined := r.awaitWriter(writerDone)
-		<-readerDone
-		if !joined {
-			return errors.Join(driver.err, ErrShutdownTimeout)
-		}
-		writerErr = r.reportWriterError(writerErr)
-		if driver.err == nil {
-			return writerErr
-		}
-		r.sendErrorNotice("driver_error", driver.err)
-		return errors.Join(driver.err, writerErr)
-
-	case reader := <-readerDone:
-		cancel()
-		writerErr, joined := r.awaitWriter(writerDone)
-		if !joined {
-			r.awaitDriver(driverDone)
-			return errors.Join(reader.err, ErrShutdownTimeout)
-		}
-		writerErr = r.reportWriterError(writerErr)
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			r.awaitDriver(driverDone)
-			return errors.Join(ctxErr, writerErr)
-		}
-		if reader.shutdown {
-			return errors.Join(r.finishShutdown(driverDone), writerErr)
-		}
-		r.awaitDriver(driverDone)
-		if reader.err == nil {
-			reader.err = errors.New("pluginruntime: control reader stopped unexpectedly")
-		}
-		r.sendErrorNotice("protocol_error", reader.err)
-		return errors.Join(reader.err, writerErr)
-
-	case writerErr := <-writerDone:
-		cancel()
-		return r.finishWriterPrimary(ctx.Err(), writerErr, driverDone, readerDone)
+	case first = <-terminalDone:
+		hasFirst = true
 	}
-}
+	externalErr := ctx.Err()
+	cancel()
 
-func (r *Runtime) finishShutdown(driverDone <-chan driverResult) error {
-	timer := time.NewTimer(r.config.ShutdownTimeout)
-	defer timer.Stop()
-
-	var result error
-	select {
-	case driver := <-driverDone:
-		result = r.classifyShutdownDriverError(driver.err)
-	case <-timer.C:
-		result = ErrShutdownTimeout
+	outcome := terminalOutcome{}
+	if hasFirst {
+		outcome.primary = first.worker
+		outcome.record(first, false)
 	}
-	return r.sendShutdownAck(result)
-}
-
-func (r *Runtime) finishAcceptedShutdown(driverErr error) error {
-	return r.sendShutdownAck(r.classifyShutdownDriverError(driverErr))
-}
-
-func (r *Runtime) classifyShutdownDriverError(driverErr error) error {
-	if driverErr != nil && !errors.Is(driverErr, context.Canceled) {
-		r.sendErrorNotice("driver_error", driverErr)
-		return driverErr
-	}
-	return nil
+	outcome = r.collectTerminalResults(terminalDone, outcome, closer)
+	return r.finishTerminal(externalErr, outcome)
 }
 
 func (r *Runtime) sendShutdownAck(result error) error {
@@ -271,106 +207,211 @@ func (r *Runtime) sendShutdownAck(result error) error {
 	return result
 }
 
-type stopResults struct {
-	driver        driverResult
-	driverStopped bool
-	reader        readerResult
-	readerStopped bool
+type terminalWorker uint8
+
+const (
+	terminalDriver terminalWorker = iota + 1
+	terminalReader
+	terminalWriter
+)
+
+type terminalEvent struct {
+	worker    terminalWorker
+	driver    driverResult
+	reader    readerResult
+	writerErr error
 }
 
-func (r *Runtime) awaitStops(driverDone <-chan driverResult, readerDone <-chan readerResult) stopResults {
-	timer := time.NewTimer(r.config.ShutdownTimeout)
-	defer timer.Stop()
-	var results stopResults
-	for driverDone != nil || readerDone != nil {
-		select {
-		case results.driver = <-driverDone:
-			driverDone = nil
-			results.driverStopped = true
-		case results.reader = <-readerDone:
-			readerDone = nil
-			results.readerStopped = true
-		case <-timer.C:
-			return results
+type terminalOutcome struct {
+	primary terminalWorker
+
+	driver             driverResult
+	driverStopped      bool
+	reader             readerResult
+	readerStopped      bool
+	readerAfterClose   bool
+	writerErr          error
+	writerStopped      bool
+	writerAfterClose   bool
+	timedOut           bool
+	connectionClosed   bool
+	earlyConnectionErr error
+}
+
+func (o *terminalOutcome) record(event terminalEvent, afterClose bool) {
+	switch event.worker {
+	case terminalDriver:
+		if !o.driverStopped {
+			o.driver = event.driver
+			o.driverStopped = true
+		}
+	case terminalReader:
+		if !o.readerStopped {
+			o.reader = event.reader
+			o.readerStopped = true
+			o.readerAfterClose = afterClose
+		}
+	case terminalWriter:
+		if !o.writerStopped {
+			o.writerErr = event.writerErr
+			o.writerStopped = true
+			o.writerAfterClose = afterClose
 		}
 	}
-	return results
 }
 
-func (r *Runtime) awaitDriver(driverDone <-chan driverResult) {
+func (o terminalOutcome) stoppedCount() int {
+	count := 0
+	if o.driverStopped {
+		count++
+	}
+	if o.readerStopped {
+		count++
+	}
+	if o.writerStopped {
+		count++
+	}
+	return count
+}
+
+func (r *Runtime) collectTerminalResults(
+	terminalDone <-chan terminalEvent,
+	outcome terminalOutcome,
+	closer *runtimeConnectionCloser,
+) terminalOutcome {
 	timer := time.NewTimer(r.config.ShutdownTimeout)
 	defer timer.Stop()
-	select {
-	case <-driverDone:
-	case <-timer.C:
+
+	for outcome.stoppedCount() < 3 {
+		select {
+		case event := <-terminalDone:
+			outcome.record(event, false)
+		case <-timer.C:
+			outcome.timedOut = true
+			if !outcome.readerStopped {
+				outcome.connectionClosed = true
+				outcome.earlyConnectionErr = closer.Close()
+				outcome = r.collectReaderAfterClose(terminalDone, outcome)
+			}
+			for {
+				select {
+				case event := <-terminalDone:
+					outcome.record(event, outcome.connectionClosed)
+				default:
+					return outcome
+				}
+			}
+		}
 	}
+	return outcome
 }
 
-func (r *Runtime) awaitWriter(writerDone <-chan error) (error, bool) {
+func (r *Runtime) collectReaderAfterClose(
+	terminalDone <-chan terminalEvent,
+	outcome terminalOutcome,
+) terminalOutcome {
 	timer := time.NewTimer(r.config.ShutdownTimeout)
 	defer timer.Stop()
-	select {
-	case err := <-writerDone:
-		return err, true
-	case <-timer.C:
-		return nil, false
+	for !outcome.readerStopped {
+		select {
+		case event := <-terminalDone:
+			outcome.record(event, true)
+		case <-timer.C:
+			return outcome
+		}
 	}
+	return outcome
 }
 
-func relevantWriterError(err error) error {
-	if err == nil || errors.Is(err, context.Canceled) {
+func (r *Runtime) finishTerminal(externalErr error, outcome terminalOutcome) error {
+	driverErr := substantiveDriverError(externalErr, outcome)
+	readerErr := substantiveReaderError(externalErr, outcome)
+	writerErr := substantiveWriterError(outcome)
+
+	result := errors.Join(externalErr, driverErr, readerErr, writerErr)
+	if outcome.timedOut {
+		result = errors.Join(result, ErrShutdownTimeout)
+	}
+	if outcome.earlyConnectionErr != nil {
+		result = errors.Join(result, outcome.earlyConnectionErr)
+	}
+
+	// Terminal notices and acknowledgements are serialized after the outbound
+	// writer stops, preserving the Conn.Send single-caller guarantee.
+	if outcome.writerStopped {
+		if driverErr != nil {
+			r.sendErrorNotice("driver_error", driverErr)
+		}
+		if readerErr != nil {
+			r.sendErrorNotice("protocol_error", readerErr)
+		}
+		if writerErr != nil {
+			r.sendErrorNotice("protocol_error", writerErr)
+		}
+		if (outcome.readerStopped && outcome.reader.shutdown) ||
+			(outcome.driverStopped && outcome.driver.shutdownAccepted) {
+			result = r.sendShutdownAck(result)
+		}
+	}
+	return result
+}
+
+func substantiveDriverError(externalErr error, outcome terminalOutcome) error {
+	if !outcome.driverStopped || outcome.driver.err == nil {
 		return nil
 	}
-	return err
+	if !errors.Is(outcome.driver.err, context.Canceled) {
+		return outcome.driver.err
+	}
+	if externalErr == nil && outcome.primary == terminalDriver &&
+		!outcome.driver.shutdownAccepted &&
+		!(outcome.readerStopped && outcome.reader.shutdown) {
+		return outcome.driver.err
+	}
+	return nil
 }
 
-func (r *Runtime) reportWriterError(err error) error {
-	err = relevantWriterError(err)
-	if err != nil {
-		r.sendErrorNotice("protocol_error", err)
+func substantiveReaderError(externalErr error, outcome terminalOutcome) error {
+	if !outcome.readerStopped {
+		return nil
 	}
-	return err
-}
-
-func (r *Runtime) finishWriterPrimary(
-	ctxErr error,
-	writerErr error,
-	driverDone <-chan driverResult,
-	readerDone <-chan readerResult,
-) error {
-	results := r.awaitStops(driverDone, readerDone)
-	if writerErr == nil {
-		writerErr = errors.New("pluginruntime: outbound writer stopped unexpectedly")
-	}
-	writerErr = r.reportWriterError(writerErr)
-
-	result := writerErr
-	if ctxErr != nil {
-		result = errors.Join(ctxErr, writerErr)
-	}
-
-	if (results.readerStopped && results.reader.shutdown) ||
-		(results.driverStopped && results.driver.shutdownAccepted) {
-		var shutdownErr error
-		if results.driverStopped {
-			shutdownErr = r.finishAcceptedShutdown(results.driver.err)
-		} else {
-			shutdownErr = r.sendShutdownAck(ErrShutdownTimeout)
+	if outcome.reader.err == nil {
+		if outcome.primary == terminalReader && !outcome.reader.shutdown {
+			return errors.New("pluginruntime: control reader stopped unexpectedly")
 		}
-		return errors.Join(result, shutdownErr)
+		return nil
 	}
+	if outcome.readerAfterClose &&
+		(errors.Is(outcome.reader.err, io.EOF) || errors.Is(outcome.reader.err, io.ErrClosedPipe)) {
+		return nil
+	}
+	if errors.Is(outcome.reader.err, context.Canceled) {
+		if externalErr == nil && outcome.primary == terminalReader && !outcome.reader.shutdown {
+			return outcome.reader.err
+		}
+		return nil
+	}
+	return outcome.reader.err
+}
 
-	var readerErr error
-	if results.readerStopped && results.reader.err != nil && !errors.Is(results.reader.err, context.Canceled) {
-		readerErr = results.reader.err
-		r.sendErrorNotice("protocol_error", readerErr)
+func substantiveWriterError(outcome terminalOutcome) error {
+	if !outcome.writerStopped {
+		return nil
 	}
-	var driverErr error
-	if results.driverStopped && results.driver.err != nil && !errors.Is(results.driver.err, context.Canceled) {
-		driverErr = results.driver.err
-		r.sendErrorNotice("driver_error", driverErr)
+	if outcome.writerErr == nil {
+		if outcome.primary == terminalWriter {
+			return errors.New("pluginruntime: outbound writer stopped unexpectedly")
+		}
+		return nil
 	}
-	return errors.Join(result, readerErr, driverErr)
+	if errors.Is(outcome.writerErr, context.Canceled) {
+		return nil
+	}
+	if outcome.writerAfterClose &&
+		(errors.Is(outcome.writerErr, io.EOF) || errors.Is(outcome.writerErr, io.ErrClosedPipe)) {
+		return nil
+	}
+	return outcome.writerErr
 }
 
 func (r *Runtime) writeOutbound(ctx context.Context, host *runtimeHost, started time.Time) error {
@@ -524,7 +565,8 @@ func (r *Runtime) readControls(ctx context.Context, host *runtimeHost, terminal 
 
 type runtimeHost struct {
 	mu            sync.RWMutex
-	startup       pluginapi.Startup
+	initial       pluginapi.Startup
+	current       pluginapi.Startup
 	events        chan pluginapi.ControlEvent
 	frames        *LatestFrameSlot
 	statusNotify  chan struct{}
@@ -538,7 +580,8 @@ type runtimeHost struct {
 
 func newRuntimeHost(startup pluginapi.Startup, controlCapacity, logCapacity int) *runtimeHost {
 	return &runtimeHost{
-		startup:      cloneStartup(startup),
+		initial:      cloneStartup(startup),
+		current:      cloneStartup(startup),
 		events:       make(chan pluginapi.ControlEvent, controlCapacity),
 		frames:       NewLatestFrameSlot(),
 		statusNotify: make(chan struct{}, 1),
@@ -554,22 +597,26 @@ func cloneStartup(startup pluginapi.Startup) pluginapi.Startup {
 func (h *runtimeHost) Startup() pluginapi.Startup {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return cloneStartup(h.startup)
+	return cloneStartup(h.initial)
 }
 
 func (h *runtimeHost) Events() <-chan pluginapi.ControlEvent { return h.events }
 
 func (h *runtimeHost) PublishFrame(frame trackingmodel.TrackingFrame) bool {
+	canonical, err := frame.Canonicalize()
+	if err != nil {
+		return false
+	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	subscription := h.startup.Subscription
-	if h.stopped || !h.startup.Active || subscription.Generation == 0 || subscription.Capabilities == 0 {
+	subscription := h.current.Subscription
+	if h.stopped || !h.current.Active || subscription.Generation == 0 || subscription.Capabilities == 0 {
 		return false
 	}
 	return h.frames.Store(pendingFrame{
 		Generation:   subscription.Generation,
 		Subscription: subscription,
-		Frame:        frame,
+		Frame:        canonical,
 	})
 }
 
@@ -622,7 +669,7 @@ func (h *runtimeHost) applyConfig(next pluginapi.Config) (pluginapi.ControlEvent
 	next = next.Clone()
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	current := h.startup.Config
+	current := h.current.Config
 	switch {
 	case next.Revision < current.Revision:
 		return nil, fmt.Errorf("pluginruntime: config revision regressed from %d to %d", current.Revision, next.Revision)
@@ -632,7 +679,7 @@ func (h *runtimeHost) applyConfig(next pluginapi.Config) (pluginapi.ControlEvent
 		}
 		return nil, fmt.Errorf("pluginruntime: config revision %d conflicts with current data", next.Revision)
 	default:
-		h.startup.Config = next.Clone()
+		h.current.Config = next.Clone()
 		return pluginapi.ConfigChanged{Config: next.Clone()}, nil
 	}
 }
@@ -641,7 +688,7 @@ func (h *runtimeHost) applySubscription(next pluginapi.Subscription) (pluginapi.
 	next = next.Normalize()
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	current := h.startup.Subscription
+	current := h.current.Subscription
 	switch {
 	case next.Generation < current.Generation:
 		return nil, fmt.Errorf("pluginruntime: subscription generation regressed from %d to %d", current.Generation, next.Generation)
@@ -651,7 +698,7 @@ func (h *runtimeHost) applySubscription(next pluginapi.Subscription) (pluginapi.
 		}
 		return nil, fmt.Errorf("pluginruntime: subscription generation %d conflicts with current subscription", next.Generation)
 	default:
-		h.startup.Subscription = next
+		h.current.Subscription = next
 		h.frames.ClearBefore(next.Generation)
 		return pluginapi.SubscriptionChanged{Subscription: next}, nil
 	}
@@ -660,10 +707,10 @@ func (h *runtimeHost) applySubscription(next pluginapi.Subscription) (pluginapi.
 func (h *runtimeHost) applyActive(active bool) pluginapi.ControlEvent {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if active == h.startup.Active {
+	if active == h.current.Active {
 		return nil
 	}
-	h.startup.Active = active
+	h.current.Active = active
 	if !active {
 		h.frames.Clear()
 	}

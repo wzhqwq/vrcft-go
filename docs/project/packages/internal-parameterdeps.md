@@ -23,19 +23,19 @@ checks:
 # Package: internal/parameterdeps
 
 ## Purpose
-Map every OSC float output to primitive tracking inputs.
+Map every OSC float and tracking-active Boolean output to primitive tracking inputs or active-state leaves.
 
 ## Responsibilities
-Build direct and derived dependency plans, close leaf dependencies, union required primitive inputs, and cover cycle, missing, and orphan dependency cases.
+Build direct and derived dependency plans, distinguish concrete eye fields, convert required eye fields to subscription validity, represent tracking-active sources, union all leaf kinds, and cover cycle, missing, and orphan dependency cases.
 
 ## Non-responsibilities
 Numeric parameter evaluation and avatar planning are outside this package.
 
 ## Current implementation
-A fixed package-global dependency table keyed by generated `ParameterID` provides direct dependencies, acyclic leaf closure, and required primitive-input unions.
+A fixed package-global dependency table keyed by generated `ParameterID` provides typed `EyeField`, expression-mask, and `ActiveState` leaves, acyclic closure, required-input unions, and eye-validity conversion.
 
 ## Public/internal interfaces
-Lookup and leaf-union APIs expose the package-global table to callers.
+Lookup and leaf-union APIs expose the package-global table, concrete eye/active leaf sets, and required `trackingmodel.EyeValid` conversion to callers.
 
 ## Owned data
 The fixed package-global dependency table, its derived leaf closures, and primitive-input unions keyed by generated `ParameterID`.
@@ -56,10 +56,10 @@ Closure and required-input union are bounded by the fixed parameter and primitiv
 Only catalog-defined parameter IDs and primitive tracking inputs participate in dependency plans.
 
 ## Required tests
-Executable package and race tests cover direct and derived plans, leaf closure, required input union, cycle detection, missing dependencies, and orphan coverage.
+Executable package and race tests cover every YAML float and tracking-active Boolean, concrete eye-field mapping, active-state mapping, leaf closure, required input union, cycle detection, missing dependencies, and orphan coverage.
 
 ## Known gaps
 No package implementation gap is known; numeric evaluation and avatar planning are deliberate non-responsibilities.
 
 ## Completion definition
-Every YAML detailed or simplified float resolves acyclically with no missing or orphan primitive input.
+Every YAML detailed or simplified float and all three tracking-active Booleans resolve acyclically with no missing or orphan primitive input.

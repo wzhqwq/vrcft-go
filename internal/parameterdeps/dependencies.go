@@ -11,13 +11,110 @@ import (
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
 
+// EyeField identifies a concrete EyeSample value used by a parameter.
+type EyeField uint8
+
+const (
+	EyeFieldLeftGazeX EyeField = iota + 1
+	EyeFieldLeftGazeY
+	EyeFieldRightGazeX
+	EyeFieldRightGazeY
+	EyeFieldLeftOpenness
+	EyeFieldRightOpenness
+	EyeFieldLeftPupilDiameter
+	EyeFieldRightPupilDiameter
+	EyeFieldLeftPupilDilation
+	EyeFieldRightPupilDilation
+	eyeFieldCount
+)
+
+// EyeFields is a set of concrete eye-field leaves.
+type EyeFields uint16
+
+func EyeFieldsOf(fields ...EyeField) EyeFields {
+	var result EyeFields
+	for _, field := range fields {
+		if field > 0 && field < eyeFieldCount {
+			result |= EyeFields(1) << (field - 1)
+		}
+	}
+	return result
+}
+
+func (f EyeFields) Has(field EyeField) bool {
+	if field == 0 || field >= eyeFieldCount {
+		return false
+	}
+	return f&(EyeFields(1)<<(field-1)) != 0
+}
+
+// EyeValid converts concrete field requirements to the coarser validity bits
+// carried by tracking subscriptions.
+func (f EyeFields) EyeValid() trackingmodel.EyeValid {
+	var valid trackingmodel.EyeValid
+	if f.Has(EyeFieldLeftGazeX) || f.Has(EyeFieldLeftGazeY) {
+		valid |= trackingmodel.EyeValidLeftGaze
+	}
+	if f.Has(EyeFieldRightGazeX) || f.Has(EyeFieldRightGazeY) {
+		valid |= trackingmodel.EyeValidRightGaze
+	}
+	if f.Has(EyeFieldLeftOpenness) {
+		valid |= trackingmodel.EyeValidLeftOpenness
+	}
+	if f.Has(EyeFieldRightOpenness) {
+		valid |= trackingmodel.EyeValidRightOpenness
+	}
+	if f.Has(EyeFieldLeftPupilDiameter) || f.Has(EyeFieldLeftPupilDilation) {
+		valid |= trackingmodel.EyeValidLeftPupil
+	}
+	if f.Has(EyeFieldRightPupilDiameter) || f.Has(EyeFieldRightPupilDilation) {
+		valid |= trackingmodel.EyeValidRightPupil
+	}
+	return valid
+}
+
+// ActiveState identifies a tracking-active Boolean source leaf.
+type ActiveState uint8
+
+const (
+	ActiveStateEyeTracking ActiveState = iota + 1
+	ActiveStateExpressionTracking
+	ActiveStateLipTracking
+	activeStateCount
+)
+
+// ActiveStates is a set of tracking-active source leaves.
+type ActiveStates uint8
+
+func ActiveStatesOf(states ...ActiveState) ActiveStates {
+	var result ActiveStates
+	for _, state := range states {
+		if state > 0 && state < activeStateCount {
+			result |= ActiveStates(1) << (state - 1)
+		}
+	}
+	return result
+}
+
+func (s ActiveStates) Has(state ActiveState) bool {
+	if state == 0 || state >= activeStateCount {
+		return false
+	}
+	return s&(ActiveStates(1)<<(state-1)) != 0
+}
+
 type Inputs struct {
-	Eye         trackingmodel.EyeValid
+	Eye         EyeFields
 	Expressions trackingmodel.ExpressionMask
+	Active      ActiveStates
 }
 
 func (i Inputs) IsZero() bool {
-	return i.Eye == 0 && i.Expressions.IsZero()
+	return i.Eye == 0 && i.Expressions.IsZero() && i.Active == 0
+}
+
+func (i Inputs) RequiredEyeValid() trackingmodel.EyeValid {
+	return i.Eye.EyeValid()
 }
 
 type Operation uint8
@@ -120,18 +217,28 @@ func resolveLeaves(id parameters.ParameterID, plans map[parameters.ParameterID]D
 
 func buildPlans() map[parameters.ParameterID]DependencyPlan {
 	plans := make(map[parameters.ParameterID]DependencyPlan)
-	directEye := func(id parameters.ParameterID, valid trackingmodel.EyeValid) {
-		plans[id] = DependencyPlan{Inputs: Inputs{Eye: valid}, Operation: OperationDirect}
+	directEye := func(id parameters.ParameterID, fields ...EyeField) {
+		plans[id] = DependencyPlan{Inputs: Inputs{Eye: EyeFieldsOf(fields...)}, Operation: OperationDirect}
 	}
-	directEye(parameters.ParameterEyeLeftX, trackingmodel.EyeValidLeftGaze)
-	directEye(parameters.ParameterEyeLeftY, trackingmodel.EyeValidLeftGaze)
-	directEye(parameters.ParameterEyeRightX, trackingmodel.EyeValidRightGaze)
-	directEye(parameters.ParameterEyeRightY, trackingmodel.EyeValidRightGaze)
-	directEye(parameters.ParameterEyeLidRight, trackingmodel.EyeValidRightOpenness)
-	directEye(parameters.ParameterEyeLidLeft, trackingmodel.EyeValidLeftOpenness)
-	directEye(parameters.ParameterPupilDilation, trackingmodel.EyeValidLeftPupil|trackingmodel.EyeValidRightPupil)
-	directEye(parameters.ParameterPupilDiameterRight, trackingmodel.EyeValidRightPupil)
-	directEye(parameters.ParameterPupilDiameterLeft, trackingmodel.EyeValidLeftPupil)
+	directEye(parameters.ParameterEyeLeftX, EyeFieldLeftGazeX)
+	directEye(parameters.ParameterEyeLeftY, EyeFieldLeftGazeY)
+	directEye(parameters.ParameterEyeRightX, EyeFieldRightGazeX)
+	directEye(parameters.ParameterEyeRightY, EyeFieldRightGazeY)
+	directEye(parameters.ParameterEyeLidRight, EyeFieldRightOpenness)
+	directEye(parameters.ParameterEyeLidLeft, EyeFieldLeftOpenness)
+	directEye(parameters.ParameterPupilDilation, EyeFieldLeftPupilDilation, EyeFieldRightPupilDilation)
+	directEye(parameters.ParameterPupilDiameterRight, EyeFieldRightPupilDiameter)
+	directEye(parameters.ParameterPupilDiameterLeft, EyeFieldLeftPupilDiameter)
+
+	directActive := func(id parameters.ParameterID, state ActiveState) {
+		plans[id] = DependencyPlan{
+			Inputs:    Inputs{Active: ActiveStatesOf(state)},
+			Operation: OperationDirect,
+		}
+	}
+	directActive(parameters.ParameterEyeTrackingActive, ActiveStateEyeTracking)
+	directActive(parameters.ParameterExpressionTrackingActive, ActiveStateExpressionTracking)
+	directActive(parameters.ParameterLipTrackingActive, ActiveStateLipTracking)
 
 	expressionIDs := make(map[string]trackingmodel.ExpressionID, trackingmodel.ExpressionCount)
 	for id, name := range trackingmodel.ExpressionNames() {
@@ -195,6 +302,7 @@ func buildPlans() map[parameters.ParameterID]DependencyPlan {
 
 func union(left, right Inputs) Inputs {
 	left.Eye |= right.Eye
+	left.Active |= right.Active
 	for index := range left.Expressions.Words {
 		left.Expressions.Words[index] |= right.Expressions.Words[index]
 	}

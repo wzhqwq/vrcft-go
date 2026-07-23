@@ -82,23 +82,26 @@ func (s Subscription) IncludesExpression(id trackingmodel.ExpressionID) bool {
 // TrimFrame returns a frame copy containing only the groups and fields selected by s.
 func (s Subscription) TrimFrame(frame trackingmodel.TrackingFrame) trackingmodel.TrackingFrame {
 	trimmed := frame
+	trimmed.Capabilities &= knownSubscriptionCapabilities & s.Capabilities
 
-	if !frame.Capabilities.Has(trackingmodel.CapabilityEye) || !s.Capabilities.Has(trackingmodel.CapabilityEye) {
-		trimmed.Capabilities &^= trackingmodel.CapabilityEye
+	if !trimmed.Capabilities.Has(trackingmodel.CapabilityEye) {
 		trimmed.Eye = trackingmodel.EyeSample{}
-	} else if s.Eye != 0 {
-		trimmed.Eye.Valid &= s.Eye
+	} else {
+		trimmed.Eye.Valid &= knownSubscriptionEye
+		if s.Eye != 0 {
+			trimmed.Eye.Valid &= s.Eye
+		}
 		zeroUnselectedEyeValues(&trimmed.Eye)
 	}
 
-	if !frame.Capabilities.Has(trackingmodel.CapabilityExpression) || !s.Capabilities.Has(trackingmodel.CapabilityExpression) {
-		trimmed.Capabilities &^= trackingmodel.CapabilityExpression
+	if !trimmed.Capabilities.Has(trackingmodel.CapabilityExpression) {
 		trimmed.Expressions = trackingmodel.ExpressionSet{}
-	} else if !s.Expressions.IsZero() {
-		trimmed.Expressions.Valid = trimmed.Expressions.Valid.Intersect(s.Expressions).Normalize()
-		zeroInvalidExpressionValues(&trimmed.Expressions)
 	} else {
 		trimmed.Expressions.Valid = trimmed.Expressions.Valid.Normalize()
+		if !s.Expressions.IsZero() {
+			trimmed.Expressions.Valid = trimmed.Expressions.Valid.Intersect(s.Expressions)
+		}
+		zeroInvalidExpressionValues(&trimmed.Expressions)
 	}
 
 	return trimmed

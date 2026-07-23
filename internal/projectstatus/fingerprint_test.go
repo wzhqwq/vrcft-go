@@ -58,6 +58,24 @@ func TestSourceFingerprintIgnoresSuperpowersScratchData(t *testing.T) {
 	}
 }
 
+func TestSourceFingerprintIncludesNonDotGOCacheDirectory(t *testing.T) {
+	root := t.TempDir()
+	writeFingerprintFile(t, root, "main.go", "package main\n")
+	writeFingerprintFile(t, root, "foo-gocache/tracked.go", "package tracked\n")
+	first, err := SourceFingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFingerprintFile(t, root, "foo-gocache/tracked.go", "package changed\n")
+	second, err := SourceFingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("tracked non-dot foo-gocache source change did not alter fingerprint")
+	}
+}
+
 func writeFingerprintFile(t *testing.T, root, relative, content string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(relative))

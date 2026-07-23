@@ -107,28 +107,95 @@ func TestExpressionNamesAreCompleteUniqueAndCopied(t *testing.T) {
 	}
 }
 
-func TestExpressionIDsRemainStableAcrossGroups(t *testing.T) {
-	tests := []struct {
+func TestEveryExpressionIDAndNameRemainsStable(t *testing.T) {
+	snapshot := [ExpressionCount]struct {
 		id   ExpressionID
-		want ExpressionID
+		name string
 	}{
-		{ExpressionEyeSquintRight, 0},
-		{ExpressionBrowPinchRight, 2},
-		{ExpressionNoseSneerRight, 10},
-		{ExpressionCheekSquintRight, 16},
-		{ExpressionJawOpen, 20},
-		{ExpressionLipSuckUpperRight, 26},
-		{ExpressionLipFunnelUpperRight, 32},
-		{ExpressionLipPuckerUpperRight, 36},
-		{ExpressionMouthUpperUpRight, 40},
-		{ExpressionTongueOut, 64},
+		{ExpressionEyeSquintRight, "EyeSquintRight"},
+		{ExpressionEyeSquintLeft, "EyeSquintLeft"},
+		{ExpressionBrowPinchRight, "BrowPinchRight"},
+		{ExpressionBrowPinchLeft, "BrowPinchLeft"},
+		{ExpressionBrowLowererRight, "BrowLowererRight"},
+		{ExpressionBrowLowererLeft, "BrowLowererLeft"},
+		{ExpressionBrowInnerUpRight, "BrowInnerUpRight"},
+		{ExpressionBrowInnerUpLeft, "BrowInnerUpLeft"},
+		{ExpressionBrowOuterUpRight, "BrowOuterUpRight"},
+		{ExpressionBrowOuterUpLeft, "BrowOuterUpLeft"},
+		{ExpressionNoseSneerRight, "NoseSneerRight"},
+		{ExpressionNoseSneerLeft, "NoseSneerLeft"},
+		{ExpressionNasalDilationRight, "NasalDilationRight"},
+		{ExpressionNasalDilationLeft, "NasalDilationLeft"},
+		{ExpressionNasalConstrictRight, "NasalConstrictRight"},
+		{ExpressionNasalConstrictLeft, "NasalConstrictLeft"},
+		{ExpressionCheekSquintRight, "CheekSquintRight"},
+		{ExpressionCheekSquintLeft, "CheekSquintLeft"},
+		{ExpressionCheekPuffSuckRight, "CheekPuffSuckRight"},
+		{ExpressionCheekPuffSuckLeft, "CheekPuffSuckLeft"},
+		{ExpressionJawOpen, "JawOpen"},
+		{ExpressionMouthClosed, "MouthClosed"},
+		{ExpressionJawX, "JawX"},
+		{ExpressionJawZ, "JawZ"},
+		{ExpressionJawClench, "JawClench"},
+		{ExpressionJawMandibleRaise, "JawMandibleRaise"},
+		{ExpressionLipSuckUpperRight, "LipSuckUpperRight"},
+		{ExpressionLipSuckUpperLeft, "LipSuckUpperLeft"},
+		{ExpressionLipSuckLowerRight, "LipSuckLowerRight"},
+		{ExpressionLipSuckLowerLeft, "LipSuckLowerLeft"},
+		{ExpressionLipSuckCornerRight, "LipSuckCornerRight"},
+		{ExpressionLipSuckCornerLeft, "LipSuckCornerLeft"},
+		{ExpressionLipFunnelUpperRight, "LipFunnelUpperRight"},
+		{ExpressionLipFunnelUpperLeft, "LipFunnelUpperLeft"},
+		{ExpressionLipFunnelLowerRight, "LipFunnelLowerRight"},
+		{ExpressionLipFunnelLowerLeft, "LipFunnelLowerLeft"},
+		{ExpressionLipPuckerUpperRight, "LipPuckerUpperRight"},
+		{ExpressionLipPuckerUpperLeft, "LipPuckerUpperLeft"},
+		{ExpressionLipPuckerLowerRight, "LipPuckerLowerRight"},
+		{ExpressionLipPuckerLowerLeft, "LipPuckerLowerLeft"},
+		{ExpressionMouthUpperUpRight, "MouthUpperUpRight"},
+		{ExpressionMouthUpperUpLeft, "MouthUpperUpLeft"},
+		{ExpressionMouthLowerDownRight, "MouthLowerDownRight"},
+		{ExpressionMouthLowerDownLeft, "MouthLowerDownLeft"},
+		{ExpressionMouthUpperDeepenRight, "MouthUpperDeepenRight"},
+		{ExpressionMouthUpperDeepenLeft, "MouthUpperDeepenLeft"},
+		{ExpressionMouthUpperX, "MouthUpperX"},
+		{ExpressionMouthLowerX, "MouthLowerX"},
+		{ExpressionMouthCornerPullRight, "MouthCornerPullRight"},
+		{ExpressionMouthCornerPullLeft, "MouthCornerPullLeft"},
+		{ExpressionMouthCornerSlantRight, "MouthCornerSlantRight"},
+		{ExpressionMouthCornerSlantLeft, "MouthCornerSlantLeft"},
+		{ExpressionMouthDimpleRight, "MouthDimpleRight"},
+		{ExpressionMouthDimpleLeft, "MouthDimpleLeft"},
+		{ExpressionMouthFrownRight, "MouthFrownRight"},
+		{ExpressionMouthFrownLeft, "MouthFrownLeft"},
+		{ExpressionMouthStretchRight, "MouthStretchRight"},
+		{ExpressionMouthStretchLeft, "MouthStretchLeft"},
+		{ExpressionMouthRaiserUpper, "MouthRaiserUpper"},
+		{ExpressionMouthRaiserLower, "MouthRaiserLower"},
+		{ExpressionMouthPressRight, "MouthPressRight"},
+		{ExpressionMouthPressLeft, "MouthPressLeft"},
+		{ExpressionMouthTightenerRight, "MouthTightenerRight"},
+		{ExpressionMouthTightenerLeft, "MouthTightenerLeft"},
+		{ExpressionTongueOut, "TongueOut"},
+		{ExpressionTongueX, "TongueX"},
+		{ExpressionTongueY, "TongueY"},
+		{ExpressionTongueRoll, "TongueRoll"},
+		{ExpressionTongueArchY, "TongueArchY"},
+		{ExpressionTongueShape, "TongueShape"},
+		{ExpressionTongueTwistRight, "TongueTwistRight"},
+		{ExpressionTongueTwistLeft, "TongueTwistLeft"},
+		{ExpressionSoftPalateClose, "SoftPalateClose"},
+		{ExpressionThroatSwallow, "ThroatSwallow"},
+		{ExpressionNeckFlexRight, "NeckFlexRight"},
+		{ExpressionNeckFlexLeft, "NeckFlexLeft"},
 	}
-	for _, test := range tests {
-		if test.id != test.want {
-			t.Errorf("ExpressionID = %d, want %d", test.id, test.want)
+	names := ExpressionNames()
+	for numericID, item := range snapshot {
+		if item.id != ExpressionID(numericID) {
+			t.Errorf("%s ID = %d, want %d", item.name, item.id, numericID)
 		}
-	}
-	if ExpressionCount != 76 {
-		t.Fatalf("ExpressionCount = %d, want 76", ExpressionCount)
+		if got := names[numericID]; got != item.name {
+			t.Errorf("ExpressionNames()[%d] = %q, want %q", numericID, got, item.name)
+		}
 	}
 }

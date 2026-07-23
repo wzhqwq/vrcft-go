@@ -111,7 +111,7 @@ type wireConfig struct {
 type wireStartup struct {
 	Active       bool
 	Config       wireConfig
-	Subscription pluginapi.Subscription
+	Subscription wireSubscription
 }
 
 type wireInitialize struct {
@@ -120,6 +120,40 @@ type wireInitialize struct {
 
 type wireConfigChanged struct {
 	Config wireConfig `json:"config"`
+}
+
+type wireExpressionMask struct {
+	Words []uint64
+}
+
+type wireSubscription struct {
+	Generation   uint64
+	Capabilities trackingmodel.Capability
+	Eye          trackingmodel.EyeValid
+	Expressions  wireExpressionMask
+}
+
+type wireSubscriptionChanged struct {
+	Subscription wireSubscription `json:"subscription"`
+}
+
+type wireExpressionSet struct {
+	Values []float32
+	Valid  wireExpressionMask
+}
+
+type wireTrackingModelFrame struct {
+	Sequence      uint64
+	TimestampNS   int64
+	Capabilities  trackingmodel.Capability
+	SourceClockNS int64
+	Eye           trackingmodel.EyeSample
+	Expressions   wireExpressionSet
+}
+
+type wireTrackingFrame struct {
+	Generation uint64                 `json:"generation"`
+	Frame      wireTrackingModelFrame `json:"frame"`
 }
 
 func NewMessage(payload any) (Message, error) {
@@ -135,6 +169,11 @@ func NewMessage(payload any) (Message, error) {
 }
 
 func (m Message) Validate() error {
+	_, err := m.validatedPayload()
+	return err
+}
+
+func (m Message) validateSemantics() error {
 	if m.Version != Version {
 		return fmt.Errorf("protocol: message version %d must equal %d", m.Version, Version)
 	}
@@ -154,8 +193,8 @@ func (m Message) Validate() error {
 	return nil
 }
 
-func (m Message) MarshalJSON() ([]byte, error) {
-	if err := m.Validate(); err != nil {
+func (m Message) validatedPayload() ([]byte, error) {
+	if err := m.validateSemantics(); err != nil {
 		return nil, err
 	}
 	payload, err := marshalPayload(m.Payload)
@@ -164,6 +203,14 @@ func (m Message) MarshalJSON() ([]byte, error) {
 	}
 	if len(payload) > MaxPayloadSize {
 		return nil, fmt.Errorf("protocol: encoded payload size %d exceeds maximum %d", len(payload), MaxPayloadSize)
+	}
+	return payload, nil
+}
+
+func (m Message) MarshalJSON() ([]byte, error) {
+	payload, err := m.validatedPayload()
+	if err != nil {
+		return nil, err
 	}
 	data, err := json.Marshal(wireMessage{Version: m.Version, Type: m.Type, Payload: payload})
 	if err != nil {
@@ -215,21 +262,128 @@ func marshalPayload(payload any) ([]byte, error) {
 		return json.Marshal(wireInitialize{Startup: wireStartup{
 			Active:       p.Startup.Active,
 			Config:       toWireConfig(p.Startup.Config),
-			Subscription: p.Startup.Subscription,
+			Subscription: toWireSubscription(p.Startup.Subscription),
 		}})
 	case ConfigChanged:
 		return json.Marshal(wireConfigChanged{Config: toWireConfig(p.Config)})
+	case SubscriptionChanged:
+		return json.Marshal(wireSubscriptionChanged{Subscription: toWireSubscription(p.Subscription)})
+	case TrackingFrame:
+		return json.Marshal(toWireTrackingFrame(p))
 	default:
 		return json.Marshal(payload)
 	}
 }
 
 func toWireConfig(config pluginapi.Config) wireConfig {
+	config = config.Clone()
 	return wireConfig{Revision: config.Revision, Data: config.Data}
 }
 
 func fromWireConfig(config wireConfig) pluginapi.Config {
-	return pluginapi.Config{Revision: config.Revision, Data: config.Data}
+	return (pluginapi.Config{Revision: config.Revision, Data: config.Data}).Clone()
+}
+
+func toWireExpressionMask(mask trackingmodel.ExpressionMask) wireExpressionMask {
+	words := make([]uint64, len(mask.Words))
+	copy(words, mask.Words[:])
+	return wireExpressionMask{Words: words}
+}
+
+func fromWireExpressionMask(mask wireExpressionMask, field string) (trackingmodel.ExpressionMask, error) {
+	var result trackingmodel.ExpressionMask
+	if len(mask.Words) != len(result.Words) {
+		return trackingmodel.ExpressionMask{}, fmt.Errorf(
+			"%s.Words length %d must equal %d",
+			field,
+			len(mask.Words),
+			len(result.Words),
+		)
+	}
+	copy(result.Words[:], mask.Words)
+	return result, nil
+}
+
+func toWireSubscription(subscription pluginapi.Subscription) wireSubscription {
+	return wireSubscription{
+		Generation:   subscription.Generation,
+		Capabilities: subscription.Capabilities,
+		Eye:          subscription.Eye,
+		Expressions:  toWireExpressionMask(subscription.Expressions),
+	}
+}
+
+func fromWireSubscription(subscription wireSubscription, field string) (pluginapi.Subscription, error) {
+	expressions, err := fromWireExpressionMask(subscription.Expressions, field+".Expressions")
+	if err != nil {
+		return pluginapi.Subscription{}, err
+	}
+	return pluginapi.Subscription{
+		Generation:   subscription.Generation,
+		Capabilities: subscription.Capabilities,
+		Eye:          subscription.Eye,
+		Expressions:  expressions,
+	}, nil
+}
+
+func toWireExpressionSet(expressions trackingmodel.ExpressionSet) wireExpressionSet {
+	values := make([]float32, len(expressions.Values))
+	copy(values, expressions.Values[:])
+	return wireExpressionSet{
+		Values: values,
+		Valid:  toWireExpressionMask(expressions.Valid),
+	}
+}
+
+func fromWireExpressionSet(expressions wireExpressionSet, field string) (trackingmodel.ExpressionSet, error) {
+	var result trackingmodel.ExpressionSet
+	if len(expressions.Values) != len(result.Values) {
+		return trackingmodel.ExpressionSet{}, fmt.Errorf(
+			"%s.Values length %d must equal %d",
+			field,
+			len(expressions.Values),
+			len(result.Values),
+		)
+	}
+	valid, err := fromWireExpressionMask(expressions.Valid, field+".Valid")
+	if err != nil {
+		return trackingmodel.ExpressionSet{}, err
+	}
+	copy(result.Values[:], expressions.Values)
+	result.Valid = valid
+	return result, nil
+}
+
+func toWireTrackingFrame(frame TrackingFrame) wireTrackingFrame {
+	return wireTrackingFrame{
+		Generation: frame.Generation,
+		Frame: wireTrackingModelFrame{
+			Sequence:      frame.Frame.Sequence,
+			TimestampNS:   frame.Frame.TimestampNS,
+			Capabilities:  frame.Frame.Capabilities,
+			SourceClockNS: frame.Frame.SourceClockNS,
+			Eye:           frame.Frame.Eye,
+			Expressions:   toWireExpressionSet(frame.Frame.Expressions),
+		},
+	}
+}
+
+func fromWireTrackingFrame(frame wireTrackingFrame) (TrackingFrame, error) {
+	expressions, err := fromWireExpressionSet(frame.Frame.Expressions, "TrackingFrame.Frame.Expressions")
+	if err != nil {
+		return TrackingFrame{}, err
+	}
+	return TrackingFrame{
+		Generation: frame.Generation,
+		Frame: trackingmodel.TrackingFrame{
+			Sequence:      frame.Frame.Sequence,
+			TimestampNS:   frame.Frame.TimestampNS,
+			Capabilities:  frame.Frame.Capabilities,
+			SourceClockNS: frame.Frame.SourceClockNS,
+			Eye:           frame.Frame.Eye,
+			Expressions:   expressions,
+		},
+	}, nil
 }
 
 func (t MessageType) valid() bool {
@@ -294,9 +448,8 @@ func validatePayload(payload any) error {
 		if p.Generation == 0 {
 			return errors.New("TrackingFrame.Generation must be positive")
 		}
-		known := trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression
-		if p.Frame.Capabilities&^known != 0 {
-			return errors.New("TrackingFrame.Frame.Capabilities contains unknown capability bits")
+		if err := p.Frame.Validate(); err != nil {
+			return fmt.Errorf("TrackingFrame.Frame: %w", err)
 		}
 	case Status:
 		if err := p.Status.Validate(); err != nil {
@@ -339,10 +492,14 @@ func decodePayload(messageType MessageType, raw json.RawMessage) (any, error) {
 		if err := decodeStrictJSON(raw, &payload); err != nil {
 			return nil, fmt.Errorf("protocol: decode payload for message type %d: %w", messageType, err)
 		}
+		subscription, err := fromWireSubscription(payload.Startup.Subscription, "Initialize.Startup.Subscription")
+		if err != nil {
+			return nil, fmt.Errorf("protocol: decode payload for message type %d: %w", messageType, err)
+		}
 		return Initialize{Startup: pluginapi.Startup{
 			Active:       payload.Startup.Active,
 			Config:       fromWireConfig(payload.Startup.Config),
-			Subscription: payload.Startup.Subscription,
+			Subscription: subscription,
 		}}, nil
 	}
 	if messageType == MessageConfigChanged {
@@ -351,6 +508,28 @@ func decodePayload(messageType MessageType, raw json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("protocol: decode payload for message type %d: %w", messageType, err)
 		}
 		return ConfigChanged{Config: fromWireConfig(payload.Config)}, nil
+	}
+	if messageType == MessageSubscriptionChanged {
+		var payload wireSubscriptionChanged
+		if err := decodeStrictJSON(raw, &payload); err != nil {
+			return nil, fmt.Errorf("protocol: decode payload for message type %d: %w", messageType, err)
+		}
+		subscription, err := fromWireSubscription(payload.Subscription, "SubscriptionChanged.Subscription")
+		if err != nil {
+			return nil, fmt.Errorf("protocol: decode payload for message type %d: %w", messageType, err)
+		}
+		return SubscriptionChanged{Subscription: subscription}, nil
+	}
+	if messageType == MessageTrackingFrame {
+		var payload wireTrackingFrame
+		if err := decodeStrictJSON(raw, &payload); err != nil {
+			return nil, fmt.Errorf("protocol: decode payload for message type %d: %w", messageType, err)
+		}
+		frame, err := fromWireTrackingFrame(payload)
+		if err != nil {
+			return nil, fmt.Errorf("protocol: decode payload for message type %d: %w", messageType, err)
+		}
+		return frame, nil
 	}
 
 	var payload any
@@ -361,14 +540,10 @@ func decodePayload(messageType MessageType, raw json.RawMessage) (any, error) {
 		payload = new(Ready)
 	case MessageHeartbeat:
 		payload = new(Heartbeat)
-	case MessageTrackingFrame:
-		payload = new(TrackingFrame)
 	case MessageStatus:
 		payload = new(Status)
 	case MessageLog:
 		payload = new(Log)
-	case MessageSubscriptionChanged:
-		payload = new(SubscriptionChanged)
 	case MessageActiveChanged:
 		payload = new(ActiveChanged)
 	case MessageShutdown:
@@ -392,13 +567,9 @@ func decodePayload(messageType MessageType, raw json.RawMessage) (any, error) {
 		return *p, nil
 	case *Heartbeat:
 		return *p, nil
-	case *TrackingFrame:
-		return *p, nil
 	case *Status:
 		return *p, nil
 	case *Log:
-		return *p, nil
-	case *SubscriptionChanged:
 		return *p, nil
 	case *ActiveChanged:
 		return *p, nil

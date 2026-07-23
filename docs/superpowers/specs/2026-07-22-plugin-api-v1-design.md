@@ -169,22 +169,26 @@ an OSC output is not necessarily a primitive tracking input. The tracking model
 therefore does not create one `ExpressionID` for every YAML entry. Instead, the
 implementation defines an explicit dependency mapping with these rules:
 
-- direct eye outputs name the `EyeSample` fields and validity bits they require;
+- direct eye outputs use typed concrete field leaves for left/right gaze X/Y,
+  openness, pupil diameter, and pupil dilation; a conversion unions those
+  leaves into the coarser `EyeValid` bits required by subscriptions;
 - direct expression outputs name one primitive `ExpressionID`;
 - combined detailed and simplified outputs name all primitive dependencies and
   their evaluation operation;
-- tracking-active Boolean outputs depend on capability and source state rather
-  than an expression slot.
+- tracking-active Boolean outputs use distinct typed active-state leaves for
+  eye, expression, and lip tracking rather than an expression slot.
 
 Every float parameter in both `detailed_parameters` and
-`simplified_parameters` must have a dependency entry. Every dependency must
-refer to a real `EyeSample` field or an `ExpressionID` below `ExpressionCount`.
-Every primitive expression ID must be used by at least one parameter or carry an
+`simplified_parameters`, plus every Boolean in `tracking_active_parameters`,
+must have a dependency entry. Every dependency must refer to a real typed eye
+field, active-state leaf, or an `ExpressionID` below `ExpressionCount`. Every
+primitive expression ID must be used by at least one parameter or carry an
 explicit interoperability justification. Cycles are invalid.
 
 Coverage is checked from the YAML source during tests, not by comparing only
-the declared counts. This guarantees that adding or renaming a parameter in the
-spec fails tests until tracking input and evaluation coverage are updated.
+the declared counts. This guarantees that adding or renaming a float or
+tracking-active parameter in the spec fails tests until tracking input and
+evaluation coverage are updated.
 
 ### Publication semantics
 

@@ -37,7 +37,7 @@ type Config struct {
 
 func (c Config) Clone() Config {
 	clone := Config{Revision: c.Revision}
-	if c.Data != nil {
+	if len(c.Data) != 0 {
 		clone.Data = make(json.RawMessage, len(c.Data))
 		copy(clone.Data, c.Data)
 	}

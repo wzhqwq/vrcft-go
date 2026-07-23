@@ -205,6 +205,27 @@ func TestSubscriptionTrimFrameDoesNotMutateInputsAndPreservesMetadata(t *testing
 	}
 }
 
+func TestSubscriptionTrimFrameDropsUnknownCapabilityAndValidityBits(t *testing.T) {
+	frame := populatedFrame()
+	frame.Eye.Valid |= trackingmodel.EyeValid(1 << 15)
+	frame.Expressions.Valid.Words[len(frame.Expressions.Valid.Words)-1] |= uint64(1) << (trackingmodel.ExpressionCount % 64)
+	subscription := Subscription{
+		Generation:   1,
+		Capabilities: trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression,
+	}
+
+	trimmed := subscription.TrimFrame(frame)
+	if trimmed.Capabilities != trackingmodel.CapabilityEye|trackingmodel.CapabilityExpression {
+		t.Fatalf("TrimFrame().Capabilities = %#x, want known subscribed capabilities only", trimmed.Capabilities)
+	}
+	if trimmed.Eye.Valid&^allEyeValid != 0 {
+		t.Fatalf("TrimFrame().Eye.Valid = %#x, retained unknown bits", trimmed.Eye.Valid)
+	}
+	if trimmed.Expressions.Valid != trimmed.Expressions.Valid.Normalize() {
+		t.Fatalf("TrimFrame().Expressions.Valid = %#v, retained tail bits", trimmed.Expressions.Valid)
+	}
+}
+
 func populatedFrame() trackingmodel.TrackingFrame {
 	frame := trackingmodel.TrackingFrame{
 		Sequence:      7,

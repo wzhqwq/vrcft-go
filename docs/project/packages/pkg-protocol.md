@@ -31,7 +31,7 @@ Define typed JSON protocol v1 messages, strict message-type and payload correspo
 Concrete connection framing, socket implementation, and process policy belong to internal IPC and host packages.
 
 ## Current implementation
-Typed JSON protocol v1 messages, strict decoding, payload validation and limits, and context-aware Conn methods are implemented.
+Typed JSON protocol v1 messages, strict decoding with exact tracking-array widths, typed-construction payload limits, and context-aware Conn methods are implemented.
 
 ## Public/internal interfaces
 Conn, message types, and serializable payloads are shared across processes.
@@ -46,7 +46,7 @@ References public plugin API and tracking-model payloads.
 The abstract Conn contract accepts contexts; concrete framing and write serialization are internal IPC responsibilities.
 
 ## Error handling
-Unknown versions or types, payload-type mismatches, oversized payloads, malformed JSON, and invalid fields return explicit protocol errors.
+Unknown versions or types, payload-type mismatches, oversized concrete or decoded payloads, malformed JSON, incorrect fixed-array widths, and invalid fields return explicit protocol errors.
 
 ## Performance constraints
 Payload size is bounded by MaxPayloadSize and encoding avoids unnecessary copies where practical.
