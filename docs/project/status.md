@@ -1,8 +1,8 @@
 # Project Status
 
-- Generated: 2026-07-23T08:37:29Z
-- Commit: `60a2f2f83f25834d20b7a6d9006520b98c0652e6`
-- Source fingerprint: `95cfd747ad7787903e34b4c0501fa625dc0b329f2004999d7156727d3488109c`
+- Generated: 2026-07-23T15:31:28Z
+- Commit: `98e35097abf1b59d8a0124586cbf3a7cc858a9d2`
+- Source fingerprint: `38e73887855522b5bd37ad905f6963d1ddf5450b6799123d43ec959264584e44`
 - Dirty: `false`
 - State: `blocked`
 - Progress: 70.2% (87/124 weight)
@@ -58,9 +58,9 @@
 - `end-to-end/integration-test` (failed): open F:\dev\vrcft-go\internal\application\app_test.go: The system cannot find the file specified.
 - `end-to-end/pipeline-components` (blocked): aggregate member incomplete: internal-application:tracking-wired
 - `internal-application/tracking-wired` (failed): required symbol not found
-- `frontend/production-build` (failed): node:fs:2787 const stats = binding.lstat(base, true, undefined, true /* throwIfNoEntry */); ^ Error: EPERM: operation not permitted, lstat 'C:\Users\wzhqwq' at Object.realpathSync (node:fs:2787:29) at toRealPath (node:internal/modules/helpe…
+- `frontend/production-build` (failed): 'vite' is not recognized as an internal or external command, operable program or batch file.
 - `frontend/project-status-view` (failed): required symbol not found
-- `frontend/type-check` (failed): node:fs:2787 const stats = binding.lstat(base, true, undefined, true /* throwIfNoEntry */); ^ Error: EPERM: operation not permitted, lstat 'C:\Users\wzhqwq' at Object.realpathSync (node:fs:2787:29) at toRealPath (node:internal/modules/helpe…
+- `frontend/type-check` (failed): 'svelte-check' is not recognized as an internal or external command, operable program or batch file.
 
 ## Next Action
 
