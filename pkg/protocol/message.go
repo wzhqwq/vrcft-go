@@ -16,9 +16,8 @@ const Version uint16 = 1
 
 const MaxPayloadSize = 1024 * 1024
 
-// messageEnvelopeAllowance bounds the JSON fields surrounding a maximum-size
-// payload without making the payload limit depend on envelope formatting.
-const messageEnvelopeAllowance = 256
+// MaxMessageSize bounds the encoded payload plus its JSON envelope.
+const MaxMessageSize = MaxPayloadSize + 256
 
 type MessageType uint16
 
@@ -223,8 +222,8 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	if m == nil {
 		return errors.New("protocol: cannot unmarshal into nil Message")
 	}
-	if len(data) > MaxPayloadSize+messageEnvelopeAllowance {
-		return fmt.Errorf("protocol: total message size %d exceeds maximum %d", len(data), MaxPayloadSize+messageEnvelopeAllowance)
+	if len(data) > MaxMessageSize {
+		return fmt.Errorf("protocol: total message size %d exceeds maximum %d", len(data), MaxMessageSize)
 	}
 
 	var wire wireMessage

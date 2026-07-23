@@ -391,13 +391,25 @@ func TestJSONPayloadSizeLimit(t *testing.T) {
 }
 
 func TestJSONTotalSizeLimit(t *testing.T) {
-	data := []byte(`{"version":1,"type":3,"payload":{},"padding":"` + strings.Repeat("x", MaxPayloadSize+messageEnvelopeAllowance) + `"}`)
-	if len(data) <= MaxPayloadSize+messageEnvelopeAllowance {
+	data := []byte(`{"version":1,"type":3,"payload":{},"padding":"` + strings.Repeat("x", MaxMessageSize) + `"}`)
+	if len(data) <= MaxMessageSize {
 		t.Fatal("test setup did not exceed total limit")
 	}
 	var message Message
 	if err := json.Unmarshal(data, &message); err == nil {
 		t.Fatal("Unmarshal(over total limit) error = nil")
+	}
+}
+
+func TestMessageSizeConstants(t *testing.T) {
+	if MaxMessageSize != MaxPayloadSize+256 {
+		t.Fatalf("MaxMessageSize = %d, want %d", MaxMessageSize, MaxPayloadSize+256)
+	}
+	var message Message
+	data := []byte(`{"version":1,"type":3,"payload":{},"padding":"` + strings.Repeat("x", MaxMessageSize) + `"}`)
+	err := json.Unmarshal(data, &message)
+	if err == nil || !strings.Contains(err.Error(), "total message size") {
+		t.Fatalf("UnmarshalJSON(oversized message) error = %v, want total message size error", err)
 	}
 }
 
