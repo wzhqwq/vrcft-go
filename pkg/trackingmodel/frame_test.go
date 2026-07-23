@@ -1,6 +1,7 @@
 package trackingmodel
 
 import (
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -58,6 +59,52 @@ func TestTrackingFrameValidateRejectsMalformedValidity(t *testing.T) {
 				t.Fatalf("Canonicalize() error = %v, want %q error", err, tt.field)
 			}
 		})
+	}
+}
+
+func TestTrackingFrameValidateRejectsNonFiniteValidValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		frame TrackingFrame
+	}{
+		{"eye NaN", TrackingFrame{Capabilities: CapabilityEye, Eye: EyeSample{Valid: EyeValidLeftGaze, LeftGaze: Vec2{X: float32(math.NaN())}}}},
+		{"eye positive infinity", TrackingFrame{Capabilities: CapabilityEye, Eye: EyeSample{Valid: EyeValidRightPupil, RightPupilDiameterMM: float32(math.Inf(1))}}},
+		{"eye negative infinity", TrackingFrame{Capabilities: CapabilityEye, Eye: EyeSample{Valid: EyeValidLeftOpenness, LeftOpenness: float32(math.Inf(-1))}}},
+		{"expression NaN", func() TrackingFrame {
+			f := TrackingFrame{Capabilities: CapabilityExpression}
+			f.Expressions.Set(ExpressionJawOpen, float32(math.NaN()))
+			return f
+		}()},
+		{"expression positive infinity", func() TrackingFrame {
+			f := TrackingFrame{Capabilities: CapabilityExpression}
+			f.Expressions.Set(ExpressionJawOpen, float32(math.Inf(1)))
+			return f
+		}()},
+		{"expression negative infinity", func() TrackingFrame {
+			f := TrackingFrame{Capabilities: CapabilityExpression}
+			f.Expressions.Set(ExpressionJawOpen, float32(math.Inf(-1)))
+			return f
+		}()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.frame.Validate(); err == nil || !strings.Contains(err.Error(), "finite") {
+				t.Fatalf("Validate() error = %v, want finite-value error", err)
+			}
+		})
+	}
+}
+
+func TestTrackingFrameCanonicalizeClearsNonFiniteInvalidValues(t *testing.T) {
+	frame := TrackingFrame{Capabilities: CapabilityEye | CapabilityExpression}
+	frame.Eye.LeftGaze.X = float32(math.NaN())
+	frame.Expressions.Values[ExpressionJawOpen] = float32(math.Inf(1))
+	got, err := frame.Canonicalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Eye.LeftGaze != (Vec2{}) || got.Expressions.Values[ExpressionJawOpen] != 0 {
+		t.Fatalf("Canonicalize() retained invalid non-finite values: %+v", got)
 	}
 }
 

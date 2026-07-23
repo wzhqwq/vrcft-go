@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"reflect"
 	goruntime "runtime"
 	"strings"
@@ -495,6 +496,20 @@ func TestRuntimeHostPublishFrameRejectsMalformedFramesBeforeSlot(t *testing.T) {
 		{
 			name:  "expression validity in disabled group",
 			frame: trackingmodel.TrackingFrame{Expressions: trackingmodel.ExpressionSet{Valid: trackingmodel.ExpressionMaskOf(trackingmodel.ExpressionJawOpen)}},
+		},
+		{
+			name: "non-finite valid eye value",
+			frame: trackingmodel.TrackingFrame{Capabilities: trackingmodel.CapabilityEye, Eye: trackingmodel.EyeSample{
+				Valid: trackingmodel.EyeValidLeftGaze, LeftGaze: trackingmodel.Vec2{X: float32(math.Inf(1))},
+			}},
+		},
+		{
+			name: "non-finite valid expression value",
+			frame: func() trackingmodel.TrackingFrame {
+				f := trackingmodel.TrackingFrame{Capabilities: trackingmodel.CapabilityExpression}
+				f.Expressions.Set(trackingmodel.ExpressionJawOpen, float32(math.NaN()))
+				return f
+			}(),
 		},
 	}
 	for _, tt := range tests {

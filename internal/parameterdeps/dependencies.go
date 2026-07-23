@@ -1,5 +1,5 @@
 // Package parameterdeps describes which tracking inputs are required to
-// produce each float OSC parameter. It records dependency and operation
+// produce each OSC float or tracking-active Boolean parameter. It records dependency and operation
 // metadata; it does not evaluate parameter values.
 package parameterdeps
 

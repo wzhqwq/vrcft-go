@@ -1,6 +1,10 @@
 package trackingmodel
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"math"
+)
 
 type Vec2 struct {
 	X float32
@@ -77,7 +81,44 @@ func (f TrackingFrame) Validate() error {
 	if !f.Capabilities.Has(CapabilityExpression) && !f.Expressions.Valid.IsZero() {
 		return errors.New("TrackingFrame.Expressions.Valid requires CapabilityExpression")
 	}
+	if err := validateFiniteEye(f.Eye); err != nil {
+		return err
+	}
+	for id := ExpressionID(0); id < ExpressionCount; id++ {
+		if f.Expressions.Valid.Has(id) && !finite32(f.Expressions.Values[id]) {
+			return fmt.Errorf("TrackingFrame.Expressions.Values[%d] must be finite", id)
+		}
+	}
 	return nil
+}
+
+func validateFiniteEye(eye EyeSample) error {
+	checks := []struct {
+		valid EyeValid
+		name  string
+		value float32
+	}{
+		{EyeValidLeftGaze, "LeftGaze.X", eye.LeftGaze.X},
+		{EyeValidLeftGaze, "LeftGaze.Y", eye.LeftGaze.Y},
+		{EyeValidRightGaze, "RightGaze.X", eye.RightGaze.X},
+		{EyeValidRightGaze, "RightGaze.Y", eye.RightGaze.Y},
+		{EyeValidLeftOpenness, "LeftOpenness", eye.LeftOpenness},
+		{EyeValidRightOpenness, "RightOpenness", eye.RightOpenness},
+		{EyeValidLeftPupil, "LeftPupilDiameterMM", eye.LeftPupilDiameterMM},
+		{EyeValidLeftPupil, "LeftPupilDilation", eye.LeftPupilDilation},
+		{EyeValidRightPupil, "RightPupilDiameterMM", eye.RightPupilDiameterMM},
+		{EyeValidRightPupil, "RightPupilDilation", eye.RightPupilDilation},
+	}
+	for _, check := range checks {
+		if eye.Valid&check.valid != 0 && !finite32(check.value) {
+			return fmt.Errorf("TrackingFrame.Eye.%s must be finite", check.name)
+		}
+	}
+	return nil
+}
+
+func finite32(value float32) bool {
+	return !math.IsNaN(float64(value)) && !math.IsInf(float64(value), 0)
 }
 
 // Canonicalize validates f and clears values that are not marked valid.
