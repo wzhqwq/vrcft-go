@@ -47,7 +47,9 @@ Those responsibilities remain with `internal/plugins`, the Host runtime,
   user and LocalSystem.
 - Session authentication remains the responsibility of
   `protocol.Hello.Token`.
-- A framed payload is at most 1 MiB, matching `pkg/protocol`.
+- A protocol payload is at most 1 MiB. A complete framed JSON message is at
+  most `protocol.MaxMessageSize`, which adds the protocol's 256-byte envelope
+  allowance.
 - No IPC queue may accumulate tracking frames; latest-frame behavior remains
   in `pkg/pluginruntime`.
 
@@ -140,7 +142,8 @@ JSON payload of protocol.Message
 Rules:
 
 - zero-length frames are invalid;
-- lengths greater than 1 MiB are rejected before allocation;
+- lengths greater than `protocol.MaxMessageSize` are rejected before
+  allocation;
 - `io.ReadFull` reads both the header and payload;
 - writes loop until the entire header and payload have been written;
 - the payload is encoded and decoded by `pkg/protocol`, preserving strict
@@ -149,9 +152,11 @@ Rules:
   close it, because stream synchronization is no longer trusted;
 - framing never adds its own token or message type.
 
-The length limit is checked both by `pkg/protocol` and by framing. The duplicate
-boundary is intentional: protocol validation protects typed callers, while
-framing protects memory allocation before decoding untrusted bytes.
+`pkg/protocol` exports `MaxMessageSize` as `MaxPayloadSize + 256`, replacing its
+private envelope-size expression. The length limit is checked both by
+`pkg/protocol` and by framing. The duplicate boundary is intentional: protocol
+validation protects typed callers, while framing protects memory allocation
+before decoding untrusted bytes.
 
 ## Connection Concurrency and Ownership
 
@@ -200,7 +205,7 @@ The pipe uses `go-winio.ListenPipe` with:
 
 - byte stream mode;
 - input and output buffers large enough for normal control traffic without
-  weakening the 1 MiB frame limit;
+  weakening `protocol.MaxMessageSize`;
 - remote clients rejected;
 - an SDDL descriptor granting access only to LocalSystem and the current
   interactive user SID.
@@ -278,7 +283,7 @@ Use deterministic in-memory stream implementations to cover:
 
 - round-trip of every supported message category through framing;
 - split reads and short writes;
-- zero length and greater-than-1-MiB declarations;
+- zero length and declarations greater than `protocol.MaxMessageSize`;
 - invalid JSON, unknown fields, and invalid typed messages;
 - clean EOF versus partial header and partial body;
 - simultaneous send and receive;
