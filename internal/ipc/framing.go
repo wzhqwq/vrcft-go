@@ -13,7 +13,8 @@ import (
 const frameHeaderSize = 4
 
 type fatalStreamError struct {
-	err error
+	err        error
+	progressed bool
 }
 
 func (e *fatalStreamError) Error() string { return e.err.Error() }
@@ -33,30 +34,38 @@ func writeFrame(writer io.Writer, message protocol.Message) error {
 
 	var header [frameHeaderSize]byte
 	binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
-	if err := writeFull(writer, header[:]); err != nil {
-		return &fatalStreamError{err: fmt.Errorf("ipc: write frame header: %w", err)}
+	if written, err := writeFull(writer, header[:]); err != nil {
+		return &fatalStreamError{
+			err:        fmt.Errorf("ipc: write frame header: %w", err),
+			progressed: written != 0,
+		}
 	}
-	if err := writeFull(writer, payload); err != nil {
-		return &fatalStreamError{err: fmt.Errorf("ipc: write frame body: %w", err)}
+	if _, err := writeFull(writer, payload); err != nil {
+		return &fatalStreamError{
+			err:        fmt.Errorf("ipc: write frame body: %w", err),
+			progressed: true,
+		}
 	}
 	return nil
 }
 
-func writeFull(writer io.Writer, data []byte) error {
+func writeFull(writer io.Writer, data []byte) (int, error) {
+	total := 0
 	for len(data) != 0 {
 		written, err := writer.Write(data)
 		if written < 0 || written > len(data) {
-			return io.ErrShortWrite
+			return total, io.ErrShortWrite
 		}
+		total += written
 		data = data[written:]
 		if err != nil {
-			return err
+			return total, err
 		}
 		if written == 0 {
-			return io.ErrNoProgress
+			return total, io.ErrNoProgress
 		}
 	}
-	return nil
+	return total, nil
 }
 
 func readFrame(reader io.Reader) (protocol.Message, error) {
@@ -66,33 +75,41 @@ func readFrame(reader io.Reader) (protocol.Message, error) {
 		if read == 0 && errors.Is(err, io.EOF) {
 			return protocol.Message{}, io.EOF
 		}
+		if read == 0 {
+			return protocol.Message{}, &fatalStreamError{err: err}
+		}
 		return protocol.Message{}, &fatalStreamError{
-			err: fmt.Errorf("%w: truncated header: %v", ErrMalformedFrame, err),
+			err:        fmt.Errorf("%w: truncated header: %v", ErrMalformedFrame, err),
+			progressed: true,
 		}
 	}
 
 	length := binary.BigEndian.Uint32(header[:])
 	if length == 0 {
 		return protocol.Message{}, &fatalStreamError{
-			err: fmt.Errorf("%w: zero-length payload", ErrMalformedFrame),
+			err:        fmt.Errorf("%w: zero-length payload", ErrMalformedFrame),
+			progressed: true,
 		}
 	}
 	if uint64(length) > uint64(protocol.MaxMessageSize) {
 		return protocol.Message{}, &fatalStreamError{
-			err: fmt.Errorf("%w: declared size %d", ErrFrameTooLarge, length),
+			err:        fmt.Errorf("%w: declared size %d", ErrFrameTooLarge, length),
+			progressed: true,
 		}
 	}
 
 	payload := make([]byte, int(length))
 	if _, err := io.ReadFull(reader, payload); err != nil {
 		return protocol.Message{}, &fatalStreamError{
-			err: fmt.Errorf("%w: truncated body: %v", ErrMalformedFrame, err),
+			err:        fmt.Errorf("%w: truncated body: %v", ErrMalformedFrame, err),
+			progressed: true,
 		}
 	}
 	var message protocol.Message
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return protocol.Message{}, &fatalStreamError{
-			err: fmt.Errorf("%w: decode protocol message: %v", ErrMalformedFrame, err),
+			err:        fmt.Errorf("%w: decode protocol message: %v", ErrMalformedFrame, err),
+			progressed: true,
 		}
 	}
 	return message, nil
