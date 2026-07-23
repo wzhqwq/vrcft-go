@@ -36,6 +36,10 @@ func newOneShotListener(listener net.Listener) Listener {
 	return result
 }
 
+func validateServerConfig(config ServerConfig) error {
+	return validatePipeName(config.PipeName)
+}
+
 func (l *oneShotListener) accept() {
 	conn, err := l.listener.Accept()
 	if err == nil {
