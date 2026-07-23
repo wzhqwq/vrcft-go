@@ -40,6 +40,14 @@ func TestRenderMarkdownIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestNormalizeMarkdownIgnoresFailedEvidenceClockPrefixes(t *testing.T) {
+	first := []byte("- `frontend/type-check` (failed): 02:14:08 tool failed\n")
+	second := []byte("- `frontend/type-check` (failed): 02:15:30 tool failed\n")
+	if !bytes.Equal(NormalizeMarkdown(first), NormalizeMarkdown(second)) {
+		t.Fatalf("normalized failed evidence differs:\n%s\n%s", NormalizeMarkdown(first), NormalizeMarkdown(second))
+	}
+}
+
 func TestRenderJSONIncludesSchemaAndExactWeights(t *testing.T) {
 	status := BuildStatus(StatusInput{Results: []SpecResult{{
 		Spec:   Spec{ID: "a", Milestone: "M1", DependsOn: []string{"root"}},

@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+var failedEvidenceClock = regexp.MustCompile(`\b(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\b`)
 
 func RenderMarkdown(status Status) ([]byte, error) {
 	var output bytes.Buffer
@@ -70,6 +73,9 @@ func NormalizeMarkdown(content []byte) []byte {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "- Generated:") || strings.HasPrefix(line, "- Commit:") || strings.HasPrefix(line, "- Dirty:") {
 			continue
+		}
+		if strings.HasPrefix(line, "- `") && strings.Contains(line, "` (failed):") {
+			line = failedEvidenceClock.ReplaceAllString(line, "<clock>")
 		}
 		output.WriteString(line)
 		output.WriteByte('\n')
