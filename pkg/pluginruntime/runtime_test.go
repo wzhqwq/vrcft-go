@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wzhqwq/vrcft-go/internal/ipc"
 	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
 	"github.com/wzhqwq/vrcft-go/pkg/protocol"
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
@@ -1980,6 +1982,72 @@ func TestMainFactoryPaths(t *testing.T) {
 	}
 	if got := (<-c.fromRuntime).Type; got != protocol.MessageReady {
 		t.Fatalf("message = %v, want Ready", got)
+	}
+}
+
+func TestConnectFromEnvironmentValidation(t *testing.T) {
+	t.Setenv(PipeNameEnv, "")
+	t.Setenv(SessionTokenEnv, "")
+	if _, _, err := connectFromEnvironment(context.Background()); !errors.Is(err, ErrConnectionUnavailable) ||
+		!strings.Contains(err.Error(), PipeNameEnv) {
+		t.Fatalf("connectFromEnvironment(missing pipe) error = %v", err)
+	}
+
+	t.Setenv(PipeNameEnv, "plugin")
+	if _, _, err := connectFromEnvironment(context.Background()); !errors.Is(err, ErrConnectionUnavailable) ||
+		!strings.Contains(err.Error(), SessionTokenEnv) {
+		t.Fatalf("connectFromEnvironment(missing token) error = %v", err)
+	}
+
+	const secret = "do-not-leak-session-token"
+	t.Setenv(PipeNameEnv, `\\server\pipe\x`)
+	t.Setenv(SessionTokenEnv, secret)
+	if _, _, err := connectFromEnvironment(context.Background()); !errors.Is(err, ipc.ErrInvalidPipeName) {
+		t.Fatalf("connectFromEnvironment(invalid pipe) error = %v", err)
+	} else if strings.Contains(err.Error(), secret) {
+		t.Fatalf("connectFromEnvironment() leaked token in error %q", err)
+	}
+}
+
+func TestConnectFromEnvironmentUsesNamedPipeAndExactToken(t *testing.T) {
+	if goruntime.GOOS != "windows" {
+		t.Skip("named pipe integration requires Windows")
+	}
+	name := fmt.Sprintf("runtime_%d", time.Now().UnixNano())
+	listener, err := ipc.Listen(ipc.ServerConfig{PipeName: name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	accepted := make(chan protocol.Conn, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept(context.Background())
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- conn
+	}()
+
+	const token = "  exact-token-bytes  "
+	t.Setenv(PipeNameEnv, name)
+	t.Setenv(SessionTokenEnv, token)
+	conn, gotToken, err := connectFromEnvironment(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if gotToken != token {
+		t.Fatalf("token = %q, want exact %q", gotToken, token)
+	}
+	select {
+	case server := <-accepted:
+		t.Cleanup(func() { _ = server.Close() })
+	case err := <-acceptErr:
+		t.Fatal(err)
+	case <-time.After(testTimeout):
+		t.Fatal("named pipe listener did not accept runtime connection")
 	}
 }
 
