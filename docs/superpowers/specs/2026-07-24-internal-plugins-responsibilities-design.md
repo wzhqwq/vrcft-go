@@ -628,6 +628,20 @@ The session collector retains substantive reader, writer, process, handshake,
 shutdown-ack, timeout, and kill errors. Expected context cancellation must not
 overwrite the primary cause.
 
+Ready-handshake control replay uses this same shutdown path; Stop does not
+bypass the serialized writer by immediately closing and killing the process.
+If an in-flight replay prevents Shutdown from being sent, GracefulTimeout
+expires before the connection is closed and the process is killed.
+
+Protocol v1 has no shutdown nonce, and `protocol.Conn.Send` does not expose the
+first physical byte write or prove that the peer received a frame. The
+enforceable Host boundary is therefore the serialized writer's start of its
+Shutdown Send attempt: an Ack observed before that attempt is a protocol
+violation; an Ack observed while the attempt is in progress is held pending
+and becomes effective only if Send returns success; a failed Send discards the
+pending Ack. This boundary prevents an earlier Ack from satisfying a later
+Shutdown, but it does not claim cryptographic or remote-receipt causality.
+
 Manager Close:
 
 1. atomically stops accepting new public controls;

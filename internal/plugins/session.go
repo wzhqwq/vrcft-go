@@ -68,6 +68,14 @@ type pendingSessionControl struct {
 	result  chan error
 }
 
+type sessionWorkers struct {
+	readerCtx     context.Context
+	cancelReader  context.CancelFunc
+	readerResult  chan error
+	processResult chan error
+	writerResult  chan error
+}
+
 type processSession struct {
 	config     sessionConfig
 	instanceID uint64
@@ -280,16 +288,16 @@ func (s *processSession) startAndWait() sessionResult {
 	}
 	s.mu.Unlock()
 
-	processResult := make(chan error, 1)
-	go func() { processResult <- process.Wait() }()
-	stopped, err := s.replayPendingControls(conn, process, writer, processResult)
+	workers := s.startSessionWorkers(conn, process, writer)
+	stopped, err := s.replayPendingControls(conn, process, writer, workers)
 	if stopped {
+		workers.cancelReader()
 		result.StableFor = time.Since(result.StartedAt)
 		result.Err = err
 		result.Retryable = err != nil && retryableSessionError(err)
 		return result
 	}
-	err = s.runRuntime(conn, process, writer, processResult)
+	err = s.runRuntime(conn, process, writer, workers)
 	result.StableFor = time.Since(result.StartedAt)
 	if err != nil {
 		result.Err = err
@@ -326,18 +334,41 @@ func (s *processSession) cleanupStartedProcess(process Process) error {
 	}
 }
 
+func (s *processSession) startSessionWorkers(
+	conn protocol.Conn,
+	process Process,
+	writer *sessionWriter,
+) sessionWorkers {
+	readerCtx, cancelReader := context.WithCancel(context.Background())
+	workers := sessionWorkers{
+		readerCtx:     readerCtx,
+		cancelReader:  cancelReader,
+		readerResult:  make(chan error, 1),
+		processResult: make(chan error, 1),
+		writerResult:  make(chan error, 1),
+	}
+	go func() { workers.readerResult <- s.readRuntime(readerCtx, conn) }()
+	go func() { workers.processResult <- process.Wait() }()
+	go func() { workers.writerResult <- writer.terminalError() }()
+	return workers
+}
+
 func (s *processSession) replayPendingControls(
 	conn protocol.Conn,
 	process Process,
 	writer *sessionWriter,
-	processResult <-chan error,
+	workers sessionWorkers,
 ) (bool, error) {
 	for {
 		s.mu.Lock()
 		if s.phase != sessionReplaying {
 			s.rejectPendingLocked(ErrInvalidState)
 			s.mu.Unlock()
-			return true, s.stopReplayProcess(conn, process, processResult, false)
+			return true, s.shutdownProcess(
+				conn, process, writer,
+				workers.processResult, workers.readerResult, workers.writerResult,
+				workers.cancelReader,
+			)
 		}
 		if len(s.pending) == 0 {
 			s.phase = sessionReady
@@ -358,22 +389,53 @@ func (s *processSession) replayPendingControls(
 			pending.result <- opaqueWriterControlError(writer, err)
 			if terminalErr := writer.currentTerminalError(); terminalErr != nil {
 				s.beginReplayStop()
-				cleanupErr := s.stopReplayProcess(conn, process, processResult, false)
+				cleanupErr := s.shutdownProcess(
+					conn, process, writer,
+					workers.processResult, workers.readerResult, workers.writerResult,
+					workers.cancelReader,
+				)
 				return true, errors.Join(
 					opaqueSessionCause{kind: "plugins: IPC writer failure", cause: terminalErr},
 					cleanupErr,
 				)
 			}
-		case processErr := <-processResult:
+		case processErr := <-workers.processResult:
 			s.beginReplayStop()
 			_ = conn.Close()
 			s.completeReplayControl(writer, pending, controlResult)
 			return true, unexpectedProcessExit(processErr)
+		case readerErr := <-workers.readerResult:
+			s.beginReplayStop()
+			shutdownErr := s.shutdownProcess(
+				conn, process, writer,
+				workers.processResult, workers.readerResult, workers.writerResult,
+				workers.cancelReader,
+			)
+			s.completeReplayControl(writer, pending, controlResult)
+			return true, errors.Join(readerErr, shutdownErr)
+		case writerErr := <-workers.writerResult:
+			s.beginReplayStop()
+			shutdownErr := s.shutdownProcess(
+				conn, process, writer,
+				workers.processResult, workers.readerResult, workers.writerResult,
+				workers.cancelReader,
+			)
+			s.completeReplayControl(writer, pending, controlResult)
+			if writerErr == nil {
+				writerErr = ErrProtocolViolation
+			} else {
+				writerErr = opaqueSessionCause{kind: "plugins: IPC writer failure", cause: writerErr}
+			}
+			return true, errors.Join(writerErr, shutdownErr)
 		case <-s.ctx.Done():
 			s.beginReplayStop()
-			_ = conn.Close()
+			shutdownErr := s.shutdownProcess(
+				conn, process, writer,
+				workers.processResult, workers.readerResult, workers.writerResult,
+				workers.cancelReader,
+			)
 			s.completeReplayControl(writer, pending, controlResult)
-			return true, s.stopReplayProcess(conn, process, processResult, false)
+			return true, shutdownErr
 		}
 	}
 }
@@ -407,37 +469,6 @@ func (s *processSession) completeReplayControl(
 	}
 }
 
-func (s *processSession) stopReplayProcess(
-	conn protocol.Conn,
-	process Process,
-	processResult <-chan error,
-	processExited bool,
-) error {
-	_ = conn.Close()
-	if processExited {
-		return nil
-	}
-	killErr := process.Kill()
-	timer := time.NewTimer(minimumSessionTimeout(s.config.KillTimeout))
-	defer timer.Stop()
-	select {
-	case waitErr := <-processResult:
-		if killErr != nil {
-			return opaqueSessionCause{kind: "plugins: process kill failure", cause: killErr}
-		}
-		_ = waitErr // A nonzero status is expected after the requested Kill.
-		return nil
-	case <-timer.C:
-		if killErr != nil {
-			return errors.Join(
-				opaqueSessionCause{kind: "plugins: process kill failure", cause: killErr},
-				ErrKillTimeout,
-			)
-		}
-		return ErrKillTimeout
-	}
-}
-
 func unexpectedProcessExit(err error) error {
 	if err == nil {
 		return errors.New("plugins: process exited unexpectedly")
@@ -449,17 +480,15 @@ func (s *processSession) runRuntime(
 	conn protocol.Conn,
 	process Process,
 	writer *sessionWriter,
-	processResult <-chan error,
+	workers sessionWorkers,
 ) error {
-	readerCtx, cancelReader := context.WithCancel(context.Background())
-	defer cancelReader()
-	readerResult := make(chan error, 1)
+	defer workers.cancelReader()
+	readerResult := workers.readerResult
+	processResult := workers.processResult
+	writerResult := workers.writerResult
 	watchdogResult := make(chan error, 1)
-	writerResult := make(chan error, 1)
 	stopWatchdog := make(chan struct{})
 	defer close(stopWatchdog)
-	go func() { readerResult <- s.readRuntime(readerCtx, conn) }()
-	go func() { writerResult <- writer.terminalError() }()
 	go s.watchHeartbeat(stopWatchdog, watchdogResult)
 
 	select {
@@ -467,22 +496,22 @@ func (s *processSession) runRuntime(
 		if s.isSessionStopping() {
 			return s.shutdownProcess(
 				conn, process, writer, singleProcessResult(processErr),
-				readerResult, writerResult, cancelReader,
+				readerResult, writerResult, workers.cancelReader,
 			)
 		}
-		return s.finishAfterProcessExit(conn, writer, cancelReader, readerResult, writerResult, processErr)
+		return s.finishAfterProcessExit(conn, writer, workers.cancelReader, readerResult, writerResult, processErr)
 	case readerErr := <-readerResult:
 		if readerErr == nil {
 			readerErr = ErrProtocolViolation
 		}
 		return errors.Join(readerErr,
-			s.shutdownProcess(conn, process, writer, processResult, readerResult, writerResult, cancelReader))
+			s.shutdownProcess(conn, process, writer, processResult, readerResult, writerResult, workers.cancelReader))
 	case watchdogErr := <-watchdogResult:
 		if s.deps.onUnresponsive != nil {
 			s.deps.onUnresponsive(s.instanceID)
 		}
 		return errors.Join(watchdogErr,
-			s.shutdownProcess(conn, process, writer, processResult, readerResult, writerResult, cancelReader))
+			s.shutdownProcess(conn, process, writer, processResult, readerResult, writerResult, workers.cancelReader))
 	case writerErr := <-writerResult:
 		if writerErr == nil {
 			writerErr = ErrProtocolViolation
@@ -490,22 +519,22 @@ func (s *processSession) runRuntime(
 			writerErr = opaqueSessionCause{kind: "plugins: IPC writer failure", cause: writerErr}
 		}
 		return errors.Join(writerErr,
-			s.shutdownProcess(conn, process, writer, processResult, readerResult, writerResult, cancelReader))
+			s.shutdownProcess(conn, process, writer, processResult, readerResult, writerResult, workers.cancelReader))
 	case <-s.ctx.Done():
 		select {
 		case readerErr := <-readerResult:
 			if readerErr != nil {
 				return errors.Join(readerErr,
-					s.shutdownProcess(conn, process, writer, processResult, readerResult, writerResult, cancelReader))
+					s.shutdownProcess(conn, process, writer, processResult, readerResult, writerResult, workers.cancelReader))
 			}
 		case processErr := <-processResult:
 			return s.shutdownProcess(
 				conn, process, writer, singleProcessResult(processErr),
-				readerResult, writerResult, cancelReader,
+				readerResult, writerResult, workers.cancelReader,
 			)
 		default:
 		}
-		return s.shutdownProcess(conn, process, writer, processResult, readerResult, writerResult, cancelReader)
+		return s.shutdownProcess(conn, process, writer, processResult, readerResult, writerResult, workers.cancelReader)
 	}
 }
 
@@ -674,7 +703,7 @@ func (s *processSession) shutdownProcess(
 	go func() {
 		shutdownResult <- writer.Control(ctx, controlRequest{
 			kind: controlShutdown,
-			onSend: func() {
+			onSendAttempt: func() {
 				s.shutdownState.Store(shutdownSending)
 			},
 		})
