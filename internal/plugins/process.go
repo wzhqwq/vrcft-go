@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -38,6 +40,13 @@ type commandProcess struct {
 	waitErr  error
 }
 
+type startFailureTarget uint8
+
+const (
+	startFailureExecutable startFailureTarget = iota + 1
+	startFailureWorkingDirectory
+)
+
 func NewProcessLauncher() ProcessLauncher {
 	return processLauncher{}
 }
@@ -49,6 +58,15 @@ func (processLauncher) Start(ctx context.Context, spec ProcessSpec) (Process, er
 	if !filepath.IsAbs(spec.Executable) {
 		return nil, errors.New("plugins: process executable must be absolute")
 	}
+	if spec.WorkingDir != "" {
+		info, err := os.Stat(spec.WorkingDir)
+		if err != nil {
+			return nil, sanitizedStartError(err, startFailureWorkingDirectory)
+		}
+		if !info.IsDir() {
+			return nil, errors.New("plugins: process working directory is unavailable")
+		}
+	}
 	command := exec.Command(spec.Executable, spec.Args...)
 	command.Dir = spec.WorkingDir
 	command.Env = append([]string(nil), spec.Env...)
@@ -57,9 +75,37 @@ func (processLauncher) Start(ctx context.Context, spec ProcessSpec) (Process, er
 		return nil, err
 	}
 	if err := command.Start(); err != nil {
-		return nil, errors.New("plugins: start process failed")
+		return nil, sanitizedStartError(err, startFailureExecutable)
 	}
 	return &commandProcess{command: command}, nil
+}
+
+func sanitizedStartError(err error, target startFailureTarget) error {
+	cause := err
+	var executableError *exec.Error
+	if errors.As(cause, &executableError) {
+		cause = executableError.Err
+	}
+	var pathError *os.PathError
+	if errors.As(cause, &pathError) {
+		cause = pathError.Err
+	}
+
+	switch {
+	case errors.Is(cause, os.ErrNotExist), os.IsNotExist(cause), errors.Is(cause, exec.ErrNotFound):
+		return classifiedStartError(target, "not found", os.ErrNotExist)
+	case errors.Is(cause, os.ErrPermission), os.IsPermission(cause):
+		return classifiedStartError(target, "access denied", os.ErrPermission)
+	default:
+		return errors.New("plugins: start process failed")
+	}
+}
+
+func classifiedStartError(target startFailureTarget, detail string, cause error) error {
+	if target == startFailureWorkingDirectory {
+		return fmt.Errorf("plugins: process working directory %s: %w", detail, cause)
+	}
+	return fmt.Errorf("plugins: process executable %s: %w", detail, cause)
 }
 
 func (process *commandProcess) PID() int {

@@ -173,10 +173,52 @@ func TestProcessLauncherRejectsRelativeExecutableWithoutLeakingSecrets(t *testin
 	}
 }
 
+func TestProcessLauncherClassifiesMissingExecutableWithoutLeakingSecrets(t *testing.T) {
+	missingExecutable := filepath.Join(t.TempDir(), "executable-secret-marker")
+	_, err := NewProcessLauncher().Start(context.Background(), ProcessSpec{
+		Executable: missingExecutable,
+		Args:       []string{"--argument-secret-marker"},
+		Env:        []string{"VRCFT_SESSION_TOKEN=environment-secret-marker"},
+	})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Start() error = %v, want an error matching os.ErrNotExist", err)
+	}
+	for _, secret := range []string{missingExecutable, "argument-secret-marker", "environment-secret-marker"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("Start() leaked sensitive input in %q", err)
+		}
+	}
+}
+
+func TestProcessLauncherClassifiesMissingWorkingDirectoryWithoutLeakingSecrets(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable() error = %v", err)
+	}
+	missingWorkingDir := filepath.Join(t.TempDir(), "working-directory-secret-marker")
+	_, err = NewProcessLauncher().Start(context.Background(), ProcessSpec{
+		Executable: executable,
+		Args:       []string{"--argument-secret-marker"},
+		WorkingDir: missingWorkingDir,
+		Env:        []string{"VRCFT_SESSION_TOKEN=environment-secret-marker"},
+	})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Start() error = %v, want an error matching os.ErrNotExist", err)
+	}
+	if !strings.Contains(err.Error(), "working directory") {
+		t.Fatalf("Start() error = %q, want working-directory classification", err)
+	}
+	for _, secret := range []string{executable, missingWorkingDir, "argument-secret-marker", "environment-secret-marker"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("Start() leaked sensitive input in %q", err)
+		}
+	}
+}
+
 func TestProcessLauncherHonorsCanceledContextBeforeStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	process, err := NewProcessLauncher().Start(ctx, ProcessSpec{Executable: `C:\does-not-matter.exe`})
+	process, err := NewProcessLauncher().Start(ctx, ProcessSpec{Executable: filepath.Join(t.TempDir(), "does-not-matter")})
 	if process != nil {
 		t.Fatal("Start() returned a process for a canceled context")
 	}
@@ -200,6 +242,10 @@ func TestProcessLauncherKillStopsHelper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	t.Cleanup(func() {
+		_ = process.Kill()
+		_ = process.Wait()
+	})
 	if err := process.Kill(); err != nil {
 		t.Fatalf("Kill() error = %v", err)
 	}
