@@ -582,9 +582,25 @@ Non-retryable failures:
 - unsupported API or protocol;
 - structurally invalid Host configuration.
 
-Backoff sequence is 1s, 2s, 4s, 8s, then capped at 30s. After MaxFailures,
-state becomes crashed. Stable running for StableWindow clears consecutive
-failures but not the lifetime RestartCount.
+The process launcher's wrapped `os.ErrNotExist` and `os.ErrPermission`
+sentinels are non-retryable startup contract failures. Generic listener and IPC
+transport failures remain retryable and must not be classified from error text.
+
+The exponential delay function yields 1s, 2s, 4s, 8s, 16s, then 30s and
+remains capped at 30s. `MaxFailures` counts the failure that ends automatic
+restart: with the default `MaxFailures=5`, failures one through four schedule
+the 1s, 2s, 4s, and 8s retries, while the fifth failure enters crashed without
+creating another timer. Policies with a higher failure limit reach the 16s and
+30s delay steps. Stable running for StableWindow clears consecutive failures
+but not the lifetime RestartCount.
+
+After a session reaches running with prior consecutive failures, its supervisor
+starts an instance-tagged StableWindow timer. If that same session remains
+running until expiry, the supervisor clears and publishes the consecutive
+failure count immediately. Leaving running, ending or replacing the session,
+Disable, Restart, and Close cancel that timer. `sessionResult.StableFor`
+provides the same reset at the termination boundary when timer delivery races
+with session exit.
 
 Disable and Manager Close cancel the backoff and prohibit restart. Manual
 Restart clears consecutive failures, cancels backoff, stops any current
