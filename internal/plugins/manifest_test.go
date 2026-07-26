@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,17 @@ func TestManifestValidateRejectsInvalidFields(t *testing.T) {
 				t.Fatal("Validate() error = nil, want rejection")
 			}
 		})
+	}
+}
+
+func TestManifestErrorsWrapStableSentinels(t *testing.T) {
+	manifest := validManifest()
+	manifest.SchemaVersion = 2
+	if err := manifest.Validate(); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("Validate() error = %v, want ErrInvalidManifest", err)
+	}
+	if err := validateEntrypoint(`..\plugin.exe`); !errors.Is(err, ErrInvalidEntrypoint) {
+		t.Fatalf("validateEntrypoint() error = %v, want ErrInvalidEntrypoint", err)
 	}
 }
 

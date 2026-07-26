@@ -58,10 +58,11 @@ type subscribeRequest struct {
 
 type eventSubscriber struct {
 	out        chan Event
+	notices    []Event
 	logs       []Event
 	states     map[string]Event
 	stateOrder []string
-	dropped    uint64
+	droppedLog uint64
 }
 
 func newEventHub(capacity int) *eventHub {
@@ -145,13 +146,22 @@ func (h *eventHub) run() {
 			return
 		default:
 		}
-		draining := true
-		for draining {
+		// A publish burst may keep the command channel nonempty indefinitely.
+		// Limit this round to the queue's entry snapshot so subscriptions,
+		// cancellation, and Close remain live under sustained publication.
+		quota := len(h.publish)
+	drain:
+		for range quota {
 			select {
+			case <-h.done:
+				for subscriber := range subscribers {
+					close(subscriber.out)
+				}
+				return
 			case event := <-h.publish:
 				h.dispatch(event, subscribers, &sequence)
 			default:
-				draining = false
+				break drain
 			}
 		}
 
@@ -249,16 +259,20 @@ func (s *eventSubscriber) enqueue(event Event, capacity int) {
 			s.stateOrder = append(s.stateOrder, key)
 		}
 		s.states[key] = event.clone()
-	default:
+	case EventPluginLog:
 		if len(s.logs) >= capacity {
-			s.dropped++
+			s.droppedLog++
 			return
 		}
-		if s.dropped != 0 {
-			event.Dropped = s.dropped
-			s.dropped = 0
+		if s.droppedLog != 0 {
+			event.Dropped = s.droppedLog
+			s.droppedLog = 0
 		}
 		s.logs = append(s.logs, event.clone())
+	default:
+		if len(s.notices) < capacity {
+			s.notices = append(s.notices, event.clone())
+		}
 	}
 }
 
@@ -267,6 +281,10 @@ func (s *eventSubscriber) next() (Event, bool) {
 	hasNext := false
 	if len(s.logs) != 0 {
 		next = s.logs[0]
+		hasNext = true
+	}
+	if len(s.notices) != 0 && (!hasNext || s.notices[0].Sequence < next.Sequence) {
+		next = s.notices[0]
 		hasNext = true
 	}
 	for len(s.stateOrder) != 0 {
@@ -287,6 +305,10 @@ func (s *eventSubscriber) next() (Event, bool) {
 func (s *eventSubscriber) pop(event Event) {
 	if len(s.logs) != 0 && s.logs[0].Sequence == event.Sequence {
 		s.logs = s.logs[1:]
+		return
+	}
+	if len(s.notices) != 0 && s.notices[0].Sequence == event.Sequence {
+		s.notices = s.notices[1:]
 		return
 	}
 	for index, key := range s.stateOrder {

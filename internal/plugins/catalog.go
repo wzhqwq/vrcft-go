@@ -121,7 +121,7 @@ func (c *directoryCatalog) scanRoot(ctx context.Context, root string, source Sou
 			return fmt.Errorf("plugin catalog contains an invalid manifest: %w", err)
 		}
 		if _, exists := seenIDs[manifest.ID]; exists {
-			return errors.New("plugin catalog contains duplicate plugin IDs")
+			return fmt.Errorf("%w", ErrDuplicatePluginID)
 		}
 		executable, err := resolveEntrypoint(pluginRoot, manifest.Entrypoint)
 		if err != nil {

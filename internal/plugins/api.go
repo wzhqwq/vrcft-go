@@ -9,6 +9,9 @@ import (
 )
 
 var (
+	ErrInvalidManifest                  = errors.New("plugins: invalid manifest")
+	ErrDuplicatePluginID                = errors.New("plugins: duplicate plugin ID")
+	ErrInvalidEntrypoint                = errors.New("plugins: invalid entrypoint")
 	ErrUnknownPlugin                    = errors.New("plugins: unknown plugin")
 	ErrManagerNotStarted                = errors.New("plugins: manager not started")
 	ErrManagerClosed                    = errors.New("plugins: manager closed")

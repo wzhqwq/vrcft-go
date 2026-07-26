@@ -1,7 +1,6 @@
 package plugins
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,7 +45,7 @@ type InstalledPlugin struct {
 
 func (m Manifest) Validate() error {
 	if m.SchemaVersion != manifestSchemaVersion {
-		return errors.New("plugin manifest has unsupported schema version")
+		return fmt.Errorf("%w: unsupported schema version", ErrInvalidManifest)
 	}
 
 	descriptor := pluginapi.Descriptor{
@@ -58,42 +57,42 @@ func (m Manifest) Validate() error {
 		Capabilities: m.Capabilities,
 	}
 	if err := descriptor.Validate(); err != nil {
-		return fmt.Errorf("plugin manifest identity is invalid: %w", err)
+		return fmt.Errorf("%w: identity is invalid: %w", ErrInvalidManifest, err)
 	}
 	if len(m.Name) > maxManifestNameBytes {
-		return errors.New("plugin manifest name exceeds size limit")
+		return fmt.Errorf("%w: name exceeds size limit", ErrInvalidManifest)
 	}
 	if strings.TrimSpace(m.Description) == "" {
-		return errors.New("plugin manifest description must be nonblank")
+		return fmt.Errorf("%w: description must be nonblank", ErrInvalidManifest)
 	}
 	if len(m.Description) > maxManifestDescriptionBytes {
-		return errors.New("plugin manifest description exceeds size limit")
+		return fmt.Errorf("%w: description exceeds size limit", ErrInvalidManifest)
 	}
 	if m.ProtocolMin > protocol.Version || m.ProtocolMax < protocol.Version {
-		return errors.New("plugin manifest protocol range does not include host protocol")
+		return fmt.Errorf("%w: protocol range does not include host protocol", ErrInvalidManifest)
 	}
 	if err := validateEntrypoint(m.Entrypoint); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrInvalidManifest, err)
 	}
 	return nil
 }
 
 func validateEntrypoint(entrypoint string) error {
 	if entrypoint == "" {
-		return errors.New("plugin manifest entrypoint must be nonempty")
+		return fmt.Errorf("%w: must be nonempty", ErrInvalidEntrypoint)
 	}
 	if strings.IndexByte(entrypoint, 0) >= 0 {
-		return errors.New("plugin manifest entrypoint contains NUL")
+		return fmt.Errorf("%w: contains NUL", ErrInvalidEntrypoint)
 	}
 	if filepath.IsAbs(entrypoint) || filepath.VolumeName(entrypoint) != "" ||
 		strings.HasPrefix(entrypoint, `\\`) || strings.HasPrefix(entrypoint, "//") {
-		return errors.New("plugin manifest entrypoint must be a relative path")
+		return fmt.Errorf("%w: must be a relative path", ErrInvalidEntrypoint)
 	}
 	for _, component := range strings.FieldsFunc(entrypoint, func(r rune) bool {
 		return r == '/' || r == '\\'
 	}) {
 		if component == ".." {
-			return errors.New("plugin manifest entrypoint must not traverse parent directories")
+			return fmt.Errorf("%w: must not traverse parent directories", ErrInvalidEntrypoint)
 		}
 	}
 	return nil
@@ -105,33 +104,33 @@ func resolveEntrypoint(rootDir, entrypoint string) (string, error) {
 	}
 	absoluteRoot, err := filepath.Abs(rootDir)
 	if err != nil {
-		return "", errors.New("plugin root path is invalid")
+		return "", fmt.Errorf("%w: root path is invalid", ErrInvalidEntrypoint)
 	}
 	canonicalRoot, err := filepath.EvalSymlinks(absoluteRoot)
 	if err != nil {
-		return "", errors.New("plugin root cannot be resolved")
+		return "", fmt.Errorf("%w: root cannot be resolved", ErrInvalidEntrypoint)
 	}
 	rootInfo, err := os.Stat(canonicalRoot)
 	if err != nil || !rootInfo.IsDir() {
-		return "", errors.New("plugin root is not a directory")
+		return "", fmt.Errorf("%w: root is not a directory", ErrInvalidEntrypoint)
 	}
 
 	candidate := filepath.Join(canonicalRoot, entrypoint)
 	canonicalExecutable, err := filepath.EvalSymlinks(candidate)
 	if err != nil {
-		return "", errors.New("plugin executable cannot be resolved")
+		return "", fmt.Errorf("%w: executable cannot be resolved", ErrInvalidEntrypoint)
 	}
 	canonicalExecutable, err = filepath.Abs(canonicalExecutable)
 	if err != nil {
-		return "", errors.New("plugin executable path is invalid")
+		return "", fmt.Errorf("%w: executable path is invalid", ErrInvalidEntrypoint)
 	}
 	contained, err := isContainedPath(canonicalRoot, canonicalExecutable)
 	if err != nil || !contained {
-		return "", errors.New("plugin executable escapes its root directory")
+		return "", fmt.Errorf("%w: executable escapes its root directory", ErrInvalidEntrypoint)
 	}
 	info, err := os.Stat(canonicalExecutable)
 	if err != nil || !info.Mode().IsRegular() {
-		return "", errors.New("plugin executable is not a regular file")
+		return "", fmt.Errorf("%w: executable is not a regular file", ErrInvalidEntrypoint)
 	}
 	return canonicalExecutable, nil
 }

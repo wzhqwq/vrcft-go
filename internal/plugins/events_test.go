@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -100,6 +101,41 @@ func TestEventHubLogsStayOrderedAndReportDrops(t *testing.T) {
 	}
 }
 
+func TestEventHubOnlyReportsDroppedLogsOnTheNextAcceptedLog(t *testing.T) {
+	// Catches treating discovery/removal entries as logs: their bounded loss
+	// must not contaminate the next actual log's dropped count.
+	hub := newEventHub(2)
+	t.Cleanup(hub.Close)
+	events := hub.Subscribe(context.Background())
+	for _, event := range []Event{
+		{Type: EventPluginDiscovered, PluginID: "one"},
+		{Type: EventPluginRemoved, PluginID: "two"},
+		{Type: EventPluginDiscovered, PluginID: "three"},
+	} {
+		hub.Publish(event)
+	}
+	first := receiveEvent(t, events)
+	second := receiveEvent(t, events)
+	if first.Type != EventPluginDiscovered || second.Type != EventPluginRemoved {
+		t.Fatalf("non-log order = %s, %s, want discovered then removed", first.Type, second.Type)
+	}
+
+	hub.Publish(Event{Type: EventPluginLog, PluginID: "camera", Log: &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "after non-log loss"}})
+	if event := receiveEvent(t, events); event.Dropped != 0 {
+		t.Fatalf("log after non-log loss dropped = %d, want 0", event.Dropped)
+	}
+
+	for _, message := range []string{"one", "two", "three"} {
+		hub.Publish(Event{Type: EventPluginLog, PluginID: "camera", Log: &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: message}})
+	}
+	_ = receiveEvent(t, events)
+	_ = receiveEvent(t, events)
+	hub.Publish(Event{Type: EventPluginLog, PluginID: "camera", Log: &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "four"}})
+	if event := receiveEvent(t, events); event.Dropped != 1 {
+		t.Fatalf("next accepted log dropped = %d, want 1", event.Dropped)
+	}
+}
+
 func TestEventHubCancellationAndCloseAreIndependentAndIdempotent(t *testing.T) {
 	// Catches shared subscriber cancellation, leaked subscription channels,
 	// and Close panics/deadlocks on repeated calls.
@@ -118,6 +154,44 @@ func TestEventHubCancellationAndCloseAreIndependentAndIdempotent(t *testing.T) {
 	hub.Close()
 	waitClosed(t, second)
 	hub.Close()
+}
+
+func TestEventHubSustainedPublishDoesNotStarveDeliveryOrCancellation(t *testing.T) {
+	// Catches an unbounded publish-drain loop: continuously accepted work must
+	// still leave the hub a chance to deliver and process cancellation.
+	hub := newEventHub(1)
+	t.Cleanup(hub.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	events := hub.Subscribe(ctx)
+
+	stop := make(chan struct{})
+	ready := make(chan struct{}, 4)
+	var publishers sync.WaitGroup
+	for range 4 {
+		publishers.Add(1)
+		go func() {
+			defer publishers.Done()
+			ready <- struct{}{}
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					hub.Publish(Event{Type: EventPluginStatus, PluginID: "camera", Snapshot: &RuntimeSnapshot{ID: "camera"}})
+				}
+			}
+		}()
+	}
+	for range 4 {
+		<-ready
+	}
+
+	_ = receiveEvent(t, events)
+	cancel()
+	waitEventuallyClosed(t, events)
+	hub.Close()
+	close(stop)
+	publishers.Wait()
 }
 
 func receiveEvent(t *testing.T, events <-chan Event) Event {
@@ -163,5 +237,20 @@ func waitClosed(t *testing.T, events <-chan Event) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for event channel close")
+	}
+}
+
+func waitEventuallyClosed(t *testing.T, events <-chan Event) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for event channel close")
+		}
 	}
 }

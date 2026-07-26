@@ -3,6 +3,7 @@ package plugins
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -94,8 +95,8 @@ func TestDirectoryCatalogRejectsDuplicateIDs(t *testing.T) {
 		root := t.TempDir()
 		writeCatalogPlugin(t, root, "one", validManifest())
 		writeCatalogPlugin(t, root, "two", validManifest())
-		if _, err := newCatalog(t, root).Scan(context.Background()); err == nil {
-			t.Fatal("Scan() error = nil, want duplicate rejection")
+		if _, err := newCatalog(t, root).Scan(context.Background()); !errors.Is(err, ErrDuplicatePluginID) {
+			t.Fatalf("Scan() error = %v, want ErrDuplicatePluginID", err)
 		}
 	})
 	t.Run("across roots", func(t *testing.T) {
@@ -103,8 +104,8 @@ func TestDirectoryCatalogRejectsDuplicateIDs(t *testing.T) {
 		devRoot := t.TempDir()
 		writeCatalogPlugin(t, builtinRoot, "builtin", validManifest())
 		writeCatalogPlugin(t, devRoot, "dev", validManifest())
-		if _, err := newCatalog(t, builtinRoot, devRoot).Scan(context.Background()); err == nil {
-			t.Fatal("Scan() error = nil, want duplicate rejection")
+		if _, err := newCatalog(t, builtinRoot, devRoot).Scan(context.Background()); !errors.Is(err, ErrDuplicatePluginID) {
+			t.Fatalf("Scan() error = %v, want ErrDuplicatePluginID", err)
 		}
 	})
 }
