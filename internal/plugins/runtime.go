@@ -2,7 +2,6 @@ package plugins
 
 import (
 	"context"
-	"os/exec"
 	"time"
 
 	"github.com/wzhqwq/vrcft-go/pkg/protocol"
@@ -13,7 +12,6 @@ type runtimeInstance struct {
 
 	state State
 
-	cmd     *exec.Cmd
 	process Process
 
 	conn protocol.Conn
