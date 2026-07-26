@@ -459,6 +459,20 @@ func TestUnmarshalDoesNotModifyReceiverOnError(t *testing.T) {
 	}
 }
 
+func TestJSONHelloPolicyIsDeferredToHostValidation(t *testing.T) {
+	data := []byte(`{"version":1,"type":1,"payload":{"token":"","descriptor":{"APIVersion":0,"ID":"","Name":"","Version":"","Description":""},"protocolMin":0,"protocolMax":0}}`)
+	var message Message
+	if err := json.Unmarshal(data, &message); err != nil {
+		t.Fatalf("Unmarshal(invalid-policy Hello) error = %v", err)
+	}
+	if message.Type != MessageHello {
+		t.Fatalf("Type = %v, want Hello", message.Type)
+	}
+	if err := message.Validate(); err == nil {
+		t.Fatal("Validate(invalid-policy Hello) error = nil")
+	}
+}
+
 func mustJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)

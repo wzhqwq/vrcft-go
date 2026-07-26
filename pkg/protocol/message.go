@@ -248,8 +248,14 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	decoded := Message{Version: wire.Version, Type: wire.Type, Payload: payload}
-	if err := decoded.Validate(); err != nil {
-		return err
+	// Hello policy (credentials, descriptor, and version-range compatibility)
+	// belongs to the Host handshake so it can classify the failure.  The wire
+	// envelope and payload shape remain strict above; all other messages retain
+	// eager semantic validation here.
+	if wire.Type != MessageHello {
+		if err := decoded.Validate(); err != nil {
+			return err
+		}
 	}
 	*m = decoded
 	return nil

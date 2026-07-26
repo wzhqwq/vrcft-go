@@ -76,6 +76,20 @@ func TestStreamConnBidirectionalExchange(t *testing.T) {
 	}
 }
 
+func TestWrapConnExposesStreamProtocolConn(t *testing.T) {
+	leftRaw, rightRaw := net.Pipe()
+	left, right := WrapConn(leftRaw), WrapConn(rightRaw)
+	t.Cleanup(func() { _ = left.Close(); _ = right.Close() })
+
+	received := receiveAsync(right)
+	if err := left.Send(context.Background(), testHeartbeatMessage(t)); err != nil {
+		t.Fatal(err)
+	}
+	if result := <-received; result.err != nil || result.message.Type != protocol.MessageHeartbeat {
+		t.Fatalf("wrapped Receive() = (%#v, %v)", result.message, result.err)
+	}
+}
+
 func TestStreamConnReceiveCancellationDoesNotPoisonNextRead(t *testing.T) {
 	leftRaw, rightRaw := net.Pipe()
 	left, right := newConn(leftRaw), newConn(rightRaw)

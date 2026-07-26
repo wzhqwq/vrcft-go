@@ -28,6 +28,13 @@ func newConn(conn net.Conn) protocol.Conn {
 	return &streamConn{conn: conn}
 }
 
+// WrapConn adapts an already-established in-memory or platform stream to the
+// internal framed protocol connection. It is primarily useful to internal
+// callers that need the same wire behavior as a listener-accepted connection.
+func WrapConn(conn net.Conn) protocol.Conn {
+	return newConn(conn)
+}
+
 func (c *streamConn) Send(ctx context.Context, message protocol.Message) error {
 	if ctx == nil {
 		return errors.New("ipc: Send context must not be nil")

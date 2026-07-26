@@ -4,15 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
-	"io"
+	"fmt"
+	"net"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/wzhqwq/vrcft-go/internal/ipc"
 	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
 	"github.com/wzhqwq/vrcft-go/pkg/protocol"
+	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
 
 const handshakeTestTimeout = time.Second
@@ -22,65 +26,54 @@ type handshakeCall struct {
 	err    error
 }
 
-// handshakeMemoryConn is an in-memory protocol.Conn endpoint.  It transports
-// protocol messages between two independent endpoints, rather than recording
-// calls made by hostHandshake.
-type handshakeMemoryConn struct {
-	incoming <-chan protocol.Message
-	outgoing chan<- protocol.Message
-
-	closeOnce sync.Once
-	closed    chan struct{}
-
-	receiveErr error
+type handshakeWireConn struct {
+	protocol.Conn
+	raw net.Conn
 }
 
-func newHandshakeMemoryPair() (*handshakeMemoryConn, *handshakeMemoryConn) {
-	toHost := make(chan protocol.Message, 4)
-	toPlugin := make(chan protocol.Message, 4)
-	hostClosed := make(chan struct{})
-	pluginClosed := make(chan struct{})
-	return &handshakeMemoryConn{incoming: toHost, outgoing: toPlugin, closed: hostClosed},
-		&handshakeMemoryConn{incoming: toPlugin, outgoing: toHost, closed: pluginClosed}
+type failingHandshakeConn struct{ err error }
+
+func (c failingHandshakeConn) Send(context.Context, protocol.Message) error { return c.err }
+func (c failingHandshakeConn) Receive(context.Context) (protocol.Message, error) {
+	return protocol.Message{}, c.err
+}
+func (failingHandshakeConn) Close() error { return nil }
+
+func newHandshakeWirePair() (*handshakeWireConn, *handshakeWireConn) {
+	hostRaw, pluginRaw := net.Pipe()
+	return &handshakeWireConn{Conn: ipc.WrapConn(hostRaw), raw: hostRaw},
+		&handshakeWireConn{Conn: ipc.WrapConn(pluginRaw), raw: pluginRaw}
 }
 
-func (c *handshakeMemoryConn) Send(ctx context.Context, message protocol.Message) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	select {
-	case <-c.closed:
-		return io.ErrClosedPipe
-	case <-ctx.Done():
-		return ctx.Err()
-	case c.outgoing <- message:
-		return nil
-	}
-}
-
-func (c *handshakeMemoryConn) Receive(ctx context.Context) (protocol.Message, error) {
-	if c.receiveErr != nil {
-		return protocol.Message{}, c.receiveErr
-	}
-	if err := ctx.Err(); err != nil {
-		return protocol.Message{}, err
-	}
-	select {
-	case <-c.closed:
-		return protocol.Message{}, io.ErrClosedPipe
-	case <-ctx.Done():
-		return protocol.Message{}, ctx.Err()
-	case message, ok := <-c.incoming:
-		if !ok {
-			return protocol.Message{}, io.EOF
+// sendRawHandshakeJSON bypasses outbound policy validation only for malicious
+// inbound-wire cases. The Host endpoint still receives through ipc.streamConn.
+func sendRawHandshakeJSON(ctx context.Context, conn *handshakeWireConn, payload string) error {
+	data := []byte(payload)
+	frame := make([]byte, 4+len(data))
+	binary.BigEndian.PutUint32(frame, uint32(len(data)))
+	copy(frame[4:], data)
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.raw.SetWriteDeadline(deadline); err != nil {
+			return err
 		}
-		return message, nil
+		defer conn.raw.SetWriteDeadline(time.Time{})
 	}
+	_, err := conn.raw.Write(frame)
+	return err
 }
 
-func (c *handshakeMemoryConn) Close() error {
-	c.closeOnce.Do(func() { close(c.closed) })
-	return nil
+func rawHelloJSON(t *testing.T, token string, descriptor pluginapi.Descriptor, protocolMin, protocolMax uint16) string {
+	t.Helper()
+	tokenJSON, err := json.Marshal(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptorJSON, err := json.Marshal(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf(`{"version":%d,"type":%d,"payload":{"token":%s,"descriptor":%s,"protocolMin":%d,"protocolMax":%d}}`,
+		protocol.Version, protocol.MessageHello, tokenJSON, descriptorJSON, protocolMin, protocolMax)
 }
 
 func runHostHandshake(ctx context.Context, conn protocol.Conn, manifest Manifest, token string, startup pluginapi.Startup) <-chan handshakeCall {
@@ -147,8 +140,17 @@ func validHello(token string) protocol.Message {
 	}
 }
 
+func mustHandshakeMessage(t *testing.T, payload any) protocol.Message {
+	t.Helper()
+	message, err := protocol.NewMessage(payload)
+	if err != nil {
+		t.Fatalf("protocol.NewMessage(%T) error = %v", payload, err)
+	}
+	return message
+}
+
 func TestHostHandshakeHelloInitializeReady(t *testing.T) {
-	host, plugin := newHandshakeMemoryPair()
+	host, plugin := newHandshakeWirePair()
 	t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
 	token := handshakeToken(1)
 	call := runHostHandshake(context.Background(), host, validManifest(), token, validHandshakeStartup())
@@ -173,7 +175,7 @@ func TestHostHandshakeHelloInitializeReady(t *testing.T) {
 }
 
 func TestHostHandshakeInitializeOwnsStartupSnapshot(t *testing.T) {
-	host, plugin := newHandshakeMemoryPair()
+	host, plugin := newHandshakeWirePair()
 	t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
 	token := handshakeToken(2)
 	startup := validHandshakeStartup()
@@ -209,11 +211,17 @@ func TestHostHandshakeRejectsInvalidToken(t *testing.T) {
 		{"wrong decoded length", base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{3}, 31))},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			host, plugin := newHandshakeMemoryPair()
+			host, plugin := newHandshakeWirePair()
 			t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
 			expected := handshakeToken(3)
 			call := runHostHandshake(context.Background(), host, validManifest(), expected, validHandshakeStartup())
-			if err := plugin.Send(context.Background(), validHello(test.token)); err != nil {
+			var err error
+			if test.token == "" {
+				err = sendRawHandshakeJSON(context.Background(), plugin, rawHelloJSON(t, test.token, validHandshakeDescriptor(), protocol.Version, protocol.Version))
+			} else {
+				err = plugin.Send(context.Background(), validHello(test.token))
+			}
+			if err != nil {
 				t.Fatal(err)
 			}
 			result := awaitHandshake(t, call)
@@ -222,6 +230,27 @@ func TestHostHandshakeRejectsInvalidToken(t *testing.T) {
 			}
 			if strings.Contains(result.err.Error(), expected) || (test.token != "" && strings.Contains(result.err.Error(), test.token)) {
 				t.Fatalf("hostHandshake() error exposes a token: %v", result.err)
+			}
+		})
+	}
+}
+
+func TestHostHandshakeRejectsNonCanonicalTokenText(t *testing.T) {
+	token := handshakeToken(15)
+	alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	last := strings.IndexByte(alphabet, token[len(token)-1])
+	nonCanonical := token[:len(token)-1] + string(alphabet[(last&^3)|((last+1)&3)])
+
+	for _, attack := range []string{token + "\r\n", nonCanonical} {
+		t.Run("canonical attack", func(t *testing.T) {
+			host, plugin := newHandshakeWirePair()
+			t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
+			call := runHostHandshake(context.Background(), host, validManifest(), token, validHandshakeStartup())
+			if err := plugin.Send(context.Background(), validHello(attack)); err != nil {
+				t.Fatal(err)
+			}
+			if result := awaitHandshake(t, call); !errors.Is(result.err, ErrAuthenticationFailed) {
+				t.Fatalf("hostHandshake() error = %v, want ErrAuthenticationFailed", result.err)
 			}
 		})
 	}
@@ -238,7 +267,7 @@ func TestHostHandshakeRejectsIncompatibleProtocolRange(t *testing.T) {
 		{"inverted", protocol.Version + 1, protocol.Version},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			host, plugin := newHandshakeMemoryPair()
+			host, plugin := newHandshakeWirePair()
 			t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
 			token := handshakeToken(5)
 			message := validHello(token)
@@ -246,7 +275,7 @@ func TestHostHandshakeRejectsIncompatibleProtocolRange(t *testing.T) {
 			hello.ProtocolMin, hello.ProtocolMax = test.min, test.max
 			message.Payload = hello
 			call := runHostHandshake(context.Background(), host, validManifest(), token, validHandshakeStartup())
-			if err := plugin.Send(context.Background(), message); err != nil {
+			if err := sendRawHandshakeJSON(context.Background(), plugin, rawHelloJSON(t, hello.Token, hello.Descriptor, hello.ProtocolMin, hello.ProtocolMax)); err != nil {
 				t.Fatal(err)
 			}
 			if result := awaitHandshake(t, call); !errors.Is(result.err, ErrProtocolIncompatible) {
@@ -267,7 +296,7 @@ func TestHostHandshakeRejectsInvalidOrMismatchedDescriptor(t *testing.T) {
 		{"capabilities", func(d *pluginapi.Descriptor) { d.Capabilities = 2 }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			host, plugin := newHandshakeMemoryPair()
+			host, plugin := newHandshakeWirePair()
 			t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
 			token := handshakeToken(6)
 			message := validHello(token)
@@ -275,7 +304,7 @@ func TestHostHandshakeRejectsInvalidOrMismatchedDescriptor(t *testing.T) {
 			test.mutate(&hello.Descriptor)
 			message.Payload = hello
 			call := runHostHandshake(context.Background(), host, validManifest(), token, validHandshakeStartup())
-			if err := plugin.Send(context.Background(), message); err != nil {
+			if err := sendRawHandshakeJSON(context.Background(), plugin, rawHelloJSON(t, hello.Token, hello.Descriptor, hello.ProtocolMin, hello.ProtocolMax)); err != nil {
 				t.Fatal(err)
 			}
 			if result := awaitHandshake(t, call); !errors.Is(result.err, ErrDescriptorMismatch) {
@@ -286,7 +315,7 @@ func TestHostHandshakeRejectsInvalidOrMismatchedDescriptor(t *testing.T) {
 }
 
 func TestHostHandshakeAdoptsRuntimeDisplayDescriptor(t *testing.T) {
-	host, plugin := newHandshakeMemoryPair()
+	host, plugin := newHandshakeWirePair()
 	t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
 	token := handshakeToken(7)
 	message := validHello(token)
@@ -313,7 +342,7 @@ func TestHostHandshakeAdoptsRuntimeDisplayDescriptor(t *testing.T) {
 
 func TestHostHandshakeRejectsWrongPhaseMessages(t *testing.T) {
 	t.Run("ready before hello", func(t *testing.T) {
-		host, plugin := newHandshakeMemoryPair()
+		host, plugin := newHandshakeWirePair()
 		t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
 		call := runHostHandshake(context.Background(), host, validManifest(), handshakeToken(8), validHandshakeStartup())
 		if err := plugin.Send(context.Background(), protocol.Message{Version: protocol.Version, Type: protocol.MessageReady, Payload: protocol.Ready{}}); err != nil {
@@ -325,21 +354,21 @@ func TestHostHandshakeRejectsWrongPhaseMessages(t *testing.T) {
 	})
 
 	wrongPhase := []protocol.Message{
-		{Version: protocol.Version, Type: protocol.MessageInitialize, Payload: protocol.Initialize{}},
-		{Version: protocol.Version, Type: protocol.MessageHeartbeat, Payload: protocol.Heartbeat{}},
-		{Version: protocol.Version, Type: protocol.MessageTrackingFrame, Payload: protocol.TrackingFrame{}},
-		{Version: protocol.Version, Type: protocol.MessageStatus, Payload: protocol.Status{}},
-		{Version: protocol.Version, Type: protocol.MessageLog, Payload: protocol.Log{}},
-		{Version: protocol.Version, Type: protocol.MessageConfigChanged, Payload: protocol.ConfigChanged{}},
-		{Version: protocol.Version, Type: protocol.MessageSubscriptionChanged, Payload: protocol.SubscriptionChanged{}},
-		{Version: protocol.Version, Type: protocol.MessageActiveChanged, Payload: protocol.ActiveChanged{}},
-		{Version: protocol.Version, Type: protocol.MessageShutdown, Payload: protocol.Shutdown{}},
-		{Version: protocol.Version, Type: protocol.MessageShutdownAck, Payload: protocol.ShutdownAck{}},
-		{Version: protocol.Version, Type: protocol.MessageError, Payload: protocol.Error{}},
+		mustHandshakeMessage(t, protocol.Initialize{Startup: validHandshakeStartup()}),
+		mustHandshakeMessage(t, protocol.Heartbeat{}),
+		mustHandshakeMessage(t, protocol.TrackingFrame{Generation: 1, Frame: trackingmodel.TrackingFrame{}}),
+		mustHandshakeMessage(t, protocol.Status{Status: pluginapi.DeviceStatus{State: pluginapi.DeviceReady}}),
+		mustHandshakeMessage(t, protocol.Log{Level: pluginapi.LogInfo, Message: "wrong phase"}),
+		mustHandshakeMessage(t, protocol.ConfigChanged{Config: pluginapi.Config{Revision: 1, Data: []byte(`{}`)}}),
+		mustHandshakeMessage(t, protocol.SubscriptionChanged{Subscription: pluginapi.Subscription{Generation: 1, Capabilities: trackingmodel.CapabilityEye}}),
+		mustHandshakeMessage(t, protocol.ActiveChanged{}),
+		mustHandshakeMessage(t, protocol.Shutdown{}),
+		mustHandshakeMessage(t, protocol.ShutdownAck{}),
+		mustHandshakeMessage(t, protocol.Error{Code: "peer_error", Message: "wrong phase"}),
 	}
 	for index, message := range wrongPhase {
 		t.Run("before hello message "+string(rune('a'+index)), func(t *testing.T) {
-			host, plugin := newHandshakeMemoryPair()
+			host, plugin := newHandshakeWirePair()
 			t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
 			call := runHostHandshake(context.Background(), host, validManifest(), handshakeToken(9), validHandshakeStartup())
 			if err := plugin.Send(context.Background(), message); err != nil {
@@ -352,7 +381,7 @@ func TestHostHandshakeRejectsWrongPhaseMessages(t *testing.T) {
 	}
 
 	t.Run("duplicate hello", func(t *testing.T) {
-		host, plugin := newHandshakeMemoryPair()
+		host, plugin := newHandshakeWirePair()
 		t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
 		token := handshakeToken(10)
 		call := runHostHandshake(context.Background(), host, validManifest(), token, validHandshakeStartup())
@@ -370,7 +399,7 @@ func TestHostHandshakeRejectsWrongPhaseMessages(t *testing.T) {
 
 	for index, message := range wrongPhase {
 		t.Run("after initialize message "+string(rune('a'+index)), func(t *testing.T) {
-			host, plugin := newHandshakeMemoryPair()
+			host, plugin := newHandshakeWirePair()
 			t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
 			token := handshakeToken(11)
 			call := runHostHandshake(context.Background(), host, validManifest(), token, validHandshakeStartup())
@@ -390,9 +419,9 @@ func TestHostHandshakeRejectsWrongPhaseMessages(t *testing.T) {
 
 func TestHostHandshakeTimesOutWaitingForHelloOrReady(t *testing.T) {
 	t.Run("hello", func(t *testing.T) {
-		host, plugin := newHandshakeMemoryPair()
+		host, plugin := newHandshakeWirePair()
 		t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 		defer cancel()
 		result := awaitHandshake(t, runHostHandshake(ctx, host, validManifest(), handshakeToken(12), validHandshakeStartup()))
 		if !errors.Is(result.err, ErrHandshakeTimeout) || !errors.Is(result.err, context.DeadlineExceeded) {
@@ -401,10 +430,10 @@ func TestHostHandshakeTimesOutWaitingForHelloOrReady(t *testing.T) {
 	})
 
 	t.Run("ready", func(t *testing.T) {
-		host, plugin := newHandshakeMemoryPair()
+		host, plugin := newHandshakeWirePair()
 		t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
 		token := handshakeToken(13)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 		defer cancel()
 		call := runHostHandshake(ctx, host, validManifest(), token, validHandshakeStartup())
 		if err := plugin.Send(context.Background(), validHello(token)); err != nil {
@@ -419,18 +448,37 @@ func TestHostHandshakeTimesOutWaitingForHelloOrReady(t *testing.T) {
 }
 
 func TestHostHandshakeJoinsSafeConnectionFailureWithoutSecrets(t *testing.T) {
-	host, plugin := newHandshakeMemoryPair()
-	t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
 	failure := errors.New("connection reset")
-	host.receiveErr = failure
 	token := handshakeToken(14)
 	configSecret := `{"private":"config-secret"}`
 	startup := pluginapi.Startup{Config: pluginapi.Config{Revision: 1, Data: []byte(configSecret)}}
-	result := awaitHandshake(t, runHostHandshake(context.Background(), host, validManifest(), token, startup))
+	result := awaitHandshake(t, runHostHandshake(context.Background(), failingHandshakeConn{err: failure}, validManifest(), token, startup))
 	if !errors.Is(result.err, ErrProtocolViolation) || !errors.Is(result.err, failure) {
 		t.Fatalf("hostHandshake() error = %v, want joined protocol failure", result.err)
 	}
 	if got := result.err.Error(); strings.Contains(got, token) || strings.Contains(got, configSecret) {
 		t.Fatalf("hostHandshake() error exposes secret data: %v", result.err)
+	}
+}
+
+func TestHostHandshakePreservesConnectionCauseWithoutExposingItsText(t *testing.T) {
+	token := handshakeToken(16)
+	configSecret := `{"private":"config-secret"}`
+	startup := pluginapi.Startup{Config: pluginapi.Config{Revision: 1, Data: []byte(configSecret)}}
+	for _, failure := range []error{
+		errors.New("transport token fragment " + token[:12]),
+		errors.New(`transport escaped config {\"private\":\"config-secret\"}`),
+		errors.New("transport complete secrets " + token + " " + configSecret),
+	} {
+		t.Run("opaque cause", func(t *testing.T) {
+			result := awaitHandshake(t, runHostHandshake(context.Background(), failingHandshakeConn{err: failure}, validManifest(), token, startup))
+			if !errors.Is(result.err, ErrProtocolViolation) || !errors.Is(result.err, failure) {
+				t.Fatalf("hostHandshake() error = %v, want discoverable protocol/cause errors", result.err)
+			}
+			const want = "plugins: protocol violation\nplugins: handshake connection failure"
+			if got := result.err.Error(); got != want || strings.Contains(got, failure.Error()) {
+				t.Fatalf("hostHandshake() error = %q, want opaque public text %q", got, want)
+			}
+		})
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
-	"strings"
 
 	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
 	"github.com/wzhqwq/vrcft-go/pkg/protocol"
@@ -33,7 +32,7 @@ func hostHandshake(
 	expectedToken, validExpectedToken := decodeSessionToken(token)
 	message, err := conn.Receive(ctx)
 	if err != nil {
-		return handshakeResult{}, handshakeConnectionError(ctx, err, token, startup)
+		return handshakeResult{}, handshakeConnectionError(ctx, err)
 	}
 	hello, ok := message.Payload.(protocol.Hello)
 	if message.Version != protocol.Version || message.Type != protocol.MessageHello || !ok {
@@ -41,7 +40,8 @@ func hostHandshake(
 	}
 
 	providedToken, validProvidedToken := decodeSessionToken(hello.Token)
-	if !validExpectedToken || !validProvidedToken || subtle.ConstantTimeCompare(expectedToken, providedToken) != 1 {
+	tokensMatch := subtle.ConstantTimeCompare(expectedToken[:], providedToken[:])
+	if validExpectedToken&validProvidedToken&tokensMatch != 1 {
 		return handshakeResult{}, ErrAuthenticationFailed
 	}
 	if !helloProtocolCompatible(hello, manifest) {
@@ -56,12 +56,12 @@ func hostHandshake(
 		return handshakeResult{}, ErrProtocolViolation
 	}
 	if err := conn.Send(ctx, initialize); err != nil {
-		return handshakeResult{}, handshakeConnectionError(ctx, err, token, startup)
+		return handshakeResult{}, handshakeConnectionError(ctx, err)
 	}
 
 	message, err = conn.Receive(ctx)
 	if err != nil {
-		return handshakeResult{}, handshakeConnectionError(ctx, err, token, startup)
+		return handshakeResult{}, handshakeConnectionError(ctx, err)
 	}
 	if message.Version != protocol.Version || message.Type != protocol.MessageReady {
 		return handshakeResult{}, ErrProtocolViolation
@@ -72,12 +72,18 @@ func hostHandshake(
 	return handshakeResult{Descriptor: hello.Descriptor}, nil
 }
 
-func decodeSessionToken(token string) ([]byte, bool) {
-	decoded, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil || len(decoded) != sessionTokenSize {
-		return nil, false
+func decodeSessionToken(token string) ([sessionTokenSize]byte, int) {
+	var decodedToken [sessionTokenSize]byte
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(token)
+	copy(decodedToken[:], decoded)
+
+	valid := subtle.ConstantTimeEq(int32(len(decoded)), sessionTokenSize)
+	canonical := base64.RawURLEncoding.EncodeToString(decodedToken[:])
+	valid &= subtle.ConstantTimeCompare([]byte(token), []byte(canonical))
+	if err != nil {
+		valid = 0
 	}
-	return decoded, true
+	return decodedToken, valid
 }
 
 func helloProtocolCompatible(hello protocol.Hello, manifest Manifest) bool {
@@ -101,21 +107,15 @@ func cloneStartup(startup pluginapi.Startup) pluginapi.Startup {
 	return startup
 }
 
-func handshakeConnectionError(ctx context.Context, err error, token string, startup pluginapi.Startup) error {
+func handshakeConnectionError(ctx context.Context, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return errors.Join(ErrHandshakeTimeout, context.DeadlineExceeded)
 	}
-	if !handshakeErrorIsSafe(err, token, startup.Config.Data) {
-		return ErrProtocolViolation
-	}
-	return errors.Join(ErrProtocolViolation, err)
+	return errors.Join(ErrProtocolViolation, opaqueHandshakeCause{cause: err})
 }
 
-func handshakeErrorIsSafe(err error, token string, config []byte) bool {
-	if err == nil {
-		return false
-	}
-	message := err.Error()
-	return (token == "" || !strings.Contains(message, token)) &&
-		(len(config) == 0 || !strings.Contains(message, string(config)))
-}
+type opaqueHandshakeCause struct{ cause error }
+
+func (e opaqueHandshakeCause) Error() string { return "plugins: handshake connection failure" }
+
+func (e opaqueHandshakeCause) Is(target error) bool { return errors.Is(e.cause, target) }
