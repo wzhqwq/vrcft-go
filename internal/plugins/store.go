@@ -32,6 +32,20 @@ type Store interface {
 type jsonStore struct {
 	path     string
 	maxBytes int64
+	ops      jsonStoreOps
+}
+
+type jsonStoreFile interface {
+	Name() string
+	Chmod(os.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+type jsonStoreOps struct {
+	createTemp func(dir, pattern string) (jsonStoreFile, error)
+	replace    func(oldPath, newPath string) error
 }
 
 type wireSettings struct {
@@ -44,10 +58,6 @@ type wirePreference struct {
 	Config  pluginapi.Config `json:"config"`
 }
 
-// renameJSONStoreFile is a package-private seam for exercising replacement
-// failures without weakening the Store API.
-var renameJSONStoreFile = os.Rename
-
 func NewJSONStore(path string, maxBytes int64) (Store, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("plugins: store path must be nonblank")
@@ -55,7 +65,7 @@ func NewJSONStore(path string, maxBytes int64) (Store, error) {
 	if maxBytes <= 0 {
 		return nil, errors.New("plugins: store maxBytes must be positive")
 	}
-	return &jsonStore{path: path, maxBytes: maxBytes}, nil
+	return &jsonStore{path: path, maxBytes: maxBytes, ops: defaultJSONStoreOps()}, nil
 }
 
 func (s *jsonStore) Load(ctx context.Context) (PluginSettings, error) {
@@ -100,7 +110,7 @@ func (s *jsonStore) Save(ctx context.Context, settings PluginSettings) error {
 	if err != nil {
 		return err
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(s.path), ".plugins-*.tmp")
+	temporary, err := s.ops.createTemp(filepath.Dir(s.path), ".plugins-*.tmp")
 	if err != nil {
 		return fmt.Errorf("plugins: create temporary settings: %w", err)
 	}
@@ -122,10 +132,19 @@ func (s *jsonStore) Save(ctx context.Context, settings PluginSettings) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("plugins: close temporary settings: %w", err)
 	}
-	if err := renameJSONStoreFile(temporaryPath, s.path); err != nil {
+	if err := s.ops.replace(temporaryPath, s.path); err != nil {
 		return fmt.Errorf("plugins: replace settings: %w", err)
 	}
 	return nil
+}
+
+func defaultJSONStoreOps() jsonStoreOps {
+	return jsonStoreOps{
+		createTemp: func(dir, pattern string) (jsonStoreFile, error) {
+			return os.CreateTemp(dir, pattern)
+		},
+		replace: replaceJSONStoreFile,
+	}
 }
 
 func encodeSettings(settings PluginSettings, maxBytes int64) ([]byte, error) {

@@ -63,6 +63,38 @@ func TestJSONStoreRoundTripsEnabledConfigAndUnknownIDs(t *testing.T) {
 	}
 }
 
+func TestJSONStoreReplacesExistingSettingsWithCompleteNewVersion(t *testing.T) {
+	store, path := newTestJSONStore(t, 4096)
+	first := PluginSettings{Plugins: map[string]PluginPreference{
+		"vendor.device": {Enabled: true, Config: testConfig(1, `{"mode":"first"}`)},
+	}}
+	second := PluginSettings{Plugins: map[string]PluginPreference{
+		"vendor.device": {Enabled: false, Config: testConfig(2, `{"mode":"second"}`)},
+	}}
+	if err := store.Save(context.Background(), first); err != nil {
+		t.Fatalf("first Save() error = %v", err)
+	}
+	if err := store.Save(context.Background(), second); err != nil {
+		t.Fatalf("second Save() error = %v", err)
+	}
+
+	loaded, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	preference := loaded.Plugins["vendor.device"]
+	if preference.Enabled || preference.Config.Revision != 2 || string(preference.Config.Data) != `{"mode":"second"}` {
+		t.Fatalf("Load() after replacement = %+v, want complete second version", preference)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "first") || !strings.Contains(string(data), "second") {
+		t.Fatalf("replacement file = %s, want only complete second version", data)
+	}
+}
+
 func TestJSONStoreRejectsUnknownFields(t *testing.T) {
 	store, path := newTestJSONStore(t, 4096)
 	data := []byte(`{"plugins":[{"id":"vendor.device","enabled":true,"config":{"Revision":1,"Data":{"gain":1}},"unexpected":true}]}`)
@@ -171,9 +203,10 @@ func TestJSONStorePreservesOldFileWhenRenameFails(t *testing.T) {
 	if err := os.WriteFile(path, old, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	originalRename := renameJSONStoreFile
-	renameJSONStoreFile = func(string, string) error { return errors.New("injected rename failure") }
-	t.Cleanup(func() { renameJSONStoreFile = originalRename })
+	jsonStore := store.(*jsonStore)
+	originalReplace := jsonStore.ops.replace
+	jsonStore.ops.replace = func(string, string) error { return errors.New("injected rename failure") }
+	t.Cleanup(func() { jsonStore.ops.replace = originalReplace })
 
 	err := store.Save(context.Background(), PluginSettings{Plugins: map[string]PluginPreference{
 		"vendor.device": {Enabled: true, Config: testConfig(1, `{}`)},
@@ -188,6 +221,80 @@ func TestJSONStorePreservesOldFileWhenRenameFails(t *testing.T) {
 	if string(got) != string(old) {
 		t.Fatalf("destination after failed replacement = %s, want original %s", got, old)
 	}
+}
+
+func TestJSONStoreCleansTemporaryFileAndPreservesDestinationOnWriteLifecycleFailure(t *testing.T) {
+	store, path := newTestJSONStore(t, 4096)
+	old := []byte(`{"plugins":[]}`)
+	if err := os.WriteFile(path, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings := PluginSettings{Plugins: map[string]PluginPreference{
+		"vendor.device": {Enabled: true, Config: testConfig(1, `{}`)},
+	}}
+
+	for _, stage := range []string{"write", "sync", "close"} {
+		t.Run(stage, func(t *testing.T) {
+			jsonStore := store.(*jsonStore)
+			originalCreateTemp := jsonStore.ops.createTemp
+			jsonStore.ops.createTemp = func(dir, pattern string) (jsonStoreFile, error) {
+				file, err := os.CreateTemp(dir, pattern)
+				if err != nil {
+					return nil, err
+				}
+				return &failingJSONStoreFile{File: file, stage: stage}, nil
+			}
+			t.Cleanup(func() { jsonStore.ops.createTemp = originalCreateTemp })
+
+			if err := store.Save(context.Background(), settings); err == nil {
+				t.Fatal("Save() error = nil, want injected lifecycle failure")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(old) {
+				t.Fatalf("destination after failed %s = %s, want original %s", stage, got, old)
+			}
+			temporary, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".plugins-*.tmp"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(temporary) != 0 {
+				t.Fatalf("temporary files after failed %s = %v, want none", stage, temporary)
+			}
+		})
+	}
+}
+
+type failingJSONStoreFile struct {
+	*os.File
+	stage string
+}
+
+func (f *failingJSONStoreFile) Write(data []byte) (int, error) {
+	if f.stage == "write" {
+		return 0, errors.New("injected write failure")
+	}
+	return f.File.Write(data)
+}
+
+func (f *failingJSONStoreFile) Sync() error {
+	if f.stage == "sync" {
+		return errors.New("injected sync failure")
+	}
+	return f.File.Sync()
+}
+
+func (f *failingJSONStoreFile) Close() error {
+	err := f.File.Close()
+	if err != nil {
+		return err
+	}
+	if f.stage == "close" {
+		return errors.New("injected close failure")
+	}
+	return nil
 }
 
 func TestJSONStoreHonorsCanceledContextBeforeIO(t *testing.T) {
