@@ -114,18 +114,60 @@ func TestSessionWriterBuildsExactTypedMessagesAndSkipsIdempotentUpdates(t *testi
 	}
 
 	got := conn.messages()
-	wantPayloads := []any{
-		protocol.ActiveChanged{Active: true},
-		protocol.ConfigChanged{Config: requests[2].state.Config},
-		protocol.SubscriptionChanged{Subscription: requests[3].state.Subscription},
+	wantMessages := []struct {
+		messageType protocol.MessageType
+		payload     any
+	}{
+		{protocol.MessageActiveChanged, protocol.ActiveChanged{Active: true}},
+		{protocol.MessageConfigChanged, protocol.ConfigChanged{Config: requests[2].state.Config}},
+		{protocol.MessageSubscriptionChanged, protocol.SubscriptionChanged{Subscription: requests[3].state.Subscription}},
 	}
-	if len(got) != len(wantPayloads) {
-		t.Fatalf("sent %d messages, want %d: %#v", len(got), len(wantPayloads), got)
+	if len(got) != len(wantMessages) {
+		t.Fatalf("sent %d messages, want %d: %#v", len(got), len(wantMessages), got)
 	}
-	for i, payload := range wantPayloads {
-		if got[i].Version != protocol.Version || !reflect.DeepEqual(got[i].Payload, payload) {
-			t.Errorf("message[%d] = %#v, want payload %#v", i, got[i], payload)
+	for i, want := range wantMessages {
+		if got[i].Version != protocol.Version || got[i].Type != want.messageType || !reflect.DeepEqual(got[i].Payload, want.payload) {
+			t.Errorf("message[%d] = %#v, want type %d payload %#v", i, got[i], want.messageType, want.payload)
 		}
+	}
+}
+
+func TestSessionWriterOwnsQueuedConfigAtAdmission(t *testing.T) {
+	conn := newRecordingControlConn()
+	conn.block = make(chan struct{})
+	conn.entered = make(chan struct{}, 4)
+	writer := newSessionWriter(conn, controlState{}, 2)
+	defer stopSessionWriter(t, writer)
+
+	first := asyncControl(writer, controlRequest{kind: controlActive, state: controlState{Active: true}})
+	awaitSignal(t, conn.entered)
+
+	config := pluginapi.Config{Revision: 1, Data: json.RawMessage(`{"gain":2}`)}
+	second := asyncControl(writer, controlRequest{kind: controlConfig, state: controlState{Config: config}})
+	waitForQueueLength(t, writer, 1)
+	// Synchronize with Control's post-enqueue unlock before mutating the caller's
+	// buffer. The writer is still blocked in the earlier Send.
+	writer.mu.Lock()
+	writer.mu.Unlock()
+	config.Data[8] = '9'
+	close(conn.block)
+
+	if err := <-first; err != nil {
+		t.Fatalf("first Control() error = %v", err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("Config Control() error = %v", err)
+	}
+	got := conn.messages()
+	if len(got) != 2 {
+		t.Fatalf("sent %d messages, want 2: %#v", len(got), got)
+	}
+	configMessage, ok := got[1].Payload.(protocol.ConfigChanged)
+	if !ok {
+		t.Fatalf("second payload = %T, want protocol.ConfigChanged", got[1].Payload)
+	}
+	if actual := string(configMessage.Config.Data); actual != `{"gain":2}` {
+		t.Fatalf("sent Config.Data = %q, want admission-time bytes", actual)
 	}
 }
 

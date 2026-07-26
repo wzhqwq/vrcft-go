@@ -114,6 +114,9 @@ func (w *sessionWriter) Control(ctx context.Context, request controlRequest) err
 		w.mu.Unlock()
 		return err
 	}
+	if request.kind == controlConfig {
+		request.state.Config = request.state.Config.Clone()
+	}
 	select {
 	case w.requests <- request:
 		if request.kind == controlShutdown {
