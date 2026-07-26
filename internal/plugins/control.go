@@ -80,8 +80,9 @@ type sessionWriter struct {
 	requests chan controlRequest
 	done     chan struct{}
 
-	mu        sync.Mutex
-	accepting bool
+	mu          sync.Mutex
+	accepting   bool
+	terminalErr error
 }
 
 func newSessionWriter(conn protocol.Conn, initial controlState, capacity int) *sessionWriter {
@@ -134,6 +135,17 @@ func (w *sessionWriter) Done() <-chan struct{} {
 	return w.done
 }
 
+func (w *sessionWriter) terminalError() error {
+	<-w.done
+	return w.currentTerminalError()
+}
+
+func (w *sessionWriter) currentTerminalError() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.terminalErr
+}
+
 func (w *sessionWriter) run(state controlState) {
 	defer close(w.done)
 	for {
@@ -148,6 +160,9 @@ func (w *sessionWriter) run(state controlState) {
 			continue
 		}
 		if err := w.conn.Send(context.Background(), message); err != nil {
+			w.mu.Lock()
+			w.terminalErr = err
+			w.mu.Unlock()
 			request.reply <- err
 			w.stopAndRejectQueued()
 			return

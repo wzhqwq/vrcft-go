@@ -240,6 +240,13 @@ func TestSessionWriterShutdownFollowsAcceptedControlsAndBlocksLaterControls(t *t
 	conn.block = make(chan struct{})
 	conn.entered = make(chan struct{}, 4)
 	writer := newSessionWriter(conn, controlState{}, 2)
+	terminal := make(chan error, 1)
+	go func() { terminal <- writer.terminalError() }()
+	select {
+	case err := <-terminal:
+		t.Fatalf("terminalError() returned before writer termination: %v", err)
+	default:
+	}
 
 	first := asyncControl(writer, controlRequest{kind: controlActive, state: controlState{Active: true}})
 	awaitSignal(t, conn.entered)
@@ -259,6 +266,9 @@ func TestSessionWriterShutdownFollowsAcceptedControlsAndBlocksLaterControls(t *t
 	case <-writer.Done():
 	case <-time.After(time.Second):
 		t.Fatal("writer Done did not close after Shutdown")
+	}
+	if err := <-terminal; err != nil {
+		t.Fatalf("terminalError() after clean Shutdown = %v, want nil", err)
 	}
 	got := conn.messages()
 	if len(got) != 2 || got[0].Type != protocol.MessageActiveChanged || got[1].Type != protocol.MessageShutdown {
@@ -280,6 +290,9 @@ func TestSessionWriterSendFailureCompletesOwnerAndTerminates(t *testing.T) {
 	case <-writer.Done():
 	case <-time.After(time.Second):
 		t.Fatal("writer did not terminate after Send failure")
+	}
+	if err := writer.terminalError(); !errors.Is(err, sendErr) {
+		t.Fatalf("terminalError() = %v, want send failure", err)
 	}
 	if err := writer.Control(context.Background(), controlRequest{kind: controlActive}); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("Control(after failure) error = %v, want ErrInvalidState", err)
