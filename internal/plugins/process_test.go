@@ -215,6 +215,55 @@ func TestProcessLauncherClassifiesMissingWorkingDirectoryWithoutLeakingSecrets(t
 	}
 }
 
+func TestSanitizedStartErrorClassifiesWorkingDirectoryPathErrorsWithoutLeakingSecrets(t *testing.T) {
+	workingDir := filepath.Join(t.TempDir(), "working-directory-secret-marker")
+	for _, test := range []struct {
+		name  string
+		err   error
+		cause error
+	}{
+		{
+			name:  "chdir not found",
+			err:   &os.PathError{Op: "chdir", Path: workingDir, Err: os.ErrNotExist},
+			cause: os.ErrNotExist,
+		},
+		{
+			name:  "working directory path access denied",
+			err:   &os.PathError{Op: "fork/exec", Path: workingDir, Err: os.ErrPermission},
+			cause: os.ErrPermission,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := sanitizedStartError(test.err, workingDir)
+			if !errors.Is(err, test.cause) {
+				t.Fatalf("sanitizedStartError() error = %v, want error matching %v", err, test.cause)
+			}
+			if !strings.Contains(err.Error(), "working directory") {
+				t.Fatalf("sanitizedStartError() error = %q, want working-directory classification", err)
+			}
+			for _, secret := range []string{workingDir, "argument-secret-marker", "environment-secret-marker"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("sanitizedStartError() leaked sensitive input in %q", err)
+				}
+			}
+		})
+	}
+}
+
+func TestSanitizedStartErrorRechecksWorkingDirectoryAfterStartFailure(t *testing.T) {
+	missingWorkingDir := filepath.Join(t.TempDir(), "working-directory-secret-marker")
+	err := sanitizedStartError(errors.New("start failure"), missingWorkingDir)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("sanitizedStartError() error = %v, want error matching os.ErrNotExist", err)
+	}
+	if !strings.Contains(err.Error(), "working directory") {
+		t.Fatalf("sanitizedStartError() error = %q, want working-directory classification", err)
+	}
+	if strings.Contains(err.Error(), missingWorkingDir) {
+		t.Fatalf("sanitizedStartError() leaked working directory in %q", err)
+	}
+}
+
 func TestProcessLauncherHonorsCanceledContextBeforeStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

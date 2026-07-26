@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -58,14 +59,8 @@ func (processLauncher) Start(ctx context.Context, spec ProcessSpec) (Process, er
 	if !filepath.IsAbs(spec.Executable) {
 		return nil, errors.New("plugins: process executable must be absolute")
 	}
-	if spec.WorkingDir != "" {
-		info, err := os.Stat(spec.WorkingDir)
-		if err != nil {
-			return nil, sanitizedStartError(err, startFailureWorkingDirectory)
-		}
-		if !info.IsDir() {
-			return nil, errors.New("plugins: process working directory is unavailable")
-		}
+	if err := workingDirectoryError(spec.WorkingDir); err != nil {
+		return nil, sanitizedStartError(err, spec.WorkingDir)
 	}
 	command := exec.Command(spec.Executable, spec.Args...)
 	command.Dir = spec.WorkingDir
@@ -75,12 +70,20 @@ func (processLauncher) Start(ctx context.Context, spec ProcessSpec) (Process, er
 		return nil, err
 	}
 	if err := command.Start(); err != nil {
-		return nil, sanitizedStartError(err, startFailureExecutable)
+		return nil, sanitizedStartError(err, spec.WorkingDir)
 	}
 	return &commandProcess{command: command}, nil
 }
 
-func sanitizedStartError(err error, target startFailureTarget) error {
+func sanitizedStartError(err error, workingDir string) error {
+	target := startFailureExecutable
+	if startErrorTargetsWorkingDirectory(err, workingDir) {
+		target = startFailureWorkingDirectory
+	} else if directoryErr := workingDirectoryError(workingDir); directoryErr != nil {
+		target = startFailureWorkingDirectory
+		err = directoryErr
+	}
+
 	cause := err
 	var executableError *exec.Error
 	if errors.As(cause, &executableError) {
@@ -97,8 +100,45 @@ func sanitizedStartError(err error, target startFailureTarget) error {
 	case errors.Is(cause, os.ErrPermission), os.IsPermission(cause):
 		return classifiedStartError(target, "access denied", os.ErrPermission)
 	default:
+		if target == startFailureWorkingDirectory {
+			return errors.New("plugins: process working directory is unavailable")
+		}
 		return errors.New("plugins: start process failed")
 	}
+}
+
+func startErrorTargetsWorkingDirectory(err error, workingDir string) bool {
+	if workingDir == "" {
+		return false
+	}
+	var pathError *os.PathError
+	if !errors.As(err, &pathError) {
+		return false
+	}
+	return pathError.Op == "chdir" || sameWorkingDirectoryPath(pathError.Path, workingDir)
+}
+
+func sameWorkingDirectoryPath(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
+
+func workingDirectoryError(workingDir string) error {
+	if workingDir == "" {
+		return nil
+	}
+	info, err := os.Stat(workingDir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("working directory is not a directory")
+	}
+	return nil
 }
 
 func classifiedStartError(target startFailureTarget, detail string, cause error) error {
