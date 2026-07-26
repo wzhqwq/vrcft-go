@@ -4,3 +4,4 @@ frontend/dist
 
 .*-gocache/
 .superpowers/
+.tmp/
