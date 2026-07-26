@@ -141,25 +141,28 @@ func (c *directoryCatalog) scanRoot(ctx context.Context, root string, source Sou
 func (c *directoryCatalog) readManifest(pluginRoot string) (Manifest, error) {
 	file, err := os.Open(filepath.Join(pluginRoot, "manifest.json"))
 	if err != nil {
-		return Manifest{}, errors.New("manifest cannot be opened")
+		return Manifest{}, fmt.Errorf("%w: cannot open manifest: %w", ErrInvalidManifest, err)
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return Manifest{}, errors.New("manifest cannot be inspected")
+		return Manifest{}, fmt.Errorf("%w: cannot inspect manifest: %w", ErrInvalidManifest, err)
 	}
 	if info.Size() > c.maxManifestBytes {
-		return Manifest{}, errors.New("manifest exceeds size limit")
+		return Manifest{}, fmt.Errorf("%w: manifest exceeds size limit", ErrInvalidManifest)
 	}
 	decoder := json.NewDecoder(io.LimitReader(file, c.maxManifestBytes+1))
 	decoder.DisallowUnknownFields()
 	var manifest Manifest
 	if err := decoder.Decode(&manifest); err != nil {
-		return Manifest{}, errors.New("manifest JSON is invalid")
+		return Manifest{}, fmt.Errorf("%w: manifest JSON is invalid: %w", ErrInvalidManifest, err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return Manifest{}, errors.New("manifest JSON has trailing content")
+		if err != nil {
+			return Manifest{}, fmt.Errorf("%w: manifest JSON has trailing content: %w", ErrInvalidManifest, err)
+		}
+		return Manifest{}, fmt.Errorf("%w: manifest JSON has trailing content", ErrInvalidManifest)
 	}
 	if err := manifest.Validate(); err != nil {
 		return Manifest{}, err

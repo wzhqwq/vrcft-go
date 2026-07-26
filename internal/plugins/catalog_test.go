@@ -90,6 +90,65 @@ func TestDirectoryCatalogRejectsOversizedManifest(t *testing.T) {
 	}
 }
 
+func TestDirectoryCatalogMalformedManifestErrorsWrapInvalidManifest(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, root string) Catalog
+	}{
+		{
+			name: "missing manifest",
+			setup: func(t *testing.T, root string) Catalog {
+				if err := os.Mkdir(filepath.Join(root, "plugin"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				return newCatalog(t, root)
+			},
+		},
+		{
+			name: "oversized manifest",
+			setup: func(t *testing.T, root string) Catalog {
+				writeCatalogPlugin(t, root, "plugin", validManifest())
+				catalog, err := NewDirectoryCatalog(DirectoryCatalogConfig{BuiltinRoot: root, MaxManifestBytes: 32})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return catalog
+			},
+		},
+		{
+			name: "unknown JSON field",
+			setup: func(t *testing.T, root string) Catalog {
+				plugin := writeCatalogPlugin(t, root, "plugin", validManifest())
+				if err := os.WriteFile(filepath.Join(plugin, "manifest.json"), []byte(`{"schemaVersion":1,"id":"vendor.device","name":"Vendor Device","version":"1.2.3","description":"Test device","protocolMin":1,"protocolMax":1,"entrypoint":"plugin.exe","capabilities":1,"unexpected":true}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return newCatalog(t, root)
+			},
+		},
+		{
+			name: "trailing JSON value",
+			setup: func(t *testing.T, root string) Catalog {
+				plugin := writeCatalogPlugin(t, root, "plugin", validManifest())
+				data, err := json.Marshal(validManifest())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(plugin, "manifest.json"), append(data, []byte(` {}`)...), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return newCatalog(t, root)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := test.setup(t, t.TempDir()).Scan(context.Background()); !errors.Is(err, ErrInvalidManifest) {
+				t.Fatalf("Scan() error = %v, want ErrInvalidManifest", err)
+			}
+		})
+	}
+}
+
 func TestDirectoryCatalogRejectsDuplicateIDs(t *testing.T) {
 	t.Run("within root", func(t *testing.T) {
 		root := t.TempDir()
