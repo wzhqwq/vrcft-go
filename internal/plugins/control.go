@@ -70,9 +70,10 @@ const (
 )
 
 type controlRequest struct {
-	kind  controlKind
-	state controlState
-	reply chan error
+	kind   controlKind
+	state  controlState
+	reply  chan error
+	onSend func()
 }
 
 type sessionWriter struct {
@@ -158,6 +159,9 @@ func (w *sessionWriter) run(state controlState) {
 		if !changed {
 			request.reply <- nil
 			continue
+		}
+		if request.onSend != nil {
+			request.onSend()
 		}
 		if err := w.conn.Send(context.Background(), message); err != nil {
 			w.mu.Lock()

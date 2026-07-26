@@ -217,9 +217,7 @@ func TestPluginSessionListensBeforeLaunchAndCompletesRealHandshake(t *testing.T)
 
 	process.wait <- nil
 	result := awaitSessionResult(t, session.Done())
-	if result.Err != nil {
-		t.Fatalf("session result error = %v, want clean process exit", result.Err)
-	}
+	assertUnexpectedExitResult(t, result)
 	if result.StartedAt.IsZero() {
 		t.Fatal("session StartedAt is zero after successful handshake")
 	}
@@ -283,9 +281,7 @@ func TestPluginSessionOwnsStartupConfigBeforeAsyncLaunch(t *testing.T) {
 		t.Fatalf("Initialize Config.Data = %q after caller mutation, want owned bytes", got)
 	}
 	process.wait <- nil
-	if result := awaitSessionResult(t, session.Done()); result.Err != nil {
-		t.Fatalf("session result error = %v", result.Err)
-	}
+	assertUnexpectedExitResult(t, awaitSessionResult(t, session.Done()))
 }
 
 func TestPluginSessionStartupFailuresCleanOwnedResources(t *testing.T) {
@@ -423,6 +419,110 @@ func TestPluginSessionHandshakeTimeoutClosesConnectionAndProcess(t *testing.T) {
 	}
 	if got := process.kills(); got != 1 {
 		t.Fatalf("process Kill calls = %d, want 1", got)
+	}
+}
+
+func TestPluginSessionStartupCleanupHonorsKillTimeout(t *testing.T) {
+	t.Run("accept failure", func(t *testing.T) {
+		process := newSessionTestProcess()
+		process.mu.Lock()
+		process.unblockOnKill = false
+		process.mu.Unlock()
+		session := newPluginSession(context.Background(), 26, sessionConfig{
+			Plugin: InstalledPlugin{
+				Manifest:   validManifest(),
+				RootDir:    `C:\plugins\camera`,
+				Executable: `C:\plugins\camera\plugin.exe`,
+			},
+			Startup:          validHandshakeStartup(),
+			HandshakeTimeout: time.Second,
+			HeartbeatTimeout: time.Minute,
+			GracefulTimeout:  20 * time.Millisecond,
+			KillTimeout:      20 * time.Millisecond,
+			ControlCapacity:  2,
+		}, sessionDependencies{
+			credentials: func() (string, string, error) {
+				return "session-accept-kill-timeout", handshakeToken(33), nil
+			},
+			listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+				return &sessionTestListener{err: errors.New("accept-secret")}, nil
+			},
+			launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+				return process, nil
+			}},
+		})
+		result, ok := awaitBoundedStartupResult(session.Done(), 150*time.Millisecond)
+		process.wait <- errors.New("cleanup")
+		if !ok {
+			t.Fatal("Accept failure blocked indefinitely in Process.Wait")
+		}
+		if !errors.Is(result.Err, ErrKillTimeout) {
+			t.Fatalf("session error = %v, want ErrKillTimeout", result.Err)
+		}
+		if strings.Contains(result.Err.Error(), "accept-secret") {
+			t.Fatalf("session error exposes accept cause: %v", result.Err)
+		}
+	})
+
+	t.Run("handshake failure", func(t *testing.T) {
+		hostRaw, pluginRaw := net.Pipe()
+		hostConn := ipc.WrapConn(hostRaw)
+		pluginConn := ipc.WrapConn(pluginRaw)
+		t.Cleanup(func() {
+			_ = hostConn.Close()
+			_ = pluginConn.Close()
+		})
+		process := newSessionTestProcess()
+		process.mu.Lock()
+		process.unblockOnKill = false
+		process.mu.Unlock()
+		expectedToken := handshakeToken(34)
+		session := newPluginSession(context.Background(), 27, sessionConfig{
+			Plugin: InstalledPlugin{
+				Manifest:   validManifest(),
+				RootDir:    `C:\plugins\camera`,
+				Executable: `C:\plugins\camera\plugin.exe`,
+			},
+			Startup:          validHandshakeStartup(),
+			HandshakeTimeout: time.Second,
+			HeartbeatTimeout: time.Minute,
+			GracefulTimeout:  20 * time.Millisecond,
+			KillTimeout:      20 * time.Millisecond,
+			ControlCapacity:  2,
+		}, sessionDependencies{
+			credentials: func() (string, string, error) {
+				return "session-handshake-kill-timeout", expectedToken, nil
+			},
+			listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+				return &sessionTestListener{conn: hostConn}, nil
+			},
+			launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+				go func() {
+					_ = pluginConn.Send(context.Background(), validHello(handshakeToken(35)))
+				}()
+				return process, nil
+			}},
+		})
+		result, ok := awaitBoundedStartupResult(session.Done(), 150*time.Millisecond)
+		process.wait <- errors.New("cleanup")
+		if !ok {
+			t.Fatal("Handshake failure blocked indefinitely in Process.Wait")
+		}
+		if !errors.Is(result.Err, ErrAuthenticationFailed) || !errors.Is(result.Err, ErrKillTimeout) {
+			t.Fatalf("session error = %v, want authentication and KillTimeout causes", result.Err)
+		}
+		if strings.Contains(result.Err.Error(), expectedToken) {
+			t.Fatalf("session error exposes token: %v", result.Err)
+		}
+	})
+}
+
+func awaitBoundedStartupResult(done <-chan sessionResult, timeout time.Duration) (sessionResult, bool) {
+	select {
+	case result := <-done:
+		return result, true
+	case <-time.After(timeout):
+		return sessionResult{}, false
 	}
 }
 
@@ -578,9 +678,7 @@ func TestPluginSessionRoutesRuntimeMessagesAndRejectsWrongDirection(t *testing.T
 			}
 
 			process.wait <- nil
-			if result := awaitSessionResult(t, session.Done()); result.Err != nil {
-				t.Fatalf("session result error = %v", result.Err)
-			}
+			assertUnexpectedExitResult(t, awaitSessionResult(t, session.Done()))
 		})
 	}
 }
@@ -605,9 +703,7 @@ func TestPluginSessionReadyControlErrorsKeepTheirClassification(t *testing.T) {
 		t.Fatalf("Control(invalid config) error = %v, want unchanged validation error", err)
 	}
 	process.wait <- nil
-	if result := awaitSessionResult(t, session.Done()); result.Err != nil {
-		t.Fatalf("session terminated after non-terminal control errors: %v", result.Err)
-	}
+	assertUnexpectedExitResult(t, awaitSessionResult(t, session.Done()))
 }
 
 func TestPluginSessionStopRequiresShutdownAckAndProcessExit(t *testing.T) {
@@ -645,6 +741,118 @@ func TestPluginSessionStopRequiresShutdownAckAndProcessExit(t *testing.T) {
 	// externally observable session result.
 	if result := awaitSessionResult(t, session.Done()); result.Err != nil || result.StartedAt.IsZero() {
 		t.Fatalf("Done() after Stop = %#v", result)
+	}
+}
+
+type sessionBlockingConfigConn struct {
+	protocol.Conn
+	entered   chan struct{}
+	release   chan struct{}
+	closed    chan struct{}
+	once      sync.Once
+	closeOnce sync.Once
+}
+
+func (c *sessionBlockingConfigConn) Send(ctx context.Context, message protocol.Message) error {
+	if message.Type == protocol.MessageConfigChanged {
+		c.once.Do(func() { close(c.entered) })
+		select {
+		case <-c.release:
+		case <-c.closed:
+			return net.ErrClosed
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return c.Conn.Send(ctx, message)
+}
+
+func (c *sessionBlockingConfigConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+func TestPluginSessionAckBeforeShutdownSendDoesNotSatisfyStop(t *testing.T) {
+	hostRaw, pluginRaw := net.Pipe()
+	hostConn := &sessionBlockingConfigConn{
+		Conn:    ipc.WrapConn(hostRaw),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
+	pluginConn := ipc.WrapConn(pluginRaw)
+	t.Cleanup(func() {
+		_ = hostConn.Close()
+		_ = pluginConn.Close()
+	})
+	process := newSessionTestProcess()
+	token := handshakeToken(36)
+	ready := make(chan struct{})
+	session := newPluginSession(context.Background(), 28, sessionConfig{
+		Plugin: InstalledPlugin{
+			Manifest:   validManifest(),
+			RootDir:    `C:\plugins\camera`,
+			Executable: `C:\plugins\camera\plugin.exe`,
+		},
+		Startup:          validHandshakeStartup(),
+		HandshakeTimeout: time.Second,
+		HeartbeatTimeout: time.Minute,
+		GracefulTimeout:  100 * time.Millisecond,
+		KillTimeout:      50 * time.Millisecond,
+		ControlCapacity:  3,
+	}, sessionDependencies{
+		credentials: func() (string, string, error) {
+			return "session-early-ack", token, nil
+		},
+		listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+			return &sessionTestListener{conn: hostConn}, nil
+		},
+		launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+			go func() {
+				_ = pluginConn.Send(context.Background(), validHello(token))
+				_, _ = pluginConn.Receive(context.Background())
+				message, _ := protocol.NewMessage(protocol.Ready{})
+				if pluginConn.Send(context.Background(), message) == nil {
+					close(ready)
+				}
+			}()
+			return process, nil
+		}},
+	})
+	awaitValue(t, ready)
+	waitSessionPhase(t, session.(*processSession), sessionReady)
+	controlResult := make(chan error, 1)
+	go func() {
+		controlResult <- session.Control(context.Background(), controlRequest{
+			kind:  controlConfig,
+			state: controlState{Config: pluginapi.Config{Revision: 2, Data: []byte(`{"value":2}`)}},
+		})
+	}()
+	awaitValue(t, hostConn.entered)
+
+	stopResult := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), pluginSessionTestTimeout)
+		defer cancel()
+		stopResult <- session.Stop(ctx)
+	}()
+	waitSessionPhase(t, session.(*processSession), sessionStopping)
+	sendSessionPayload(t, pluginConn, protocol.ShutdownAck{})
+	_ = awaitValue(t, controlResult)
+	if err := awaitValue(t, stopResult); !errors.Is(err, ErrProtocolViolation) {
+		t.Fatalf("Stop() error = %v, want ErrProtocolViolation for pre-send Ack", err)
+	}
+}
+
+func TestPluginSessionUnsolicitedZeroExitIsUnexpectedAndRetryable(t *testing.T) {
+	session, _, process := startReadyPluginSession(t, 25, sessionDependencies{})
+	process.wait <- nil
+	result := awaitSessionResult(t, session.Done())
+	if result.Err == nil {
+		t.Fatal("unsolicited status-0 process exit produced a clean result")
+	}
+	if !result.Retryable {
+		t.Fatalf("unsolicited status-0 result is not retryable: %v", result.Err)
 	}
 }
 
@@ -688,11 +896,11 @@ func TestPluginSessionKillTimeoutIsTerminal(t *testing.T) {
 
 func TestPluginSessionHeartbeatTimeoutReportsUnresponsive(t *testing.T) {
 	unresponsive := make(chan uint64, 1)
-	session, _, process := startReadyPluginSession(t, 12, sessionDependencies{
+	session, _, process := startReadyPluginSessionWithHeartbeat(t, 12, sessionDependencies{
 		onUnresponsive: func(instanceID uint64) {
 			unresponsive <- instanceID
 		},
-	})
+	}, 30*time.Millisecond)
 	if got := awaitValue(t, unresponsive); got != 12 {
 		t.Fatalf("unresponsive instance ID = %d, want 12", got)
 	}
@@ -785,6 +993,7 @@ func TestPluginSessionWriterFailureTerminatesWithOpaqueCause(t *testing.T) {
 		}},
 	})
 	awaitValue(t, ready)
+	waitSessionPhase(t, session.(*processSession), sessionReady)
 	controlErr := session.Control(context.Background(), controlRequest{
 		kind:  controlConfig,
 		state: controlState{Config: pluginapi.Config{Revision: 2, Data: []byte(`{"value":2}`)}},
@@ -910,6 +1119,7 @@ func TestPluginSessionJoinsReaderWriterAndProcessErrorsWhenStopRaces(t *testing.
 		}},
 	})
 	awaitValue(t, ready)
+	waitSessionPhase(t, session.(*processSession), sessionReady)
 	if err := session.Control(context.Background(), controlRequest{
 		kind:  controlConfig,
 		state: controlState{Config: pluginapi.Config{Revision: 2, Data: []byte(`{"frameMarker":7654.25}`)}},
@@ -1003,6 +1213,7 @@ func TestPluginSessionCancellationDoesNotReplacePrimaryReaderError(t *testing.T)
 		}},
 	})
 	awaitValue(t, ready)
+	waitSessionPhase(t, session.(*processSession), sessionReady)
 	ctx, cancel := context.WithTimeout(context.Background(), pluginSessionTestTimeout)
 	defer cancel()
 	_ = session.Stop(ctx)
@@ -1220,6 +1431,109 @@ func (c *sessionBlockingInitializeConn) Send(ctx context.Context, message protoc
 	return c.Conn.Send(ctx, message)
 }
 
+type sessionReplayBlockingConn struct {
+	protocol.Conn
+	initializeEntered chan struct{}
+	releaseInitialize chan struct{}
+	replayEntered     chan struct{}
+	initOnce          sync.Once
+	replayOnce        sync.Once
+}
+
+func (c *sessionReplayBlockingConn) Send(ctx context.Context, message protocol.Message) error {
+	switch message.Type {
+	case protocol.MessageInitialize:
+		c.initOnce.Do(func() { close(c.initializeEntered) })
+		select {
+		case <-c.releaseInitialize:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	case protocol.MessageConfigChanged:
+		c.replayOnce.Do(func() { close(c.replayEntered) })
+	}
+	return c.Conn.Send(ctx, message)
+}
+
+func TestPluginSessionStopRemainsBoundedDuringBlockedHandshakeReplay(t *testing.T) {
+	hostRaw, pluginRaw := net.Pipe()
+	hostConn := &sessionReplayBlockingConn{
+		Conn:              ipc.WrapConn(hostRaw),
+		initializeEntered: make(chan struct{}),
+		releaseInitialize: make(chan struct{}),
+		replayEntered:     make(chan struct{}),
+	}
+	pluginConn := ipc.WrapConn(pluginRaw)
+	t.Cleanup(func() {
+		_ = hostConn.Close()
+		_ = pluginConn.Close()
+	})
+	process := newSessionTestProcess()
+	token := handshakeToken(32)
+	session := newPluginSession(context.Background(), 24, sessionConfig{
+		Plugin: InstalledPlugin{
+			Manifest:   validManifest(),
+			RootDir:    `C:\plugins\camera`,
+			Executable: `C:\plugins\camera\plugin.exe`,
+		},
+		Startup:          validHandshakeStartup(),
+		HandshakeTimeout: time.Second,
+		HeartbeatTimeout: time.Minute,
+		GracefulTimeout:  30 * time.Millisecond,
+		KillTimeout:      30 * time.Millisecond,
+		ControlCapacity:  2,
+	}, sessionDependencies{
+		credentials: func() (string, string, error) {
+			return "session-replay-stop", token, nil
+		},
+		listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+			return &sessionTestListener{conn: hostConn}, nil
+		},
+		launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+			go func() {
+				_ = pluginConn.Send(context.Background(), validHello(token))
+				_, _ = pluginConn.Receive(context.Background())
+				ready, _ := protocol.NewMessage(protocol.Ready{})
+				_ = pluginConn.Send(context.Background(), ready)
+				// The peer deliberately stops reading before replay.
+			}()
+			return process, nil
+		}},
+	})
+	awaitValue(t, hostConn.initializeEntered)
+	controlResult := make(chan error, 1)
+	go func() {
+		controlResult <- session.Control(context.Background(), controlRequest{
+			kind:  controlConfig,
+			state: controlState{Config: pluginapi.Config{Revision: 2, Data: []byte(`{"gain":0.8}`)}},
+		})
+	}()
+	waitSessionPendingControls(t, session.(*processSession), 1)
+	close(hostConn.releaseInitialize)
+	awaitValue(t, hostConn.replayEntered)
+
+	stopResult := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		defer cancel()
+		stopResult <- session.Stop(ctx)
+	}()
+	select {
+	case <-stopResult:
+	case <-time.After(500 * time.Millisecond):
+		_ = pluginConn.Close()
+		t.Fatal("Stop blocked behind handshake replay")
+	}
+	select {
+	case <-controlResult:
+	case <-time.After(pluginSessionTestTimeout):
+		t.Fatal("accepted pending control was not completed during replay shutdown")
+	}
+	if got := process.kills(); got != 1 {
+		t.Fatalf("Kill() calls = %d, want 1", got)
+	}
+}
+
 func TestPluginSessionHandshakeControlRaceDeliversEveryChangeOnceInOrder(t *testing.T) {
 	hostRaw, pluginRaw := net.Pipe()
 	blockingHost := &sessionBlockingInitializeConn{
@@ -1341,8 +1655,13 @@ func TestPluginSessionHandshakeControlRaceDeliversEveryChangeOnceInOrder(t *test
 	}
 
 	process.wait <- nil
-	if result := awaitSessionResult(t, session.Done()); result.Err != nil {
-		t.Fatalf("session result error = %v", result.Err)
+	assertUnexpectedExitResult(t, awaitSessionResult(t, session.Done()))
+}
+
+func assertUnexpectedExitResult(t *testing.T, result sessionResult) {
+	t.Helper()
+	if result.Err == nil || !result.Retryable {
+		t.Fatalf("unsolicited process exit result = %#v, want retryable error", result)
 	}
 }
 
@@ -1365,6 +1684,15 @@ func startReadyPluginSession(
 	t *testing.T,
 	instanceID uint64,
 	overrides sessionDependencies,
+) (pluginSession, protocol.Conn, *sessionTestProcess) {
+	return startReadyPluginSessionWithHeartbeat(t, instanceID, overrides, time.Minute)
+}
+
+func startReadyPluginSessionWithHeartbeat(
+	t *testing.T,
+	instanceID uint64,
+	overrides sessionDependencies,
+	heartbeatTimeout time.Duration,
 ) (pluginSession, protocol.Conn, *sessionTestProcess) {
 	t.Helper()
 	hostRaw, pluginRaw := net.Pipe()
@@ -1403,12 +1731,13 @@ func startReadyPluginSession(
 		},
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
-		HeartbeatTimeout: 30 * time.Millisecond,
+		HeartbeatTimeout: heartbeatTimeout,
 		GracefulTimeout:  30 * time.Millisecond,
 		KillTimeout:      30 * time.Millisecond,
 		ControlCapacity:  4,
 	}, dependencies)
 	awaitValue(t, ready)
+	waitSessionPhase(t, session.(*processSession), sessionReady)
 	return session, pluginConn, process
 }
 
