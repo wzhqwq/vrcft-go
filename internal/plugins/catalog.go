@@ -105,10 +105,17 @@ func (c *directoryCatalog) scanRoot(ctx context.Context, root string, source Sou
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !entry.IsDir() {
+		pluginRoot := filepath.Join(canonicalRoot, entry.Name())
+		entryInfo, err := os.Lstat(pluginRoot)
+		if err != nil {
+			return errors.New("plugin catalog entry cannot be inspected")
+		}
+		if entryInfo.Mode()&os.ModeSymlink != 0 || entryInfo.Mode()&os.ModeIrregular != 0 {
+			return errors.New("plugin catalog does not permit linked plugin directories")
+		}
+		if !entryInfo.IsDir() {
 			continue
 		}
-		pluginRoot := filepath.Join(canonicalRoot, entry.Name())
 		manifest, err := c.readManifest(pluginRoot)
 		if err != nil {
 			return fmt.Errorf("plugin catalog contains an invalid manifest: %w", err)

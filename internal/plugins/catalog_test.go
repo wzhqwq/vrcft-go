@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -106,6 +107,37 @@ func TestDirectoryCatalogRejectsDuplicateIDs(t *testing.T) {
 			t.Fatal("Scan() error = nil, want duplicate rejection")
 		}
 	})
+}
+
+func TestDirectoryCatalogDoesNotAcceptPluginDirectorySymlinkEscape(t *testing.T) {
+	catalogRoot := t.TempDir()
+	externalRoot := t.TempDir()
+	manifest := validManifest()
+	manifest.ID = "outside.device"
+	externalPluginRoot := writeCatalogPlugin(t, externalRoot, "outside", manifest)
+	linkedPluginRoot := filepath.Join(catalogRoot, "linked-plugin")
+	if err := os.Symlink(externalPluginRoot, linkedPluginRoot); err != nil {
+		t.Skipf("directory symlink creation unavailable: %v", err)
+	}
+
+	if _, err := newCatalog(t, catalogRoot).Scan(context.Background()); err == nil {
+		t.Fatal("Scan() error = nil, want rejection of plugin directory symlink")
+	}
+}
+
+func TestDirectoryCatalogDoesNotAcceptPluginDirectoryJunctionEscape(t *testing.T) {
+	catalogRoot := t.TempDir()
+	externalRoot := t.TempDir()
+	manifest := validManifest()
+	manifest.ID = "outside.device"
+	externalPluginRoot := writeCatalogPlugin(t, externalRoot, "outside", manifest)
+	junction := filepath.Join(catalogRoot, "junction-plugin")
+	if err := exec.Command("cmd.exe", "/c", "mklink", "/J", junction, externalPluginRoot).Run(); err != nil {
+		t.Skipf("directory junction creation unavailable: %v", err)
+	}
+	if _, err := newCatalog(t, catalogRoot).Scan(context.Background()); err == nil {
+		t.Fatal("Scan() error = nil, want rejection of plugin directory junction")
+	}
 }
 
 func TestDirectoryCatalogHandlesMissingRoots(t *testing.T) {
