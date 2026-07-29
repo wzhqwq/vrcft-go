@@ -3,7 +3,6 @@ package plugins
 import (
 	"context"
 	"errors"
-	"os"
 	"sync/atomic"
 	"time"
 
@@ -746,7 +745,7 @@ func (s *serializedPluginSupervisor) handleSessionResult(
 		s.publish(state)
 		return
 	}
-	if !result.Retryable || incompatibleSessionError(result.Err) {
+	if !result.Retryable {
 		state.snapshot.State = StateIncompatible
 		state.snapshot.LastError = sanitizedSupervisorError(result.Err)
 		state.snapshot.NextRestartAt = time.Time{}
@@ -774,26 +773,6 @@ func (s *serializedPluginSupervisor) handleSessionResult(
 	state.snapshot.State = StateBackoff
 	state.snapshot.NextRestartAt = s.config.Now().Add(delay)
 	s.publish(state)
-}
-
-func incompatibleSessionError(err error) bool {
-	for _, incompatible := range []error{
-		ErrAuthenticationFailed,
-		ErrDescriptorMismatch,
-		ErrProtocolIncompatible,
-		ErrProtocolViolation,
-		ErrInvalidManifest,
-		ErrInvalidEntrypoint,
-		ErrConfigRevisionRegression,
-		ErrConfigRevisionConflict,
-		ErrSubscriptionGenerationRegression,
-		ErrSubscriptionGenerationConflict,
-	} {
-		if errors.Is(err, incompatible) {
-			return true
-		}
-	}
-	return errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission)
 }
 
 func (s *serializedPluginSupervisor) sessionCallbacks(instanceID uint64) supervisorSessionCallbacks {

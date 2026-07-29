@@ -372,6 +372,173 @@ func TestPluginSessionStartupFailuresCleanOwnedResources(t *testing.T) {
 	}
 }
 
+func TestPluginSessionClassifiesFailureAtItsSource(t *testing.T) {
+	t.Run("accept transport remains retryable", func(t *testing.T) {
+		process := newSessionTestProcess()
+		session := newPluginSession(context.Background(), 31, sourceClassificationSessionConfig(), sessionDependencies{
+			credentials: sourceClassificationCredentials,
+			listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+				return &sessionTestListener{err: os.ErrNotExist}, nil
+			},
+			launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+				return process, nil
+			}},
+		})
+		result := awaitSessionResult(t, session.Done())
+		if !result.Retryable || !errors.Is(result.Err, os.ErrNotExist) ||
+			errors.Is(result.Err, ErrProtocolViolation) {
+			t.Fatalf("Accept result = %+v, want retryable transport without protocol violation", result)
+		}
+	})
+
+	t.Run("handshake transport remains retryable", func(t *testing.T) {
+		process := newSessionTestProcess()
+		session := newPluginSession(context.Background(), 32, sourceClassificationSessionConfig(), sessionDependencies{
+			credentials: sourceClassificationCredentials,
+			listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+				return &sessionTestListener{conn: failingHandshakeConn{err: os.ErrNotExist}}, nil
+			},
+			launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+				return process, nil
+			}},
+		})
+		result := awaitSessionResult(t, session.Done())
+		if !result.Retryable || !errors.Is(result.Err, os.ErrNotExist) ||
+			errors.Is(result.Err, ErrProtocolViolation) {
+			t.Fatalf("handshake transport result = %+v, want retryable transport without protocol violation", result)
+		}
+	})
+
+	t.Run("semantic handshake violation is not retryable", func(t *testing.T) {
+		hostRaw, pluginRaw := net.Pipe()
+		hostConn := ipc.WrapConn(hostRaw)
+		pluginConn := ipc.WrapConn(pluginRaw)
+		t.Cleanup(func() {
+			_ = hostConn.Close()
+			_ = pluginConn.Close()
+		})
+		process := newSessionTestProcess()
+		session := newPluginSession(context.Background(), 33, sourceClassificationSessionConfig(), sessionDependencies{
+			credentials: sourceClassificationCredentials,
+			listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+				return &sessionTestListener{conn: hostConn}, nil
+			},
+			launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+				go func() {
+					ready, _ := protocol.NewMessage(protocol.Ready{})
+					_ = pluginConn.Send(context.Background(), ready)
+				}()
+				return process, nil
+			}},
+		})
+		result := awaitSessionResult(t, session.Done())
+		if result.Retryable || !errors.Is(result.Err, ErrProtocolViolation) {
+			t.Fatalf("semantic handshake result = %+v, want non-retryable protocol violation", result)
+		}
+	})
+
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "missing executable", err: classifiedStartError(startFailureExecutable, "not found", os.ErrNotExist)},
+		{name: "working directory permission", err: classifiedStartError(startFailureWorkingDirectory, "access denied", os.ErrPermission)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := newPluginSession(context.Background(), 34, sourceClassificationSessionConfig(), sessionDependencies{
+				credentials: sourceClassificationCredentials,
+				listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+					return &sessionTestListener{}, nil
+				},
+				launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+					return nil, test.err
+				}},
+			})
+			result := awaitSessionResult(t, session.Done())
+			if result.Retryable || !errors.Is(result.Err, test.err) {
+				t.Fatalf("launcher result = %+v, want source-classified non-retryable error", result)
+			}
+		})
+	}
+
+	t.Run("runtime IPC os sentinel remains retryable", func(t *testing.T) {
+		hostRaw, pluginRaw := net.Pipe()
+		hostConn := &sessionRuntimeFailureConn{
+			Conn: ipc.WrapConn(hostRaw),
+			err:  os.ErrPermission,
+		}
+		pluginConn := ipc.WrapConn(pluginRaw)
+		t.Cleanup(func() {
+			_ = hostConn.Close()
+			_ = pluginConn.Close()
+		})
+		process := newSessionTestProcess()
+		token := handshakeToken(44)
+		session := newPluginSession(context.Background(), 35, sourceClassificationSessionConfig(), sessionDependencies{
+			credentials: func() (string, string, error) {
+				return "session-source-classification", token, nil
+			},
+			listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+				return &sessionTestListener{conn: hostConn}, nil
+			},
+			launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+				go func() {
+					_ = pluginConn.Send(context.Background(), validHello(token))
+					_, _ = pluginConn.Receive(context.Background())
+					ready, _ := protocol.NewMessage(protocol.Ready{})
+					_ = pluginConn.Send(context.Background(), ready)
+					_, _ = pluginConn.Receive(context.Background())
+					process.wait <- nil
+				}()
+				return process, nil
+			}},
+		})
+		result := awaitSessionResult(t, session.Done())
+		if !result.Retryable || !errors.Is(result.Err, os.ErrPermission) {
+			t.Fatalf("runtime IPC result = %+v, want retryable transport sentinel", result)
+		}
+	})
+}
+
+func sourceClassificationSessionConfig() sessionConfig {
+	return sessionConfig{
+		Plugin: InstalledPlugin{
+			Manifest:   validManifest(),
+			RootDir:    `C:\plugins\camera`,
+			Executable: `C:\plugins\camera\plugin.exe`,
+		},
+		Startup:          validHandshakeStartup(),
+		HandshakeTimeout: time.Second,
+		HeartbeatTimeout: time.Minute,
+		GracefulTimeout:  20 * time.Millisecond,
+		KillTimeout:      20 * time.Millisecond,
+		ControlCapacity:  2,
+	}
+}
+
+func sourceClassificationCredentials() (string, string, error) {
+	return "session-source-classification", handshakeToken(43), nil
+}
+
+type sessionRuntimeFailureConn struct {
+	protocol.Conn
+	err error
+
+	mu       sync.Mutex
+	receives int
+}
+
+func (c *sessionRuntimeFailureConn) Receive(ctx context.Context) (protocol.Message, error) {
+	c.mu.Lock()
+	c.receives++
+	receives := c.receives
+	c.mu.Unlock()
+	if receives > 2 {
+		return protocol.Message{}, c.err
+	}
+	return c.Conn.Receive(ctx)
+}
+
 func TestPluginSessionHandshakeTimeoutClosesConnectionAndProcess(t *testing.T) {
 	hostRaw, pluginRaw := net.Pipe()
 	hostBase := ipc.WrapConn(hostRaw)

@@ -111,7 +111,7 @@ func handshakeConnectionError(ctx context.Context, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return errors.Join(ErrHandshakeTimeout, context.DeadlineExceeded)
 	}
-	return errors.Join(ErrProtocolViolation, opaqueHandshakeCause{cause: err})
+	return opaqueHandshakeCause{cause: err}
 }
 
 type opaqueHandshakeCause struct{ cause error }

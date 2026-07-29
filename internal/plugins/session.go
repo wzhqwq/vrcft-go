@@ -240,7 +240,7 @@ func (s *processSession) startAndWait() sessionResult {
 	})
 	if err != nil {
 		result.Err = err
-		result.Retryable = true
+		result.Retryable = retryableLaunchError(err)
 		return result
 	}
 
@@ -822,7 +822,19 @@ func terminalDrainWindow(value time.Duration) time.Duration {
 func retryableSessionError(err error) bool {
 	return !errors.Is(err, ErrAuthenticationFailed) &&
 		!errors.Is(err, ErrDescriptorMismatch) &&
-		!errors.Is(err, ErrProtocolIncompatible)
+		!errors.Is(err, ErrProtocolIncompatible) &&
+		!errors.Is(err, ErrProtocolViolation) &&
+		!errors.Is(err, ErrInvalidManifest) &&
+		!errors.Is(err, ErrConfigRevisionRegression) &&
+		!errors.Is(err, ErrConfigRevisionConflict) &&
+		!errors.Is(err, ErrSubscriptionGenerationRegression) &&
+		!errors.Is(err, ErrSubscriptionGenerationConflict)
+}
+
+func retryableLaunchError(err error) bool {
+	return !errors.Is(err, ErrInvalidEntrypoint) &&
+		!errors.Is(err, os.ErrNotExist) &&
+		!errors.Is(err, os.ErrPermission)
 }
 
 func opaqueWriterControlError(writer *sessionWriter, err error) error {

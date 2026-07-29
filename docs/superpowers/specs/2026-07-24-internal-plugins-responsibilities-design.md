@@ -582,9 +582,15 @@ Non-retryable failures:
 - unsupported API or protocol;
 - structurally invalid Host configuration.
 
-The process launcher's wrapped `os.ErrNotExist` and `os.ErrPermission`
-sentinels are non-retryable startup contract failures. Generic listener and IPC
-transport failures remain retryable and must not be classified from error text.
+Task 7 classifies retryability while the failure source is still known, and
+the supervisor treats `sessionResult.Retryable` as authoritative rather than
+reclassifying an aggregated error chain. The process launcher's wrapped
+`os.ErrNotExist` and `os.ErrPermission` sentinels are non-retryable startup
+contract failures. Semantic handshake/runtime protocol violations are
+non-retryable, while handshake, listener, and runtime IPC transport failures
+remain retryable even if their transport cause uses an OS file/permission
+sentinel. Transport failures must not be labeled as `ErrProtocolViolation` or
+classified from error text.
 
 The exponential delay function yields 1s, 2s, 4s, 8s, 16s, then 30s and
 remains capped at 30s. `MaxFailures` counts the failure that ends automatic

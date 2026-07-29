@@ -319,15 +319,20 @@ func TestPluginSupervisorRetryPublishesBackoffWithoutIntermediateCrash(t *testin
 	}
 }
 
-func TestPluginSupervisorStartupSentinelsAreIncompatible(t *testing.T) {
+func TestPluginSupervisorHonorsSessionRetryClassification(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		err       error
+		retryable bool
+		wantState State
 		wantError string
 	}{
-		{name: "invalid entrypoint", err: ErrInvalidEntrypoint, wantError: "plugins: invalid entrypoint"},
-		{name: "missing executable", err: fmt.Errorf("secret executable path: %w", os.ErrNotExist), wantError: "plugins: session failed"},
-		{name: "permission", err: fmt.Errorf("secret working directory: %w", os.ErrPermission), wantError: "plugins: session failed"},
+		{name: "invalid entrypoint source classification", err: ErrInvalidEntrypoint, wantState: StateIncompatible, wantError: "plugins: invalid entrypoint"},
+		{name: "missing executable source classification", err: fmt.Errorf("secret executable path: %w", os.ErrNotExist), wantState: StateIncompatible, wantError: "plugins: session failed"},
+		{name: "permission source classification", err: fmt.Errorf("secret working directory: %w", os.ErrPermission), wantState: StateIncompatible, wantError: "plugins: session failed"},
+		{name: "handshake transport overrides protocol-shaped error", err: errors.Join(ErrProtocolViolation, os.ErrNotExist), retryable: true, wantState: StateBackoff, wantError: "plugins: protocol violation"},
+		{name: "runtime IPC permission remains retryable", err: os.ErrPermission, retryable: true, wantState: StateBackoff, wantError: "plugins: session failed"},
+		{name: "explicit generic non-retryable", err: errors.New("secret incompatible detail"), wantState: StateIncompatible, wantError: "plugins: session failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			factory := newSupervisorTestFactory()
@@ -345,13 +350,13 @@ func TestPluginSupervisorStartupSentinelsAreIncompatible(t *testing.T) {
 			}
 			defer closeSupervisor(t, supervisor)
 			launch := factory.awaitLaunch(t)
-			launch.session.finish(sessionResult{Err: test.err, Retryable: true})
-			awaitSupervisorState(t, supervisor, StateIncompatible)
+			launch.session.finish(sessionResult{Err: test.err, Retryable: test.retryable})
+			awaitSupervisorState(t, supervisor, test.wantState)
 			if got := supervisor.Snapshot().LastError; got != test.wantError ||
 				strings.Contains(got, "secret") {
 				t.Fatalf("sanitized startup error = %q, want %q", got, test.wantError)
 			}
-			if clock.timerCount() != 0 {
+			if test.wantState == StateIncompatible && clock.timerCount() != 0 {
 				t.Fatal("startup contract error scheduled restart")
 			}
 		})
@@ -669,7 +674,7 @@ func TestPluginSupervisorSuppressesNonRetryableAndIgnoresStaleCallbacks(t *testi
 		{name: "authentication", err: ErrAuthenticationFailed, wantError: "plugins: authentication failed"},
 		{name: "descriptor", err: ErrDescriptorMismatch, wantError: "plugins: descriptor mismatch"},
 		{name: "API", err: ErrProtocolIncompatible, wantError: "plugins: protocol incompatible"},
-		{name: "protocol", err: ErrProtocolViolation, retryable: true, wantError: "plugins: protocol violation"},
+		{name: "protocol", err: ErrProtocolViolation, wantError: "plugins: protocol violation"},
 		{name: "manifest", err: ErrInvalidManifest, wantError: "plugins: invalid manifest"},
 		{name: "config", err: ErrConfigRevisionConflict, wantError: "plugins: config revision conflict"},
 		{name: "opaque", err: errors.New("token=do-not-publish"), wantError: "plugins: session failed"},

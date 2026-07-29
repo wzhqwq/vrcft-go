@@ -453,8 +453,8 @@ func TestHostHandshakeJoinsSafeConnectionFailureWithoutSecrets(t *testing.T) {
 	configSecret := `{"private":"config-secret"}`
 	startup := pluginapi.Startup{Config: pluginapi.Config{Revision: 1, Data: []byte(configSecret)}}
 	result := awaitHandshake(t, runHostHandshake(context.Background(), failingHandshakeConn{err: failure}, validManifest(), token, startup))
-	if !errors.Is(result.err, ErrProtocolViolation) || !errors.Is(result.err, failure) {
-		t.Fatalf("hostHandshake() error = %v, want joined protocol failure", result.err)
+	if errors.Is(result.err, ErrProtocolViolation) || !errors.Is(result.err, failure) {
+		t.Fatalf("hostHandshake() error = %v, want transport cause without semantic protocol violation", result.err)
 	}
 	if got := result.err.Error(); strings.Contains(got, token) || strings.Contains(got, configSecret) {
 		t.Fatalf("hostHandshake() error exposes secret data: %v", result.err)
@@ -472,10 +472,10 @@ func TestHostHandshakePreservesConnectionCauseWithoutExposingItsText(t *testing.
 	} {
 		t.Run("opaque cause", func(t *testing.T) {
 			result := awaitHandshake(t, runHostHandshake(context.Background(), failingHandshakeConn{err: failure}, validManifest(), token, startup))
-			if !errors.Is(result.err, ErrProtocolViolation) || !errors.Is(result.err, failure) {
-				t.Fatalf("hostHandshake() error = %v, want discoverable protocol/cause errors", result.err)
+			if errors.Is(result.err, ErrProtocolViolation) || !errors.Is(result.err, failure) {
+				t.Fatalf("hostHandshake() error = %v, want discoverable transport cause only", result.err)
 			}
-			const want = "plugins: protocol violation\nplugins: handshake connection failure"
+			const want = "plugins: handshake connection failure"
 			if got := result.err.Error(); got != want || strings.Contains(got, failure.Error()) {
 				t.Fatalf("hostHandshake() error = %q, want opaque public text %q", got, want)
 			}
