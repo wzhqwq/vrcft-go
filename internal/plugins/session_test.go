@@ -929,6 +929,68 @@ func TestPluginSessionStopRequiresShutdownAckAndProcessExit(t *testing.T) {
 	}
 }
 
+func TestShutdownProcessTreatsPeerEOFAfterShutdownAsGraceful(t *testing.T) {
+	hostRaw, pluginRaw := net.Pipe()
+	hostConn := ipc.WrapConn(hostRaw)
+	pluginConn := ipc.WrapConn(pluginRaw)
+	t.Cleanup(func() {
+		_ = hostConn.Close()
+		_ = pluginConn.Close()
+	})
+
+	session := &processSession{
+		config:      sessionConfig{GracefulTimeout: 100 * time.Millisecond, KillTimeout: 50 * time.Millisecond},
+		shutdownAck: make(chan struct{}, 1),
+	}
+	writer := newSessionWriter(hostConn, controlState{}, 1)
+	process := newSessionTestProcess()
+	processResult := make(chan error, 1)
+	readerResult := make(chan error)
+	writerResult := make(chan error, 1)
+	shutdownReceived := make(chan struct{})
+	go func() {
+		message, err := pluginConn.Receive(context.Background())
+		if err == nil {
+			if _, ok := message.Payload.(protocol.Shutdown); !ok {
+				err = errors.New("host did not send Shutdown")
+			}
+		}
+		if err == nil {
+			close(shutdownReceived)
+		}
+	}()
+
+	result := make(chan error, 1)
+	go func() {
+		result <- session.shutdownProcess(
+			hostConn,
+			process,
+			writer,
+			processResult,
+			readerResult,
+			writerResult,
+			func() {},
+		)
+	}()
+	awaitValue(t, shutdownReceived)
+
+	session.shutdownAck <- struct{}{}
+	readerConsumed := make(chan struct{})
+	go func() {
+		readerResult <- opaqueSessionCause{kind: "plugins: IPC reader failure", cause: io.EOF}
+		close(readerConsumed)
+	}()
+	awaitValue(t, readerConsumed)
+	processResult <- nil
+
+	if err := awaitValue(t, result); err != nil {
+		t.Fatalf("shutdownProcess() error = %v, want graceful nil after Ack, EOF, and exit", err)
+	}
+	if got := process.kills(); got != 0 {
+		t.Fatalf("Kill() calls = %d, want 0", got)
+	}
+}
+
 type sessionBlockingConfigConn struct {
 	protocol.Conn
 	entered   chan struct{}

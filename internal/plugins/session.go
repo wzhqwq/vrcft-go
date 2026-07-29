@@ -3,6 +3,7 @@ package plugins
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -774,6 +775,9 @@ func (s *processSession) shutdownProcess(
 	}
 	cancelReader()
 	_ = conn.Close()
+	if errors.Is(readerErr, io.EOF) {
+		readerErr = nil
+	}
 	if processErr != nil {
 		processErr = opaqueSessionCause{kind: "plugins: process exited during shutdown", cause: processErr}
 	}
