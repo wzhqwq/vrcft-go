@@ -811,6 +811,178 @@ func TestPluginSupervisorDefaultPolicy(t *testing.T) {
 	}
 }
 
+func TestPluginSupervisorRetainsAcceptedConfigAcrossRetiredRuntimeDelivery(t *testing.T) {
+	factory := newSupervisorTestFactory()
+	supervisor, err := newPluginSupervisor(pluginSupervisorConfig{
+		Plugin: managerTestPlugin("vendor.config"),
+		Preference: PluginPreference{
+			Enabled: true,
+			Config:  pluginapi.Config{Revision: 1, Data: []byte(`{"gain":1}`)},
+		},
+		Restart:      DefaultRestartPolicy(),
+		NewSession:   factory.newSession,
+		Subscription: pluginapi.Subscription{},
+	})
+	if err != nil {
+		t.Fatalf("newPluginSupervisor() error = %v", err)
+	}
+	defer closeSupervisor(t, supervisor)
+
+	first := factory.awaitLaunch(t)
+	first.callbacks.ProcessStarted(first.instanceID, 1001)
+	first.callbacks.Ready(first.instanceID)
+	awaitSupervisorState(t, supervisor, StateRunning)
+	first.session.blockControl()
+
+	configResult := make(chan error, 1)
+	go func() {
+		configResult <- supervisor.Command(context.Background(), supervisorCommand{
+			kind:   supervisorConfig,
+			config: pluginapi.Config{Revision: 2, Data: []byte(`{"gain":2}`)},
+		})
+	}()
+	first.session.awaitControlStart(t)
+
+	restartResult := make(chan error, 1)
+	go func() {
+		restartResult <- supervisor.Command(context.Background(), supervisorCommand{kind: supervisorRestart})
+	}()
+	if err := awaitSupervisorError(t, configResult); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("retired Config error = %v, want ErrInvalidState", err)
+	}
+	second := factory.awaitLaunch(t)
+	if got := second.startup.Config; got.Revision != 2 || string(got.Data) != `{"gain":2}` {
+		t.Fatalf("next Startup.Config = %+v, want accepted persisted rev2", got)
+	}
+	if err := awaitSupervisorError(t, restartResult); err != nil {
+		t.Fatalf("Restart() error = %v", err)
+	}
+}
+
+func TestPluginSupervisorPublishesDurableConfigRuntimeFailureAndClearsItOnSuccess(t *testing.T) {
+	factory := newSupervisorTestFactory()
+	supervisor, err := newPluginSupervisor(pluginSupervisorConfig{
+		Plugin: managerTestPlugin("vendor.config"),
+		Preference: PluginPreference{
+			Enabled: true,
+			Config:  pluginapi.Config{Revision: 1, Data: []byte(`{"gain":1}`)},
+		},
+		Restart:      DefaultRestartPolicy(),
+		NewSession:   factory.newSession,
+		Subscription: pluginapi.Subscription{},
+	})
+	if err != nil {
+		t.Fatalf("newPluginSupervisor() error = %v", err)
+	}
+	defer closeSupervisor(t, supervisor)
+
+	launch := factory.awaitLaunch(t)
+	launch.callbacks.ProcessStarted(launch.instanceID, 1001)
+	launch.callbacks.Ready(launch.instanceID)
+	awaitSupervisorState(t, supervisor, StateRunning)
+	runtimeErr := errors.New("runtime delivery failed")
+	launch.session.controlErr = runtimeErr
+
+	err = supervisor.Command(context.Background(), supervisorCommand{
+		kind:   supervisorConfig,
+		config: pluginapi.Config{Revision: 2, Data: []byte(`{"gain":2}`)},
+	})
+	if !errors.Is(err, runtimeErr) {
+		t.Fatalf("Config rev2 error = %v, want runtime failure", err)
+	}
+	snapshot := supervisor.Snapshot()
+	if snapshot.ConfigRevision != 2 || snapshot.LastError != "plugins: session failed" {
+		t.Fatalf("snapshot after Config failure = %+v, want durable rev2 and sanitized error", snapshot)
+	}
+
+	launch.session.controlErr = nil
+	if err := supervisor.Command(context.Background(), supervisorCommand{
+		kind:   supervisorConfig,
+		config: pluginapi.Config{Revision: 3, Data: []byte(`{"gain":3}`)},
+	}); err != nil {
+		t.Fatalf("Config rev3 error = %v", err)
+	}
+	snapshot = supervisor.Snapshot()
+	if snapshot.ConfigRevision != 3 || snapshot.LastError != "" {
+		t.Fatalf("snapshot after Config recovery = %+v, want rev3 and cleared error", snapshot)
+	}
+}
+
+func TestPluginSupervisorRetainsDurableConfigWhenRuntimeQueueIsFull(t *testing.T) {
+	factory := newSupervisorTestFactory()
+	supervisorAPI, err := newPluginSupervisor(pluginSupervisorConfig{
+		Plugin: managerTestPlugin("vendor.config"),
+		Preference: PluginPreference{
+			Enabled: true,
+			Config:  pluginapi.Config{Revision: 1, Data: []byte(`{"gain":1}`)},
+		},
+		Restart:            DefaultRestartPolicy(),
+		NewSession:         factory.newSession,
+		Subscription:       pluginapi.Subscription{},
+		SupervisorCapacity: 1,
+	})
+	if err != nil {
+		t.Fatalf("newPluginSupervisor() error = %v", err)
+	}
+	defer closeSupervisor(t, supervisorAPI)
+	supervisor := supervisorAPI.(*serializedPluginSupervisor)
+
+	first := factory.awaitLaunch(t)
+	first.callbacks.ProcessStarted(first.instanceID, 1001)
+	first.callbacks.Ready(first.instanceID)
+	awaitSupervisorState(t, supervisor, StateRunning)
+	first.session.blockControl()
+
+	inFlight := make(chan error, 1)
+	go func() {
+		inFlight <- supervisor.Command(context.Background(), supervisorCommand{
+			kind:   supervisorActive,
+			active: true,
+		})
+	}()
+	first.session.awaitControlStart(t)
+
+	queued := make(chan error, 1)
+	supervisor.commands <- supervisorCommandEnvelope{
+		ctx: context.Background(),
+		command: supervisorCommand{
+			kind:   supervisorActive,
+			active: false,
+			reply:  queued,
+		},
+	}
+	awaitSupervisorCommandDrain(t, supervisor)
+
+	err = supervisor.Command(context.Background(), supervisorCommand{
+		kind:   supervisorConfig,
+		config: pluginapi.Config{Revision: 2, Data: []byte(`{"gain":2}`)},
+	})
+	if !errors.Is(err, ErrControlBackpressure) {
+		t.Fatalf("Config with full runtime queue error = %v, want ErrControlBackpressure", err)
+	}
+	if snapshot := supervisor.Snapshot(); snapshot.ConfigRevision != 2 {
+		t.Fatalf("snapshot ConfigRevision = %d, want durable rev2 after backpressure", snapshot.ConfigRevision)
+	}
+
+	restart := make(chan error, 1)
+	go func() {
+		restart <- supervisor.Command(context.Background(), supervisorCommand{kind: supervisorRestart})
+	}()
+	if err := awaitSupervisorError(t, inFlight); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("retired in-flight control error = %v, want ErrInvalidState", err)
+	}
+	if err := awaitSupervisorError(t, queued); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("retired queued control error = %v, want ErrInvalidState", err)
+	}
+	second := factory.awaitLaunch(t)
+	if got := second.startup.Config; got.Revision != 2 || string(got.Data) != `{"gain":2}` {
+		t.Fatalf("next Startup.Config = %+v, want durable rev2 after backpressure", got)
+	}
+	if err := awaitSupervisorError(t, restart); err != nil {
+		t.Fatalf("Restart() error = %v", err)
+	}
+}
+
 type supervisorTestFactory struct {
 	mu       sync.Mutex
 	launches []*supervisorTestLaunch
@@ -874,6 +1046,7 @@ type supervisorTestSession struct {
 	stopCall       chan struct{}
 	stopGate       chan struct{}
 	stopOnce       sync.Once
+	controlErr     error
 }
 
 func newSupervisorTestSession() *supervisorTestSession {
@@ -903,7 +1076,7 @@ func (s *supervisorTestSession) Control(ctx context.Context, request controlRequ
 	s.controlStarted <- struct{}{}
 	select {
 	case <-s.controlGate:
-		return nil
+		return s.controlErr
 	case <-ctx.Done():
 		return ctx.Err()
 	}

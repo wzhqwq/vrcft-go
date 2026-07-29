@@ -118,10 +118,12 @@ func TestPluginSessionListensBeforeLaunchAndCompletesRealHandshake(t *testing.T)
 	pipeName := "session-fixed-pipe"
 	token := handshakeToken(21)
 	var (
-		mu        sync.Mutex
-		order     []string
-		started   ProcessSpec
-		pluginErr = make(chan error, 1)
+		mu             sync.Mutex
+		order          []string
+		started        ProcessSpec
+		pluginErr      = make(chan error, 1)
+		processStarted = make(chan int, 1)
+		ready          = make(chan struct{}, 1)
 	)
 
 	dependencies := sessionDependencies{
@@ -169,6 +171,18 @@ func TestPluginSessionListensBeforeLaunchAndCompletesRealHandshake(t *testing.T)
 			}()
 			return process, nil
 		}},
+		onProcessStarted: func(instanceID uint64, pid int) {
+			if instanceID != 7 {
+				t.Errorf("ProcessStarted instance ID = %d, want 7", instanceID)
+			}
+			processStarted <- pid
+		},
+		onReady: func(instanceID uint64) {
+			if instanceID != 7 {
+				t.Errorf("Ready instance ID = %d, want 7", instanceID)
+			}
+			ready <- struct{}{}
+		},
 	}
 	config := sessionConfig{
 		Plugin: InstalledPlugin{
@@ -185,6 +199,9 @@ func TestPluginSessionListensBeforeLaunchAndCompletesRealHandshake(t *testing.T)
 	}
 
 	session := newPluginSession(context.Background(), 7, config, dependencies)
+	if pid := awaitValue(t, processStarted); pid != process.PID() {
+		t.Fatalf("ProcessStarted PID = %d, want %d", pid, process.PID())
+	}
 	select {
 	case err := <-pluginErr:
 		if err != nil {
@@ -193,6 +210,7 @@ func TestPluginSessionListensBeforeLaunchAndCompletesRealHandshake(t *testing.T)
 	case <-time.After(pluginSessionTestTimeout):
 		t.Fatal("plugin handshake did not complete")
 	}
+	awaitValue(t, ready)
 
 	mu.Lock()
 	gotOrder := append([]string(nil), order...)

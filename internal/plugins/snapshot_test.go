@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
 
@@ -82,6 +83,10 @@ func TestRuntimeSnapshotEventContractContainsNoFrames(t *testing.T) {
 		if field.Type == framePointer {
 			t.Fatalf("Event field %q retains *trackingmodel.TrackingFrame", field.Name)
 		}
+	}
+	statusField, exists := eventType.FieldByName("Status")
+	if !exists || statusField.Type != reflect.TypeOf((*pluginapi.DeviceStatus)(nil)) {
+		t.Fatalf("Event.Status field = %v/%v, want *pluginapi.DeviceStatus", statusField.Type, exists)
 	}
 	for _, event := range []EventType{
 		EventPluginDiscovered,

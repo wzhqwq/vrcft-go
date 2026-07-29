@@ -17,24 +17,31 @@ func TestEventHubSequencesEventsAndCopiesPublishedValues(t *testing.T) {
 	events := hub.Subscribe(context.Background())
 
 	snapshot := &RuntimeSnapshot{ID: "camera", Name: "original", State: StateRunning}
+	status := &pluginapi.DeviceStatus{State: pluginapi.DeviceError, Message: "original"}
 	log := &pluginapi.LogEntry{PluginID: "camera", Level: pluginapi.LogInfo, Message: "original"}
 	if !hub.Publish(Event{Type: EventPluginStateChanged, PluginID: "camera", Snapshot: snapshot}) ||
+		!hub.Publish(Event{Type: EventPluginStatus, PluginID: "camera", Status: status}) ||
 		!hub.Publish(Event{Type: EventPluginLog, PluginID: "camera", Log: log}) {
 		t.Fatal("Publish rejected events with available capacity")
 	}
 	snapshot.Name = "mutated"
+	status.Message = "mutated"
 	log.Message = "mutated"
 
 	first := receiveEvent(t, events)
 	second := receiveEvent(t, events)
-	if first.Sequence == 0 || second.Sequence != first.Sequence+1 {
-		t.Fatalf("sequences = %d, %d, want adjacent manager-wide sequence", first.Sequence, second.Sequence)
+	third := receiveEvent(t, events)
+	if first.Sequence == 0 || second.Sequence != first.Sequence+1 || third.Sequence != second.Sequence+1 {
+		t.Fatalf("sequences = %d, %d, %d, want adjacent manager-wide sequence", first.Sequence, second.Sequence, third.Sequence)
 	}
 	if first.Snapshot == nil || first.Snapshot.Name != "original" {
 		t.Fatalf("snapshot = %+v, want immutable published copy", first.Snapshot)
 	}
-	if second.Log == nil || second.Log.Message != "original" {
-		t.Fatalf("log = %+v, want immutable published copy", second.Log)
+	if second.Status == nil || second.Status.Message != "original" || second.Status == status {
+		t.Fatalf("status = %+v, want immutable published copy", second.Status)
+	}
+	if third.Log == nil || third.Log.Message != "original" {
+		t.Fatalf("log = %+v, want immutable published copy", third.Log)
 	}
 }
 

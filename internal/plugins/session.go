@@ -37,14 +37,16 @@ type pluginSession interface {
 }
 
 type sessionDependencies struct {
-	credentials    func() (string, string, error)
-	listen         func(ipc.ServerConfig) (ipc.Listener, error)
-	launcher       ProcessLauncher
-	frameSink      FrameSink
-	onHeartbeat    func(uint64, time.Time)
-	onStatus       func(uint64, pluginapi.DeviceStatus)
-	onLog          func(uint64, pluginapi.LogEntry)
-	onUnresponsive func(uint64)
+	credentials      func() (string, string, error)
+	listen           func(ipc.ServerConfig) (ipc.Listener, error)
+	launcher         ProcessLauncher
+	frameSink        FrameSink
+	onProcessStarted func(uint64, int)
+	onReady          func(uint64)
+	onHeartbeat      func(uint64, time.Time)
+	onStatus         func(uint64, pluginapi.DeviceStatus)
+	onLog            func(uint64, pluginapi.LogEntry)
+	onUnresponsive   func(uint64)
 }
 
 type sessionPhase uint8
@@ -243,6 +245,9 @@ func (s *processSession) startAndWait() sessionResult {
 		result.Retryable = retryableLaunchError(err)
 		return result
 	}
+	if s.deps.onProcessStarted != nil {
+		s.deps.onProcessStarted(s.instanceID, process.PID())
+	}
 
 	handshakeCtx, cancelHandshake := context.WithTimeout(s.ctx, s.config.HandshakeTimeout)
 	conn, err := listener.Accept(handshakeCtx)
@@ -267,6 +272,9 @@ func (s *processSession) startAndWait() sessionResult {
 		result.Err = errors.Join(err, s.cleanupStartedProcess(process))
 		result.Retryable = retryableSessionError(err)
 		return result
+	}
+	if s.deps.onReady != nil {
+		s.deps.onReady(s.instanceID)
 	}
 
 	result.StartedAt = time.Now()

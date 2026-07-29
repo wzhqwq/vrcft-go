@@ -25,6 +25,7 @@ type Event struct {
 	Type     EventType
 	PluginID string
 	Snapshot *RuntimeSnapshot
+	Status   *pluginapi.DeviceStatus
 	Log      *pluginapi.LogEntry
 	Dropped  uint64
 }
@@ -34,6 +35,10 @@ func (e Event) clone() Event {
 	if e.Snapshot != nil {
 		snapshot := e.Snapshot.clone()
 		clone.Snapshot = &snapshot
+	}
+	if e.Status != nil {
+		status := *e.Status
+		clone.Status = &status
 	}
 	if e.Log != nil {
 		log := *e.Log

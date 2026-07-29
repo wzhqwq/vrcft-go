@@ -176,15 +176,19 @@ type serializedPluginSupervisor struct {
 }
 
 type supervisorQueuedControl struct {
-	envelope supervisorCommandEnvelope
+	envelope      supervisorCommandEnvelope
+	request       controlRequest
+	durableConfig bool
 }
 
 type supervisorInFlightControl struct {
-	instanceID  uint64
-	operationID uint64
-	envelope    supervisorCommandEnvelope
-	next        controlState
-	cancel      context.CancelFunc
+	instanceID    uint64
+	operationID   uint64
+	envelope      supervisorCommandEnvelope
+	request       controlRequest
+	next          controlState
+	durableConfig bool
+	cancel        context.CancelFunc
 }
 
 type supervisorLoopState struct {
@@ -480,6 +484,39 @@ func (s *serializedPluginSupervisor) handleControlCommand(
 		command.reply <- ErrInvalidState
 		return
 	}
+	if command.kind == supervisorConfig {
+		next, request, changed, err := prepareSupervisorControl(state.control, command)
+		if err != nil || !changed {
+			command.reply <- err
+			return
+		}
+		// Config is durable user intent by the time it reaches the supervisor.
+		// Own it immediately so a failed, canceled, or retired runtime delivery
+		// cannot make a later session start with stale persisted state.
+		s.commitControl(state, next)
+		if state.session == nil {
+			command.reply <- nil
+			return
+		}
+		if len(state.controlQueue) >= s.config.SupervisorCapacity &&
+			s.config.SupervisorCapacity > 0 {
+			command.reply <- ErrControlBackpressure
+			return
+		}
+		state.controlQueue = append(state.controlQueue, supervisorQueuedControl{
+			envelope:      envelope,
+			request:       request,
+			durableConfig: true,
+		})
+		s.dispatchNextControl(state)
+		return
+	}
+	if state.session != nil &&
+		len(state.controlQueue) >= s.config.SupervisorCapacity &&
+		s.config.SupervisorCapacity > 0 {
+		command.reply <- ErrControlBackpressure
+		return
+	}
 	if state.session == nil {
 		next, _, changed, err := prepareSupervisorControl(state.control, command)
 		if err != nil || !changed {
@@ -488,10 +525,6 @@ func (s *serializedPluginSupervisor) handleControlCommand(
 		}
 		s.commitControl(state, next)
 		command.reply <- nil
-		return
-	}
-	if len(state.controlQueue) >= s.config.SupervisorCapacity && s.config.SupervisorCapacity > 0 {
-		command.reply <- ErrControlBackpressure
 		return
 	}
 	state.controlQueue = append(state.controlQueue, supervisorQueuedControl{envelope: envelope})
@@ -536,21 +569,31 @@ func (s *serializedPluginSupervisor) dispatchNextControl(state *supervisorLoopSt
 			queued.envelope.command.reply <- err
 			continue
 		}
-		next, request, changed, err := prepareSupervisorControl(state.control, queued.envelope.command)
-		if err != nil || !changed {
-			queued.envelope.command.reply <- err
-			continue
+		next := state.control
+		request := queued.request
+		if !queued.durableConfig {
+			var (
+				changed bool
+				err     error
+			)
+			next, request, changed, err = prepareSupervisorControl(state.control, queued.envelope.command)
+			if err != nil || !changed {
+				queued.envelope.command.reply <- err
+				continue
+			}
 		}
 		state.controlID++
 		operationID := state.controlID
 		instanceID := state.instanceID
 		controlCtx, cancel := context.WithCancel(queued.envelope.ctx)
 		state.inFlight = &supervisorInFlightControl{
-			instanceID:  instanceID,
-			operationID: operationID,
-			envelope:    queued.envelope,
-			next:        next,
-			cancel:      cancel,
+			instanceID:    instanceID,
+			operationID:   operationID,
+			envelope:      queued.envelope,
+			request:       request,
+			next:          next,
+			durableConfig: queued.durableConfig,
+			cancel:        cancel,
 		}
 		session := state.session
 		go func() {
@@ -579,7 +622,19 @@ func (s *serializedPluginSupervisor) handleControlResult(
 	inFlight.cancel()
 	state.inFlight = nil
 	if outcome.err == nil {
-		s.commitControl(state, inFlight.next)
+		if inFlight.durableConfig {
+			state.snapshot.LastError = ""
+			s.publish(state)
+		} else {
+			// A durable Config may be accepted while this non-Config runtime
+			// control is in flight. Never let its older aggregate state roll
+			// the desired Config back.
+			inFlight.next.Config = state.control.Config.Clone()
+			s.commitControl(state, inFlight.next)
+		}
+	} else if inFlight.durableConfig {
+		state.snapshot.LastError = sanitizedSupervisorError(outcome.err)
+		s.publish(state)
 	}
 	inFlight.envelope.command.reply <- outcome.err
 	s.dispatchNextControl(state)
