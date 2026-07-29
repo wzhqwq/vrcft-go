@@ -139,6 +139,13 @@ func TestWindowsPluginIntegrationHeartbeatHangKillsAndRestarts(t *testing.T) {
 	if err := harness.launcher.waitPIDExited(harness.ctx, first.PID); err != nil {
 		t.Fatal(err)
 	}
+	closeErr := harness.manager.Close(harness.ctx)
+	harness.closed = true
+	if !errors.Is(closeErr, ErrGracefulShutdownTimeout) {
+		t.Fatalf("Close() error = %v, want ErrGracefulShutdownTimeout for suspended helper", closeErr)
+	}
+	harness.waitAllExited()
+	harness.assertPipesReleased()
 }
 
 func TestWindowsPluginIntegrationManagerCloseReapsProcessAndListener(t *testing.T) {
@@ -221,12 +228,25 @@ func newWindowsIntegrationHarness(t *testing.T, behavior string, maxFailures int
 		sink:     sink,
 	}
 	t.Cleanup(func() {
+		defer cancel()
 		if !harness.closed {
 			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = harness.manager.Close(closeCtx)
+			closeErr := harness.manager.Close(closeCtx)
 			closeCancel()
+			harness.closed = true
+			if closeErr != nil &&
+				!(behavior == "hang" && errors.Is(closeErr, ErrGracefulShutdownTimeout)) {
+				t.Errorf("cleanup Manager.Close() error = %v", closeErr)
+			}
 		}
-		cancel()
+		reapCtx, reapCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer reapCancel()
+		if err := harness.launcher.killAndWaitAll(reapCtx); err != nil {
+			t.Errorf("cleanup helpers: %v", err)
+		}
+		if err := harness.launcher.waitPipesReleased(reapCtx); err != nil {
+			t.Errorf("cleanup listeners: %v", err)
+		}
 	})
 	return harness
 }
@@ -356,6 +376,47 @@ func (l *integrationLauncher) waitAllExited(ctx context.Context) error {
 		case <-run.exited:
 		case <-ctx.Done():
 			return fmt.Errorf("waiting for helper PID %d to exit: %w", run.PID(), ctx.Err())
+		}
+	}
+	return nil
+}
+
+func (l *integrationLauncher) killAndWaitAll(ctx context.Context) error {
+	l.mu.Lock()
+	runs := append([]*integrationProcess(nil), l.runs...)
+	l.mu.Unlock()
+	for _, run := range runs {
+		select {
+		case <-run.exited:
+			continue
+		default:
+		}
+		_ = run.Kill()
+		go func(run *integrationProcess) {
+			_ = run.Wait()
+		}(run)
+	}
+	return l.waitAllExited(ctx)
+}
+
+func (l *integrationLauncher) waitPipesReleased(ctx context.Context) error {
+	for _, pipeName := range l.pipeNames() {
+		ticker := time.NewTicker(5 * time.Millisecond)
+		for {
+			listener, err := ipc.Listen(ipc.ServerConfig{PipeName: pipeName})
+			if err == nil {
+				ticker.Stop()
+				if closeErr := listener.Close(); closeErr != nil {
+					return fmt.Errorf("close probe listener %q: %w", pipeName, closeErr)
+				}
+				break
+			}
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return fmt.Errorf("waiting for named pipe %q release: %w", pipeName, ctx.Err())
+			case <-ticker.C:
+			}
 		}
 	}
 	return nil
