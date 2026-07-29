@@ -3,6 +3,7 @@ package plugins
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -66,6 +67,34 @@ type supervisorCommand struct {
 	subscription pluginapi.Subscription
 	active       bool
 	reply        chan error
+	admission    *supervisorAdmission
+}
+
+type supervisorAdmission struct {
+	once   sync.Once
+	result chan error
+}
+
+func newSupervisorAdmission() *supervisorAdmission {
+	return &supervisorAdmission{result: make(chan error, 1)}
+}
+
+func (a *supervisorAdmission) signal(err error) {
+	if a == nil {
+		return
+	}
+	a.once.Do(func() { a.result <- err })
+}
+
+func (a *supervisorAdmission) wait() error {
+	if a == nil {
+		return nil
+	}
+	return <-a.result
+}
+
+func (command supervisorCommand) signalAdmission(err error) {
+	command.admission.signal(err)
 }
 
 type pluginSupervisor interface {
@@ -268,7 +297,8 @@ func newPluginSupervisor(config pluginSupervisorConfig) (pluginSupervisor, error
 	return supervisor, nil
 }
 
-func (s *serializedPluginSupervisor) Command(ctx context.Context, command supervisorCommand) error {
+func (s *serializedPluginSupervisor) Command(ctx context.Context, command supervisorCommand) (resultErr error) {
+	defer func() { command.signalAdmission(resultErr) }()
 	if ctx == nil {
 		return errors.New("plugins: supervisor command context is required")
 	}
@@ -374,14 +404,17 @@ func (s *serializedPluginSupervisor) handleCommand(
 ) bool {
 	command := envelope.command
 	if err := envelope.ctx.Err(); err != nil {
+		command.signalAdmission(err)
 		command.reply <- err
 		return false
 	}
 	if state.closing {
+		command.signalAdmission(ErrManagerClosed)
 		command.reply <- ErrManagerClosed
 		return false
 	}
 	if state.stopIntent != supervisorStopNone && command.kind != supervisorClose {
+		command.signalAdmission(ErrInvalidState)
 		command.reply <- ErrInvalidState
 		return false
 	}
@@ -391,6 +424,7 @@ func (s *serializedPluginSupervisor) handleCommand(
 			if state.snapshot.State == StateStopped && state.session == nil {
 				s.startSession(state)
 			}
+			command.signalAdmission(nil)
 			command.reply <- nil
 			return false
 		}
@@ -401,6 +435,7 @@ func (s *serializedPluginSupervisor) handleCommand(
 			s.cancelTimer(state)
 			s.startSession(state)
 		}
+		command.signalAdmission(nil)
 		command.reply <- nil
 	case supervisorDisable:
 		state.snapshot.Enabled = false
@@ -410,14 +445,17 @@ func (s *serializedPluginSupervisor) handleCommand(
 			clearRuntimeMetrics(&state.snapshot)
 			state.snapshot.NextRestartAt = time.Time{}
 			s.publish(state)
+			command.signalAdmission(nil)
 			command.reply <- nil
 			return false
 		}
 		if state.stopIntent != supervisorStopNone {
+			command.signalAdmission(ErrInvalidState)
 			command.reply <- ErrInvalidState
 			return false
 		}
 		s.beginStop(state, supervisorStopDisable, command.reply)
+		command.signalAdmission(nil)
 	case supervisorRestart:
 		state.snapshot.ConsecutiveFailures = 0
 		state.snapshot.LastError = ""
@@ -426,19 +464,23 @@ func (s *serializedPluginSupervisor) handleCommand(
 			state.snapshot.State = StateDisabled
 			clearRuntimeMetrics(&state.snapshot)
 			s.publish(state)
+			command.signalAdmission(nil)
 			command.reply <- nil
 			return false
 		}
 		if state.session == nil {
 			s.startSession(state)
+			command.signalAdmission(nil)
 			command.reply <- nil
 			return false
 		}
 		if state.stopIntent != supervisorStopNone {
+			command.signalAdmission(ErrInvalidState)
 			command.reply <- ErrInvalidState
 			return false
 		}
 		s.beginStop(state, supervisorStopRestart, command.reply)
+		command.signalAdmission(nil)
 	case supervisorClose:
 		state.closing = true
 		state.snapshot.Enabled = false
@@ -455,16 +497,19 @@ func (s *serializedPluginSupervisor) handleCommand(
 				state.stopIntent = supervisorStopClose
 				state.closeReply = command.reply
 			}
+			command.signalAdmission(nil)
 			return false
 		}
 		if state.session == nil {
 			state.snapshot.State = StateDisabled
 			clearRuntimeMetrics(&state.snapshot)
 			s.publish(state)
+			command.signalAdmission(nil)
 			command.reply <- nil
 			return true
 		}
 		s.beginStop(state, supervisorStopClose, command.reply)
+		command.signalAdmission(nil)
 	default:
 		s.handleControlCommand(state, envelope)
 	}
@@ -477,16 +522,19 @@ func (s *serializedPluginSupervisor) handleControlCommand(
 ) {
 	command := envelope.command
 	if state.closing {
+		command.signalAdmission(ErrManagerClosed)
 		command.reply <- ErrManagerClosed
 		return
 	}
 	if state.stopIntent != supervisorStopNone || state.snapshot.State == StateStopping {
+		command.signalAdmission(ErrInvalidState)
 		command.reply <- ErrInvalidState
 		return
 	}
 	if command.kind == supervisorConfig {
 		next, request, changed, err := prepareSupervisorControl(state.control, command)
 		if err != nil || !changed {
+			command.signalAdmission(err)
 			command.reply <- err
 			return
 		}
@@ -495,11 +543,13 @@ func (s *serializedPluginSupervisor) handleControlCommand(
 		// cannot make a later session start with stale persisted state.
 		s.commitControl(state, next)
 		if state.session == nil {
+			command.signalAdmission(nil)
 			command.reply <- nil
 			return
 		}
 		if len(state.controlQueue) >= s.config.SupervisorCapacity &&
 			s.config.SupervisorCapacity > 0 {
+			command.signalAdmission(nil)
 			command.reply <- ErrControlBackpressure
 			return
 		}
@@ -509,26 +559,31 @@ func (s *serializedPluginSupervisor) handleControlCommand(
 			durableConfig: true,
 		})
 		s.dispatchNextControl(state)
+		command.signalAdmission(nil)
 		return
 	}
 	if state.session != nil &&
 		len(state.controlQueue) >= s.config.SupervisorCapacity &&
 		s.config.SupervisorCapacity > 0 {
+		command.signalAdmission(ErrControlBackpressure)
 		command.reply <- ErrControlBackpressure
 		return
 	}
 	if state.session == nil {
 		next, _, changed, err := prepareSupervisorControl(state.control, command)
 		if err != nil || !changed {
+			command.signalAdmission(err)
 			command.reply <- err
 			return
 		}
 		s.commitControl(state, next)
+		command.signalAdmission(nil)
 		command.reply <- nil
 		return
 	}
 	state.controlQueue = append(state.controlQueue, supervisorQueuedControl{envelope: envelope})
 	s.dispatchNextControl(state)
+	command.signalAdmission(nil)
 }
 
 func prepareSupervisorControl(

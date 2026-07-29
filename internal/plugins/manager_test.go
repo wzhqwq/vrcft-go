@@ -342,6 +342,52 @@ func TestManagerPersistentRuntimeCommandsDoNotBlockOtherPlugins(t *testing.T) {
 	}
 }
 
+func TestManagerSamePluginAdmissionDoesNotWaitForRuntimeDelivery(t *testing.T) {
+	store := newManagerTestStore(emptyPluginSettings())
+	factory := newManagerTestSupervisorFactory()
+	manager := newManagerForTest(t, &managerTestCatalog{plugins: []InstalledPlugin{
+		managerTestPlugin("vendor.alpha"),
+	}}, store, factory)
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	supervisor := factory.supervisor("vendor.alpha")
+
+	configRuntimeStarted := make(chan struct{})
+	releaseConfigRuntime := make(chan struct{})
+	restartAdmission := make(chan struct{})
+	supervisor.beforeCommand = func(command supervisorCommand) {
+		if command.kind == supervisorRestart {
+			close(restartAdmission)
+		}
+	}
+	supervisor.commandHook = func(command supervisorCommand) error {
+		if command.kind == supervisorConfig {
+			close(configRuntimeStarted)
+			<-releaseConfigRuntime
+		}
+		return nil
+	}
+	configResult := make(chan error, 1)
+	go func() {
+		configResult <- manager.UpdateConfig(context.Background(), "vendor.alpha",
+			pluginapi.Config{Revision: 1, Data: []byte(`{"gain":1}`)})
+	}()
+	awaitManagerSignal(t, configRuntimeStarted)
+
+	restartResult := make(chan error, 1)
+	go func() { restartResult <- manager.Restart(context.Background(), "vendor.alpha") }()
+	awaitManagerSignal(t, restartAdmission)
+	close(releaseConfigRuntime)
+	if err := awaitManagerError(t, configResult); err != nil {
+		t.Fatalf("UpdateConfig() error = %v", err)
+	}
+	if err := awaitManagerError(t, restartResult); err != nil {
+		t.Fatalf("Restart() error = %v", err)
+	}
+}
+
 func TestManagerSavedIntentReachesSupervisorAfterCallerCancellation(t *testing.T) {
 	store := newManagerTestStore(PluginSettings{Plugins: map[string]PluginPreference{
 		"vendor.alpha": {
@@ -372,6 +418,159 @@ func TestManagerSavedIntentReachesSupervisorAfterCallerCancellation(t *testing.T
 	}
 	if got := supervisor.commandCount(supervisorConfig); got != 1 {
 		t.Fatalf("supervisor Config commands = %d, want saved intent admitted despite caller cancellation", got)
+	}
+}
+
+func TestManagerSavedConfigIsAdmittedBeforeConcurrentRestart(t *testing.T) {
+	store := newManagerTestStore(PluginSettings{Plugins: map[string]PluginPreference{
+		"vendor.alpha": {
+			Enabled: true,
+			Config:  pluginapi.Config{Revision: 1, Data: []byte(`{"gain":1}`)},
+		},
+	}})
+	sessions := newManagerScriptedSessionFactory()
+	admissionGate := make(chan struct{})
+	admissionEntered := make(chan struct{})
+	options := DefaultOptions()
+	manager, err := newManager(
+		&managerTestCatalog{plugins: []InstalledPlugin{managerTestPlugin("vendor.alpha")}},
+		store,
+		managerTestLauncher{},
+		&managerRecordingFrameSink{},
+		options,
+		managerDependencies{
+			newSession: sessions.create,
+			newSupervisor: func(config pluginSupervisorConfig) (pluginSupervisor, error) {
+				supervisor, err := newPluginSupervisor(config)
+				if err != nil {
+					return nil, err
+				}
+				return &managerBlockingAdmissionSupervisor{
+					pluginSupervisor: supervisor,
+					kind:             supervisorConfig,
+					entered:          admissionEntered,
+					gate:             admissionGate,
+				}, nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("newManager() error = %v", err)
+	}
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	first := sessions.await(t, "vendor.alpha", 1)
+	first.ready()
+	awaitManagerState(t, manager, "vendor.alpha", StateRunning)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	store.afterSave = cancel
+	configResult := make(chan error, 1)
+	go func() {
+		configResult <- manager.UpdateConfig(ctx, "vendor.alpha",
+			pluginapi.Config{Revision: 2, Data: []byte(`{"gain":2}`)})
+	}()
+	awaitManagerSignal(t, admissionEntered)
+
+	returnedBeforeAdmission := false
+	select {
+	case err := <-configResult:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("UpdateConfig() early error = %v, want context.Canceled", err)
+		}
+		returnedBeforeAdmission = true
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	restartResult := make(chan error, 1)
+	go func() { restartResult <- manager.Restart(context.Background(), "vendor.alpha") }()
+	var second *managerScriptedSession
+	if returnedBeforeAdmission {
+		second = sessions.await(t, "vendor.alpha", 2)
+		close(admissionGate)
+	} else {
+		close(admissionGate)
+		if err := awaitManagerError(t, configResult); !errors.Is(err, context.Canceled) {
+			t.Fatalf("UpdateConfig() error = %v, want context.Canceled after admission", err)
+		}
+		second = sessions.await(t, "vendor.alpha", 2)
+	}
+	if got := second.startup.Config; got.Revision != 2 || string(got.Data) != `{"gain":2}` {
+		t.Fatalf("Restart Startup.Config = %+v, want saved rev2 admitted before Restart", got)
+	}
+	if err := awaitManagerError(t, restartResult); err != nil {
+		t.Fatalf("Restart() error = %v", err)
+	}
+	if returnedBeforeAdmission {
+		t.Fatal("UpdateConfig returned after Save cancellation before supervisor admission")
+	}
+}
+
+func TestManagerPersistentSaveOrderMatchesSamePluginAdmissionOrder(t *testing.T) {
+	store := newManagerTestStore(emptyPluginSettings())
+	store.saveEvents = make(chan PluginSettings, 4)
+	factory := newManagerTestSupervisorFactory()
+	manager := newManagerForTest(t, &managerTestCatalog{plugins: []InstalledPlugin{
+		managerTestPlugin("vendor.alpha"),
+	}}, store, factory)
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	supervisor := factory.supervisor("vendor.alpha")
+
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	supervisor.beforeCommand = func(command supervisorCommand) {
+		if command.kind == supervisorEnable {
+			close(firstEntered)
+			<-releaseFirst
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	store.afterSave = cancel
+	firstResult := make(chan error, 1)
+	go func() { firstResult <- manager.Enable(ctx, "vendor.alpha") }()
+	firstSave := awaitManagerSettings(t, store.saveEvents)
+	if !firstSave.Plugins["vendor.alpha"].Enabled {
+		t.Fatal("first Save did not persist Enabled=true")
+	}
+	awaitManagerSignal(t, firstEntered)
+
+	secondResult := make(chan error, 1)
+	go func() { secondResult <- manager.Disable(context.Background(), "vendor.alpha") }()
+	overtook := false
+	select {
+	case secondSave := <-store.saveEvents:
+		if secondSave.Plugins["vendor.alpha"].Enabled {
+			t.Fatal("second Save did not persist Enabled=false")
+		}
+		overtook = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := awaitManagerError(t, firstResult); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Enable() error = %v, want context.Canceled after admission", err)
+	}
+	if !overtook {
+		secondSave := awaitManagerSettings(t, store.saveEvents)
+		if secondSave.Plugins["vendor.alpha"].Enabled {
+			t.Fatal("second Save did not persist Enabled=false")
+		}
+	}
+	if err := awaitManagerError(t, secondResult); err != nil {
+		t.Fatalf("Disable() error = %v", err)
+	}
+	if got := supervisor.commandKinds(); !reflect.DeepEqual(got, []supervisorCommandKind{
+		supervisorEnable,
+		supervisorDisable,
+	}) {
+		t.Fatalf("supervisor admission order = %v, want [enable disable]", got)
+	}
+	if overtook {
+		t.Fatal("second persistent Save overtook first command admission")
 	}
 }
 
@@ -474,10 +673,10 @@ func TestManagerCloseRejectsControlsStopsConcurrentlyJoinsErrorsAndIsIdempotent(
 	select {
 	case _, ok := <-events:
 		if ok {
-			t.Fatal("event subscription remains open after Manager Close")
+			t.Fatal("event subscription produced an event after Manager Close")
 		}
-	case <-time.After(time.Second):
-		t.Fatal("event subscription did not close")
+	default:
+		t.Fatal("event subscription was not closed when Manager Close returned")
 	}
 	if second := manager.Close(context.Background()); !errors.Is(second, alphaErr) || !errors.Is(second, betaErr) {
 		t.Fatalf("second Close() error = %v, want stable joined result", second)
@@ -531,13 +730,14 @@ func (c *managerTestCatalog) Scan(ctx context.Context) ([]InstalledPlugin, error
 }
 
 type managerTestStore struct {
-	mu        sync.Mutex
-	settings  PluginSettings
-	loadErr   error
-	saveErr   error
-	loads     int
-	saves     int
-	afterSave func()
+	mu         sync.Mutex
+	settings   PluginSettings
+	loadErr    error
+	saveErr    error
+	loads      int
+	saves      int
+	afterSave  func()
+	saveEvents chan PluginSettings
 }
 
 func newManagerTestStore(settings PluginSettings) *managerTestStore {
@@ -565,6 +765,9 @@ func (s *managerTestStore) Save(ctx context.Context, settings PluginSettings) er
 		return s.saveErr
 	}
 	s.settings = clonePluginSettings(settings)
+	if s.saveEvents != nil {
+		s.saveEvents <- clonePluginSettings(settings)
+	}
 	if s.afterSave != nil {
 		s.afterSave()
 	}
@@ -647,21 +850,28 @@ func (f *managerTestSupervisorFactory) closed(id string) bool {
 }
 
 type managerTestSupervisor struct {
-	mu           sync.Mutex
-	snapshot     RuntimeSnapshot
-	commands     []supervisorCommand
-	commandHook  func(supervisorCommand) error
-	publish      func(RuntimeSnapshot)
-	status       func(pluginapi.DeviceStatus)
-	closeStarted chan struct{}
-	closeGate    chan struct{}
-	closeErr     error
-	closeCalls   int
+	mu            sync.Mutex
+	snapshot      RuntimeSnapshot
+	commands      []supervisorCommand
+	commandHook   func(supervisorCommand) error
+	beforeCommand func(supervisorCommand)
+	publish       func(RuntimeSnapshot)
+	status        func(pluginapi.DeviceStatus)
+	closeStarted  chan struct{}
+	closeGate     chan struct{}
+	closeErr      error
+	closeCalls    int
 }
 
 func (s *managerTestSupervisor) Command(ctx context.Context, command supervisorCommand) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	s.mu.Lock()
+	before := s.beforeCommand
+	s.mu.Unlock()
+	if before != nil {
+		before(command)
 	}
 	s.mu.Lock()
 	if command.kind == supervisorConfig {
@@ -670,6 +880,7 @@ func (s *managerTestSupervisor) Command(ctx context.Context, command supervisorC
 	s.commands = append(s.commands, command)
 	hook := s.commandHook
 	s.mu.Unlock()
+	command.signalAdmission(nil)
 	if hook != nil {
 		err := hook(command)
 		if err != nil {
@@ -742,6 +953,16 @@ func (s *managerTestSupervisor) commandCount(kind supervisorCommandKind) int {
 	return count
 }
 
+func (s *managerTestSupervisor) commandKinds() []supervisorCommandKind {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kinds := make([]supervisorCommandKind, len(s.commands))
+	for index, command := range s.commands {
+		kinds[index] = command.kind
+	}
+	return kinds
+}
+
 func (s *managerTestSupervisor) publishStatus(status pluginapi.DeviceStatus) {
 	s.mu.Lock()
 	publish := s.status
@@ -805,6 +1026,7 @@ func (f *managerScriptedSessionFactory) create(
 	session := &managerScriptedSession{
 		instanceID:   instanceID,
 		dependencies: dependencies,
+		startup:      cloneStartup(config.Startup),
 		done:         make(chan sessionResult, 1),
 		controls:     make(chan controlRequest, 8),
 	}
@@ -849,6 +1071,7 @@ func (f *managerScriptedSessionFactory) count(id string) int {
 type managerScriptedSession struct {
 	instanceID   uint64
 	dependencies sessionDependencies
+	startup      pluginapi.Startup
 	done         chan sessionResult
 	controls     chan controlRequest
 	finishOnce   sync.Once
@@ -965,6 +1188,17 @@ func awaitManagerError(t *testing.T, result <-chan error) error {
 	}
 }
 
+func awaitManagerSettings(t *testing.T, settings <-chan PluginSettings) PluginSettings {
+	t.Helper()
+	select {
+	case value := <-settings:
+		return clonePluginSettings(value)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for saved settings")
+		return PluginSettings{}
+	}
+}
+
 func awaitManagerState(t *testing.T, manager Manager, id string, want State) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -999,4 +1233,27 @@ func receiveManagerEventMatching(
 			return Event{}
 		}
 	}
+}
+
+type managerBlockingAdmissionSupervisor struct {
+	pluginSupervisor
+	kind    supervisorCommandKind
+	entered chan struct{}
+	gate    chan struct{}
+	once    sync.Once
+}
+
+func (s *managerBlockingAdmissionSupervisor) Command(
+	ctx context.Context,
+	command supervisorCommand,
+) error {
+	if command.kind == s.kind {
+		s.once.Do(func() { close(s.entered) })
+		select {
+		case <-s.gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.pluginSupervisor.Command(ctx, command)
 }

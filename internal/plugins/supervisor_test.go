@@ -811,6 +811,49 @@ func TestPluginSupervisorDefaultPolicy(t *testing.T) {
 	}
 }
 
+func TestPluginSupervisorAdmissionCompletesOnCanceledAndClosedCommands(t *testing.T) {
+	factory := newSupervisorTestFactory()
+	supervisor, err := newPluginSupervisor(pluginSupervisorConfig{
+		Plugin:       supervisorTestPlugin(),
+		Preference:   PluginPreference{},
+		Restart:      DefaultRestartPolicy(),
+		NewSession:   factory.newSession,
+		Subscription: pluginapi.Subscription{},
+	})
+	if err != nil {
+		t.Fatalf("newPluginSupervisor() error = %v", err)
+	}
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	canceledAdmission := newSupervisorAdmission()
+	err = supervisor.Command(canceledCtx, supervisorCommand{
+		kind:      supervisorRestart,
+		admission: canceledAdmission,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled Command error = %v, want context.Canceled", err)
+	}
+	if err := canceledAdmission.wait(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled admission error = %v, want context.Canceled", err)
+	}
+
+	if err := supervisor.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	closedAdmission := newSupervisorAdmission()
+	err = supervisor.Command(context.Background(), supervisorCommand{
+		kind:      supervisorRestart,
+		admission: closedAdmission,
+	})
+	if !errors.Is(err, ErrManagerClosed) {
+		t.Fatalf("closed Command error = %v, want ErrManagerClosed", err)
+	}
+	if err := closedAdmission.wait(); !errors.Is(err, ErrManagerClosed) {
+		t.Fatalf("closed admission error = %v, want ErrManagerClosed", err)
+	}
+}
+
 func TestPluginSupervisorRetainsAcceptedConfigAcrossRetiredRuntimeDelivery(t *testing.T) {
 	factory := newSupervisorTestFactory()
 	supervisor, err := newPluginSupervisor(pluginSupervisorConfig{

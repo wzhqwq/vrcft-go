@@ -53,6 +53,7 @@ type eventHub struct {
 	subscribe chan subscribeRequest
 	remove    chan *eventSubscriber
 	done      chan struct{}
+	stopped   chan struct{}
 	closed    sync.Once
 }
 
@@ -80,6 +81,7 @@ func newEventHub(capacity int) *eventHub {
 		subscribe: make(chan subscribeRequest, capacity),
 		remove:    make(chan *eventSubscriber, capacity),
 		done:      make(chan struct{}),
+		stopped:   make(chan struct{}),
 	}
 	go hub.run()
 	return hub
@@ -137,9 +139,11 @@ func (h *eventHub) Subscribe(ctx context.Context) <-chan Event {
 
 func (h *eventHub) Close() {
 	h.closed.Do(func() { close(h.done) })
+	<-h.stopped
 }
 
 func (h *eventHub) run() {
+	defer close(h.stopped)
 	subscribers := make(map[*eventSubscriber]struct{})
 	var sequence uint64
 	for {

@@ -62,6 +62,7 @@ type pluginManager struct {
 	mu          sync.RWMutex
 	lifecycle   managerLifecycle
 	supervisors map[string]pluginSupervisor
+	admissions  map[string]chan struct{}
 	ids         []string
 	settings    PluginSettings
 	startDone   chan struct{}
@@ -122,6 +123,7 @@ func newManager(
 		deps:         dependencies,
 		events:       newEventHub(options.EventCapacity),
 		supervisors:  make(map[string]pluginSupervisor),
+		admissions:   make(map[string]chan struct{}),
 		settings:     emptyPluginSettings(),
 		startDone:    startDone,
 		persistToken: make(chan struct{}, 1),
@@ -191,6 +193,7 @@ func (m *pluginManager) Start(ctx context.Context) error {
 	sort.Strings(ids)
 
 	supervisors := make(map[string]pluginSupervisor, len(ids))
+	admissions := make(map[string]chan struct{}, len(ids))
 	for _, id := range ids {
 		if err := ctx.Err(); err != nil {
 			rollbackErr := closePluginSupervisors(supervisors)
@@ -207,6 +210,9 @@ func (m *pluginManager) Start(ctx context.Context) error {
 			return errors.Join(err, rollbackErr)
 		}
 		supervisors[id] = supervisor
+		admission := make(chan struct{}, 1)
+		admission <- struct{}{}
+		admissions[id] = admission
 	}
 
 	m.mu.Lock()
@@ -220,6 +226,7 @@ func (m *pluginManager) Start(ctx context.Context) error {
 		return ErrManagerClosed
 	}
 	m.supervisors = supervisors
+	m.admissions = admissions
 	m.ids = append([]string(nil), ids...)
 	m.settings = settings
 	m.lifecycle = managerStarted
@@ -416,6 +423,22 @@ func (m *pluginManager) persistAndCommand(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	target, err := m.controlTarget(id)
+	if err != nil {
+		return err
+	}
+	if err := acquireManagerToken(ctx, target.admission); err != nil {
+		return err
+	}
+	admissionHeld := true
+	releaseAdmission := func() {
+		if admissionHeld {
+			target.admission <- struct{}{}
+			admissionHeld = false
+		}
+	}
+	defer releaseAdmission()
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -430,7 +453,7 @@ func (m *pluginManager) persistAndCommand(
 	}
 	defer releaseToken()
 
-	supervisor, err := m.controlTarget(id)
+	target, err = m.controlTarget(id)
 	if err != nil {
 		return err
 	}
@@ -452,33 +475,14 @@ func (m *pluginManager) persistAndCommand(
 	// The whole-settings Save must be serialized, but a plugin's runtime
 	// delivery must not hold that serialization and stall other plugins.
 	releaseToken()
-	return commandPersistedIntent(ctx, supervisor, command)
-}
-
-func commandPersistedIntent(
-	ctx context.Context,
-	supervisor pluginSupervisor,
-	command supervisorCommand,
-) error {
-	result := make(chan error, 1)
-	// Once Save succeeds the supervisor must own the durable intent even if
-	// the initiating caller is canceled before command admission. The caller
-	// still returns promptly; the buffered result lets admission finish.
-	go func() {
-		result <- supervisor.Command(context.WithoutCancel(ctx), command)
-	}()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	select {
-	case err := <-result:
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	result, admission := beginSupervisorCommand(
+		context.WithoutCancel(ctx),
+		target.supervisor,
+		command,
+	)
+	admissionErr := admission.wait()
+	releaseAdmission()
+	return finishManagerCommand(ctx, result, admissionErr)
 }
 
 func (m *pluginManager) Restart(ctx context.Context, id string) error {
@@ -507,28 +511,89 @@ func (m *pluginManager) command(ctx context.Context, id string, command supervis
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	supervisor, err := m.controlTarget(id)
+	target, err := m.controlTarget(id)
 	if err != nil {
 		return err
 	}
-	return supervisor.Command(ctx, command)
+	if err := acquireManagerToken(ctx, target.admission); err != nil {
+		return err
+	}
+	result, admission := beginSupervisorCommand(ctx, target.supervisor, command)
+	admissionErr := admission.wait()
+	target.admission <- struct{}{}
+	return finishManagerCommand(ctx, result, admissionErr)
 }
 
-func (m *pluginManager) controlTarget(id string) (pluginSupervisor, error) {
+type managerControlTarget struct {
+	supervisor pluginSupervisor
+	admission  chan struct{}
+}
+
+func (m *pluginManager) controlTarget(id string) (managerControlTarget, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	switch m.lifecycle {
 	case managerClosing, managerClosed:
-		return nil, ErrManagerClosed
+		return managerControlTarget{}, ErrManagerClosed
 	case managerStarted:
 	default:
-		return nil, ErrManagerNotStarted
+		return managerControlTarget{}, ErrManagerNotStarted
 	}
 	supervisor, exists := m.supervisors[id]
 	if !exists {
-		return nil, ErrUnknownPlugin
+		return managerControlTarget{}, ErrUnknownPlugin
 	}
-	return supervisor, nil
+	return managerControlTarget{
+		supervisor: supervisor,
+		admission:  m.admissions[id],
+	}, nil
+}
+
+func acquireManagerToken(ctx context.Context, token chan struct{}) error {
+	select {
+	case <-token:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func beginSupervisorCommand(
+	ctx context.Context,
+	supervisor pluginSupervisor,
+	command supervisorCommand,
+) (<-chan error, *supervisorAdmission) {
+	admission := newSupervisorAdmission()
+	command.admission = admission
+	result := make(chan error, 1)
+	go func() {
+		err := supervisor.Command(ctx, command)
+		admission.signal(err)
+		result <- err
+	}()
+	return result, admission
+}
+
+func finishManagerCommand(
+	ctx context.Context,
+	result <-chan error,
+	admissionErr error,
+) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if admissionErr != nil {
+		return admissionErr
+	}
+	select {
+	case err := <-result:
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (m *pluginManager) Subscribe(ctx context.Context) <-chan Event {

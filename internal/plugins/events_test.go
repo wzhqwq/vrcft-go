@@ -159,8 +159,32 @@ func TestEventHubCancellationAndCloseAreIndependentAndIdempotent(t *testing.T) {
 	}
 
 	hub.Close()
-	waitClosed(t, second)
+	assertEventChannelClosedNow(t, second)
 	hub.Close()
+}
+
+func TestEventHubConcurrentCloseReturnsAfterSubscribersAreClosed(t *testing.T) {
+	hub := newEventHub(2)
+	subscribers := []<-chan Event{
+		hub.Subscribe(context.Background()),
+		hub.Subscribe(context.Background()),
+		hub.Subscribe(context.Background()),
+	}
+	start := make(chan struct{})
+	var closers sync.WaitGroup
+	for range 8 {
+		closers.Add(1)
+		go func() {
+			defer closers.Done()
+			<-start
+			hub.Close()
+		}()
+	}
+	close(start)
+	closers.Wait()
+	for _, subscriber := range subscribers {
+		assertEventChannelClosedNow(t, subscriber)
+	}
 }
 
 func TestEventHubSustainedPublishDoesNotStarveDeliveryOrCancellation(t *testing.T) {
@@ -244,6 +268,18 @@ func waitClosed(t *testing.T, events <-chan Event) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for event channel close")
+	}
+}
+
+func assertEventChannelClosedNow(t *testing.T, events <-chan Event) {
+	t.Helper()
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Fatal("event channel produced an event after Close returned")
+		}
+	default:
+		t.Fatal("event channel was not closed when Close returned")
 	}
 }
 
