@@ -427,13 +427,14 @@ func (m *pluginManager) persistAndCommand(
 	if err != nil {
 		return err
 	}
-	if err := acquireManagerToken(ctx, target.admission); err != nil {
+	admissionToken := target.admission
+	if err := acquireManagerToken(ctx, admissionToken); err != nil {
 		return err
 	}
 	admissionHeld := true
 	releaseAdmission := func() {
 		if admissionHeld {
-			target.admission <- struct{}{}
+			admissionToken <- struct{}{}
 			admissionHeld = false
 		}
 	}
@@ -453,10 +454,11 @@ func (m *pluginManager) persistAndCommand(
 	}
 	defer releaseToken()
 
-	target, err = m.controlTarget(id)
+	currentTarget, err := m.controlTarget(id)
 	if err != nil {
 		return err
 	}
+	supervisor := currentTarget.supervisor
 	m.mu.RLock()
 	next := clonePluginSettings(m.settings)
 	m.mu.RUnlock()
@@ -477,7 +479,7 @@ func (m *pluginManager) persistAndCommand(
 	releaseToken()
 	result, admission := beginSupervisorCommand(
 		context.WithoutCancel(ctx),
-		target.supervisor,
+		supervisor,
 		command,
 	)
 	admissionErr := admission.wait()

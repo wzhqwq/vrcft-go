@@ -692,6 +692,54 @@ func TestManagerCloseRejectsControlsStopsConcurrentlyJoinsErrorsAndIsIdempotent(
 	}
 }
 
+func TestManagerPersistentCommandReturnsAdmissionTokenWhenCloseWinsSecondLifecycleCheck(
+	t *testing.T,
+) {
+	factory := newManagerTestSupervisorFactory()
+	manager := newManagerForTest(t, &managerTestCatalog{plugins: []InstalledPlugin{
+		managerTestPlugin("vendor.alpha"),
+	}}, newManagerTestStore(emptyPluginSettings()), factory).(*pluginManager)
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+
+	manager.mu.RLock()
+	admissionToken := manager.admissions["vendor.alpha"]
+	manager.mu.RUnlock()
+
+	<-manager.persistToken
+	persistTokenHeld := true
+	releasePersistToken := func() {
+		if persistTokenHeld {
+			manager.persistToken <- struct{}{}
+			persistTokenHeld = false
+		}
+	}
+	defer releasePersistToken()
+
+	commandResult := make(chan error, 1)
+	go func() {
+		commandResult <- manager.Enable(context.Background(), "vendor.alpha")
+	}()
+	awaitManagerTokenTaken(t, admissionToken)
+
+	if err := manager.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	releasePersistToken()
+
+	if err := awaitManagerError(t, commandResult); !errors.Is(err, ErrManagerClosed) {
+		t.Fatalf("Enable() error = %v, want ErrManagerClosed", err)
+	}
+	select {
+	case <-admissionToken:
+		admissionToken <- struct{}{}
+	default:
+		t.Fatal("persistent command did not return its original admission token")
+	}
+}
+
 func TestManagerCloseObeysCallerContextWhileShutdownContinues(t *testing.T) {
 	factory := newManagerTestSupervisorFactory()
 	manager := newManagerForTest(t, &managerTestCatalog{plugins: []InstalledPlugin{
@@ -1197,6 +1245,18 @@ func awaitManagerSettings(t *testing.T, settings <-chan PluginSettings) PluginSe
 		t.Fatal("timed out waiting for saved settings")
 		return PluginSettings{}
 	}
+}
+
+func awaitManagerTokenTaken(t *testing.T, token chan struct{}) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(token) == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for manager admission token")
 }
 
 func awaitManagerState(t *testing.T, manager Manager, id string, want State) {
