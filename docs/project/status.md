@@ -1,11 +1,11 @@
 # Project Status
 
-- Generated: 2026-07-23T18:18:39Z
-- Commit: `53a91158932b722e808843abcbc753d2e4a501e6`
-- Source fingerprint: `5a221c91f73cdb7bbed54a44530cfaa104a304547a01d9e86a629564699cb4a2`
+- Generated: 2026-07-30T03:08:33Z
+- Commit: `72abe61f83333cda2852eabf7afe861c1d97c864`
+- Source fingerprint: `551f91b66982d7e48e1b2b9fb90584a5b80e49af9a32f47bc9a59a10131c4ad3`
 - Dirty: `false`
 - State: `blocked`
-- Progress: 78.2% (104/133 weight)
+- Progress: 80.8% (118/146 weight)
 
 ## Milestones
 
@@ -13,12 +13,12 @@
 |---|---|---:|
 | M0 | complete | 100.0% (10/10) |
 | M1 | complete | 100.0% (47/47) |
-| M2 | in_progress | 89.7% (26/29) |
+| M2 | complete | 100.0% (42/42) |
 | M3 | in_progress | 14.3% (1/7) |
 | M4 | in_progress | 20.0% (1/5) |
 | M5 | not_started | 0.0% (0/0) |
 | M6 | blocked | 45.0% (9/20) |
-| M7 | in_progress | 66.7% (10/15) |
+| M7 | in_progress | 53.3% (8/15) |
 
 ## Packages and Subsystems
 
@@ -36,7 +36,7 @@
 | M1 | pkg-protocol | pkg/protocol | complete | 100.0% (6/6) |
 | M1 | pkg-trackingmodel | pkg/trackingmodel | complete | 100.0% (7/7) |
 | M2 | internal-ipc | internal/ipc | complete | 100.0% (16/16) |
-| M2 | internal-plugins | internal/plugins | in_progress | 40.0% (2/5) |
+| M2 | internal-plugins | internal/plugins | complete | 100.0% (18/18) |
 | M2 | pkg-pluginruntime | pkg/pluginruntime | complete | 100.0% (8/8) |
 | M3 | internal-tracking | internal/tracking | in_progress | 14.3% (1/7) |
 | M4 | internal-processing | internal/processing | in_progress | 20.0% (1/5) |
@@ -44,21 +44,21 @@
 | M6 | internal-application | internal/application | in_progress | 40.0% (2/5) |
 | M6 | internal-osc | internal/osc | complete | 100.0% (7/7) |
 | M7 | build-release | build | complete | 100.0% (5/5) |
-| M7 | frontend | frontend | in_progress | 28.6% (2/7) |
+| M7 | frontend | frontend | not_started | 0.0% (0/7) |
 | M7 | root | . | complete | 100.0% (3/3) |
 
 ## Failed Required Checks
 
-- `internal-plugins/runtime-loop` (failed): required symbol not found
 - `internal-tracking/merged-frame-implemented` (failed): matched (?s)type MergedFrame struct\s*\{\s*\}
 - `internal-tracking/service-implemented` (failed): required symbol not found
 - `internal-processing/pipeline-implemented` (failed): required symbol not found
 - `end-to-end/integration-test` (failed): open F:\dev\vrcft-go\internal\application\app_test.go: The system cannot find the file specified.
 - `end-to-end/pipeline-components` (blocked): aggregate member incomplete: internal-application:tracking-wired
 - `internal-application/tracking-wired` (failed): required symbol not found
+- `frontend/production-build` (failed): node:fs:2787 const stats = binding.lstat(base, true, undefined, true /* throwIfNoEntry */); ^ Error: EPERM: operation not permitted, lstat 'C:\Users\wzhqwq' at Object.realpathSync (node:fs:2787:29) at toRealPath (node:internal/modules/helpe…
 - `frontend/project-status-view` (failed): required symbol not found
-- `frontend/type-check` (failed): 02:18:36 [vite-plugin-svelte] !!! Support for vite 8 beta in vite-plugin-svelte is experimental (rolldown: 1.1.5, vite: 8.1.5) !!! See https://github.com/sveltejs/vite-plugin-svelte/issues/1143 for a list of known issues and to report feedb…
+- `frontend/type-check` (failed): node:fs:2787 const stats = binding.lstat(base, true, undefined, true /* throwIfNoEntry */); ^ Error: EPERM: operation not permitted, lstat 'C:\Users\wzhqwq' at Object.realpathSync (node:fs:2787:29) at toRealPath (node:internal/modules/helpe…
 
 ## Next Action
 
-Address `internal-plugins/runtime-loop`: required symbol not found
+Address `internal-tracking/merged-frame-implemented`: matched (?s)type MergedFrame struct\s*\{\s*\}
