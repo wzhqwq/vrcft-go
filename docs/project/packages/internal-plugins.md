@@ -102,7 +102,7 @@ The JSON store persists only `PluginPreference.Enabled` and configuration, with 
 Uses `internal/ipc` for protected one-shot local transport and `pkg/protocol`, `pkg/pluginapi`, and `pkg/trackingmodel` for the versioned session and frame contracts.
 
 ## Concurrency and lifecycle
-Each plugin has a serialized supervisor and an isolated session, so one failure does not interrupt peers. The session admits bounded pending controls during handshake, routes all outbound protocol messages through one writer, and uses a bounded shutdown sequence. Frames bypass the manager event hub and are delivered directly to the configured `FrameSink` with plugin identity and generation. Subscriber events are bounded: state/status can coalesce and logs report drops rather than blocking producers.
+Each plugin has a serialized supervisor and an isolated session, so one failure does not interrupt peers. The session admits bounded pending controls during handshake; after the handshake, runtime outbound protocol messages and controls route through one writer and use a bounded shutdown sequence. Frames bypass the manager event hub and are delivered directly to the configured `FrameSink` with plugin identity and generation. Subscriber events are bounded: state/status can coalesce and logs report drops rather than blocking producers.
 
 ## Error handling
 Manifest, catalog, authentication, protocol, descriptor, heartbeat, and process failures are classified into explicit states. Retryable failures use capped backoff and a finite consecutive-failure budget; incompatible failures do not restart, stable sessions reset the budget, and manual restart clears it. Shutdown joins relevant errors while bounding graceful and kill waits.

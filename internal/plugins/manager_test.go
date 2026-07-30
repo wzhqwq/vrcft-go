@@ -109,6 +109,45 @@ func TestManagerStartupRollsBackAndCanRetry(t *testing.T) {
 	}
 }
 
+func TestManagerStartupRollsBackWhenCallerCancelsDuringFinalSupervisorConstruction(t *testing.T) {
+	catalog := &managerTestCatalog{plugins: []InstalledPlugin{
+		managerTestPlugin("vendor.alpha"),
+		managerTestPlugin("vendor.beta"),
+	}}
+	factory := newManagerTestSupervisorFactory()
+	ctx, cancel := context.WithCancel(context.Background())
+	manager, err := newManager(
+		catalog,
+		newManagerTestStore(emptyPluginSettings()),
+		managerTestLauncher{},
+		managerTestFrameSink{},
+		DefaultOptions(),
+		managerDependencies{newSupervisor: func(config pluginSupervisorConfig) (pluginSupervisor, error) {
+			supervisor, err := factory.create(config)
+			if config.Plugin.Manifest.ID == "vendor.beta" {
+				cancel()
+			}
+			return supervisor, err
+		}},
+	)
+	if err != nil {
+		t.Fatalf("newManager() error = %v", err)
+	}
+
+	if err := manager.Start(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start() error = %v, want context.Canceled", err)
+	}
+	if got := manager.List(); len(got) != 0 {
+		t.Fatalf("List() after cancellation = %+v, want empty registry", got)
+	}
+	if !factory.closed("vendor.alpha") || !factory.closed("vendor.beta") {
+		t.Fatal("startup cancellation did not close every constructed supervisor")
+	}
+	if err := manager.Enable(context.Background(), "vendor.alpha"); !errors.Is(err, ErrManagerNotStarted) {
+		t.Fatalf("Enable() after cancellation error = %v, want ErrManagerNotStarted", err)
+	}
+}
+
 func TestManagerRejectsInvalidDependenciesAndOptions(t *testing.T) {
 	validCatalog := &managerTestCatalog{}
 	validStore := newManagerTestStore(emptyPluginSettings())

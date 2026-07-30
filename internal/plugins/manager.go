@@ -215,6 +215,11 @@ func (m *pluginManager) Start(ctx context.Context) error {
 		admissions[id] = admission
 	}
 
+	if err := ctx.Err(); err != nil {
+		rollbackErr := closePluginSupervisors(supervisors)
+		m.finishFailedStart(startDone)
+		return errors.Join(err, rollbackErr)
+	}
 	m.mu.Lock()
 	if m.lifecycle != managerStarting {
 		m.mu.Unlock()
