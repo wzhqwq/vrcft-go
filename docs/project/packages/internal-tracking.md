@@ -36,9 +36,9 @@ Validate sequence/time/capability, reject stale generations, select sources, mer
 ## Non-responsibilities
 Plugin process supervision and signal filtering belong elsewhere.
 ## Current implementation
-Routing configuration and service interfaces exist; merged frame and service implementation are empty.
+Routing configuration and service interfaces exist; merged frame and service implementation are empty. The future adapter from `internal/plugins` must preserve the plugin ID and generation supplied by `FrameSink.Submit(pluginID, generation, frame)` so stale-generation validation remains possible.
 ## Public/internal interfaces
-`Service`, `RoutingConfig`, `SourceSelection`, and `MergedFrame`.
+`Service`, `RoutingConfig`, `SourceSelection`, and `MergedFrame`. The eventual plugin-ingestion adapter receives the generation-bearing `internal/plugins` FrameSink handoff before it calls the tracking service.
 ## Owned data
 Latest valid frames per plugin, routing state, and merged snapshot.
 ## Dependencies
