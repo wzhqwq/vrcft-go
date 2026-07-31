@@ -66,6 +66,7 @@ type sessionTestProcess struct {
 
 	mu            sync.Mutex
 	killCount     int
+	waitCount     int
 	unblockOnKill bool
 }
 
@@ -75,6 +76,9 @@ func newSessionTestProcess() *sessionTestProcess {
 
 func (p *sessionTestProcess) PID() int { return 4242 }
 func (p *sessionTestProcess) Wait() error {
+	p.mu.Lock()
+	p.waitCount++
+	p.mu.Unlock()
 	return <-p.wait
 }
 func (p *sessionTestProcess) Kill() error {
@@ -95,6 +99,12 @@ func (p *sessionTestProcess) kills() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.killCount
+}
+
+func (p *sessionTestProcess) waits() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.waitCount
 }
 
 type sessionTestLauncher struct {
@@ -518,6 +528,323 @@ func TestPluginSessionStartupFailuresCleanOwnedResources(t *testing.T) {
 				t.Fatalf("process Kill calls = %d, wantKill %v", got, test.wantKill)
 			}
 		})
+	}
+}
+
+type sessionStartupBlockingListener struct {
+	entered chan struct{}
+	once    sync.Once
+
+	mu         sync.Mutex
+	closeCount int
+}
+
+func (l *sessionStartupBlockingListener) Accept(ctx context.Context) (protocol.Conn, error) {
+	l.once.Do(func() { close(l.entered) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (l *sessionStartupBlockingListener) Close() error {
+	l.mu.Lock()
+	l.closeCount++
+	l.mu.Unlock()
+	return nil
+}
+
+func (l *sessionStartupBlockingListener) closes() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.closeCount
+}
+
+type sessionStartupBlockingReceiveConn struct {
+	protocol.Conn
+	blockAt int
+	entered chan struct{}
+	once    sync.Once
+
+	mu       sync.Mutex
+	receives int
+}
+
+func (c *sessionStartupBlockingReceiveConn) Receive(ctx context.Context) (protocol.Message, error) {
+	c.mu.Lock()
+	c.receives++
+	receives := c.receives
+	c.mu.Unlock()
+	if receives == c.blockAt {
+		c.once.Do(func() { close(c.entered) })
+		<-ctx.Done()
+		return protocol.Message{}, ctx.Err()
+	}
+	return c.Conn.Receive(ctx)
+}
+
+type sessionStartupBlockingSendConn struct {
+	protocol.Conn
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *sessionStartupBlockingSendConn) Send(ctx context.Context, message protocol.Message) error {
+	if message.Type == protocol.MessageInitialize {
+		c.once.Do(func() { close(c.entered) })
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return c.Conn.Send(ctx, message)
+}
+
+func TestPluginSessionStopDuringLaunchSuppressesOnlyOwnerCancellation(t *testing.T) {
+	independentErr := errors.New("independent launch failure")
+	for _, test := range []struct {
+		name          string
+		startError    func(error) error
+		wantErr       error
+		wantRetryable bool
+	}{
+		{
+			name:       "cancellation only",
+			startError: func(ctxErr error) error { return ctxErr },
+		},
+		{
+			name:          "joined independent failure",
+			startError:    func(ctxErr error) error { return errors.Join(ctxErr, independentErr) },
+			wantErr:       independentErr,
+			wantRetryable: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			entered := make(chan struct{})
+			listener := &sessionTestListener{}
+			session := newPluginSession(context.Background(), 102, startupStopSessionConfig(t), sessionDependencies{
+				credentials: startupStopCredentials,
+				listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+					return listener, nil
+				},
+				launcher: sessionTestLauncher{start: func(ctx context.Context, _ ProcessSpec) (Process, error) {
+					close(entered)
+					<-ctx.Done()
+					return nil, test.startError(ctx.Err())
+				}},
+			})
+			awaitValue(t, entered)
+
+			stopErr, result := stopStartupSession(t, session)
+			if test.wantErr == nil {
+				assertCleanStartupStop(t, stopErr, result)
+			} else {
+				if !errors.Is(stopErr, test.wantErr) || errors.Is(stopErr, context.Canceled) {
+					t.Fatalf("Stop() error = %v, want independent error without context.Canceled", stopErr)
+				}
+				if !errors.Is(result.Err, test.wantErr) || errors.Is(result.Err, context.Canceled) {
+					t.Fatalf("session error = %v, want independent error without context.Canceled", result.Err)
+				}
+				if result.Retryable != test.wantRetryable {
+					t.Fatalf("Retryable = %v, want %v", result.Retryable, test.wantRetryable)
+				}
+			}
+			if got := listener.closes(); got != 1 {
+				t.Fatalf("listener Close calls = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestPluginSessionStopDuringAcceptIsCleanAndBounded(t *testing.T) {
+	listener := &sessionStartupBlockingListener{entered: make(chan struct{})}
+	process := newSessionTestProcess()
+	session := newPluginSession(context.Background(), 103, startupStopSessionConfig(t), sessionDependencies{
+		credentials: startupStopCredentials,
+		listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+			return listener, nil
+		},
+		launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+			return process, nil
+		}},
+	})
+	awaitValue(t, listener.entered)
+
+	stopErr, result := stopStartupSession(t, session)
+	assertCleanStartupStop(t, stopErr, result)
+	assertStartupResourcesClosedOnce(t, listener.closes(), 0, 0, process)
+}
+
+func TestPluginSessionStopWhileWaitingForHelloIsCleanAndBounded(t *testing.T) {
+	entered := make(chan struct{})
+	hostRaw, pluginRaw := net.Pipe()
+	counted := &sessionCountingConn{Conn: ipc.WrapConn(hostRaw)}
+	hostConn := &sessionStartupBlockingReceiveConn{Conn: counted, blockAt: 1, entered: entered}
+	pluginConn := ipc.WrapConn(pluginRaw)
+	t.Cleanup(func() { _ = pluginConn.Close() })
+	listener := &sessionTestListener{conn: hostConn}
+	process := newSessionTestProcess()
+	session := newPluginSession(context.Background(), 104, startupStopSessionConfig(t), sessionDependencies{
+		credentials: startupStopCredentials,
+		listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+			return listener, nil
+		},
+		launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+			return process, nil
+		}},
+	})
+	awaitValue(t, entered)
+
+	stopErr, result := stopStartupSession(t, session)
+	assertCleanStartupStop(t, stopErr, result)
+	assertStartupResourcesClosedOnce(t, listener.closes(), counted.closes(), 1, process)
+}
+
+func TestPluginSessionStopWhileWaitingForReadyIsCleanAndBounded(t *testing.T) {
+	entered := make(chan struct{})
+	hostRaw, pluginRaw := net.Pipe()
+	counted := &sessionCountingConn{Conn: ipc.WrapConn(hostRaw)}
+	hostConn := &sessionStartupBlockingReceiveConn{Conn: counted, blockAt: 2, entered: entered}
+	pluginConn := ipc.WrapConn(pluginRaw)
+	t.Cleanup(func() { _ = pluginConn.Close() })
+	listener := &sessionTestListener{conn: hostConn}
+	process := newSessionTestProcess()
+	token := handshakeToken(105)
+	pluginDone := make(chan error, 1)
+	session := newPluginSession(context.Background(), 105, startupStopSessionConfig(t), sessionDependencies{
+		credentials: func() (string, string, error) { return "session-startup-stop", token, nil },
+		listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+			return listener, nil
+		},
+		launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+			go func() {
+				if err := pluginConn.Send(context.Background(), validHello(token)); err != nil {
+					pluginDone <- err
+					return
+				}
+				_, err := pluginConn.Receive(context.Background())
+				pluginDone <- err
+			}()
+			return process, nil
+		}},
+	})
+	awaitValue(t, entered)
+	if err := awaitValue(t, pluginDone); err != nil {
+		t.Fatalf("plugin Initialize receive error = %v", err)
+	}
+
+	stopErr, result := stopStartupSession(t, session)
+	assertCleanStartupStop(t, stopErr, result)
+	assertStartupResourcesClosedOnce(t, listener.closes(), counted.closes(), 1, process)
+}
+
+func TestPluginSessionStopDuringHandshakeSendIsCleanAndBounded(t *testing.T) {
+	entered := make(chan struct{})
+	hostRaw, pluginRaw := net.Pipe()
+	counted := &sessionCountingConn{Conn: ipc.WrapConn(hostRaw)}
+	hostConn := &sessionStartupBlockingSendConn{Conn: counted, entered: entered}
+	pluginConn := ipc.WrapConn(pluginRaw)
+	t.Cleanup(func() { _ = pluginConn.Close() })
+	listener := &sessionTestListener{conn: hostConn}
+	process := newSessionTestProcess()
+	token := handshakeToken(106)
+	pluginDone := make(chan error, 1)
+	session := newPluginSession(context.Background(), 106, startupStopSessionConfig(t), sessionDependencies{
+		credentials: func() (string, string, error) { return "session-startup-stop", token, nil },
+		listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+			return listener, nil
+		},
+		launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+			go func() { pluginDone <- pluginConn.Send(context.Background(), validHello(token)) }()
+			return process, nil
+		}},
+	})
+	awaitValue(t, entered)
+	if err := awaitValue(t, pluginDone); err != nil {
+		t.Fatalf("plugin Hello send error = %v", err)
+	}
+
+	stopErr, result := stopStartupSession(t, session)
+	assertCleanStartupStop(t, stopErr, result)
+	assertStartupResourcesClosedOnce(t, listener.closes(), counted.closes(), 1, process)
+}
+
+func TestPluginSessionStopCallerCancellationStillWinsWhileStartupIsBlocked(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	listener := &sessionTestListener{}
+	session := newPluginSession(context.Background(), 107, startupStopSessionConfig(t), sessionDependencies{
+		credentials: startupStopCredentials,
+		listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+			return listener, nil
+		},
+		launcher: sessionTestLauncher{start: func(ctx context.Context, _ ProcessSpec) (Process, error) {
+			close(entered)
+			<-release
+			return nil, ctx.Err()
+		}},
+	})
+	awaitValue(t, entered)
+	callerCtx, cancelCaller := context.WithCancel(context.Background())
+	cancelCaller()
+	if err := session.Stop(callerCtx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stop() error = %v, want caller context.Canceled", err)
+	}
+	close(release)
+	result := awaitSessionResult(t, session.Done())
+	if result.Err != nil || result.Retryable {
+		t.Fatalf("session result = %+v, want clean owner-canceled startup", result)
+	}
+	if got := listener.closes(); got != 1 {
+		t.Fatalf("listener Close calls = %d, want 1", got)
+	}
+}
+
+func startupStopSessionConfig(t *testing.T) sessionConfig {
+	t.Helper()
+	config := sourceClassificationSessionConfig(t)
+	config.KillTimeout = 50 * time.Millisecond
+	return config
+}
+
+func startupStopCredentials() (string, string, error) {
+	return "session-startup-stop", handshakeToken(102), nil
+}
+
+func stopStartupSession(t *testing.T, session pluginSession) (error, sessionResult) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	stopErr := session.Stop(ctx)
+	if errors.Is(stopErr, context.DeadlineExceeded) {
+		t.Fatal("Stop() exceeded startup teardown bound")
+	}
+	return stopErr, awaitSessionResult(t, session.Done())
+}
+
+func assertCleanStartupStop(t *testing.T, stopErr error, result sessionResult) {
+	t.Helper()
+	if stopErr != nil {
+		t.Fatalf("Stop() error = %v, want nil", stopErr)
+	}
+	if result.Err != nil || result.Retryable {
+		t.Fatalf("session result = %+v, want nil error and non-retryable", result)
+	}
+}
+
+func assertStartupResourcesClosedOnce(
+	t *testing.T,
+	listenerCloses, connectionCloses, wantConnectionCloses int,
+	process *sessionTestProcess,
+) {
+	t.Helper()
+	if listenerCloses != 1 {
+		t.Fatalf("listener Close calls = %d, want 1", listenerCloses)
+	}
+	if connectionCloses != wantConnectionCloses {
+		t.Fatalf("connection Close calls = %d, want %d", connectionCloses, wantConnectionCloses)
+	}
+	if got := process.kills(); got != 1 {
+		t.Fatalf("process Kill calls = %d, want 1", got)
+	}
+	if got := process.waits(); got != 1 {
+		t.Fatalf("process Wait calls = %d, want 1", got)
 	}
 }
 

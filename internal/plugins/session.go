@@ -282,8 +282,9 @@ func (s *processSession) startAndWait() sessionResult {
 		Env:        environment,
 	})
 	if err != nil {
+		err = s.suppressOwnerStartupCancellation(err)
 		result.Err = err
-		result.Retryable = retryableLaunchError(err)
+		result.Retryable = err != nil && retryableLaunchError(err)
 		return result
 	}
 	if s.deps.onProcessStarted != nil {
@@ -297,11 +298,12 @@ func (s *processSession) startAndWait() sessionResult {
 	}
 	if err != nil {
 		cancelHandshake()
+		err = s.suppressOwnerStartupCancellation(err)
 		result.Err = errors.Join(
-			handshakeConnectionError(handshakeCtx, err),
+			handshakeStartupError(handshakeCtx, err),
 			s.cleanupStartedProcess(process),
 		)
-		result.Retryable = true
+		result.Retryable = result.Err != nil
 		return result
 	}
 	conn = &onceSessionConn{Conn: conn}
@@ -310,8 +312,14 @@ func (s *processSession) startAndWait() sessionResult {
 	handshake, err := hostHandshake(handshakeCtx, conn, s.config.Plugin.Manifest, token, s.config.Startup)
 	cancelHandshake()
 	if err != nil {
-		result.Err = errors.Join(err, s.cleanupStartedProcess(process))
-		result.Retryable = retryableSessionError(err)
+		err = s.suppressOwnerStartupCancellation(err)
+		cleanupErr := s.cleanupStartedProcess(process)
+		result.Err = errors.Join(err, cleanupErr)
+		if err != nil {
+			result.Retryable = retryableSessionError(err)
+		} else if cleanupErr != nil {
+			result.Retryable = retryableSessionError(cleanupErr)
+		}
 		return result
 	}
 	if s.deps.onReady != nil {
@@ -605,6 +613,66 @@ func (s *processSession) isSessionStopping() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.phase == sessionStopping
+}
+
+func (s *processSession) suppressOwnerStartupCancellation(err error) error {
+	if err == nil || !s.isSessionStopping() {
+		return err
+	}
+	return withoutContextCanceled(err)
+}
+
+func withoutContextCanceled(err error) error {
+	if err == nil || !errors.Is(err, context.Canceled) {
+		return err
+	}
+	switch current := err.(type) {
+	case interface{ Unwrap() []error }:
+		causes := current.Unwrap()
+		remaining := make([]error, 0, len(causes))
+		for _, cause := range causes {
+			if cause = withoutContextCanceled(cause); cause != nil {
+				remaining = append(remaining, cause)
+			}
+		}
+		return errors.Join(remaining...)
+	case opaqueHandshakeCause:
+		if !errors.Is(current.cause, context.Canceled) {
+			return current
+		}
+		cause := withoutContextCanceled(current.cause)
+		if cause == nil {
+			return nil
+		}
+		return opaqueHandshakeCause{cause: cause}
+	case opaqueSessionCause:
+		if !errors.Is(current.cause, context.Canceled) {
+			return current
+		}
+		cause := withoutContextCanceled(current.cause)
+		if cause == nil {
+			return nil
+		}
+		return opaqueSessionCause{kind: current.kind, cause: cause}
+	case interface{ Unwrap() error }:
+		cause := current.Unwrap()
+		if !errors.Is(cause, context.Canceled) {
+			return err
+		}
+		return withoutContextCanceled(cause)
+	default:
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
+	}
+}
+
+func handshakeStartupError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	return handshakeConnectionError(ctx, err)
 }
 
 func singleProcessResult(err error) <-chan error {
