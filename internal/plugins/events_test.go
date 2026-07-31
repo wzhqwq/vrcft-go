@@ -143,6 +143,57 @@ func TestEventHubOnlyReportsDroppedLogsOnTheNextAcceptedLog(t *testing.T) {
 	}
 }
 
+func TestEventSubscriberAddsUpstreamAndLocalLogLoss(t *testing.T) {
+	subscriber := &eventSubscriber{states: make(map[string]Event)}
+	subscriber.enqueue(Event{
+		Sequence: 1,
+		Type:     EventPluginLog,
+		PluginID: "camera",
+		Log:      &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "retained"},
+	}, 1)
+	subscriber.enqueue(Event{
+		Sequence: 2,
+		Type:     EventPluginLog,
+		PluginID: "camera",
+		Log:      &pluginapi.LogEntry{Level: pluginapi.LogWarn, Message: "lost one"},
+		Dropped:  4,
+	}, 1)
+	subscriber.enqueue(Event{Sequence: 3, Type: EventPluginStatus, PluginID: "camera"}, 1)
+	subscriber.enqueue(Event{Sequence: 4, Type: EventPluginDiscovered, PluginID: "other"}, 1)
+	subscriber.enqueue(Event{
+		Sequence: 5,
+		Type:     EventPluginLog,
+		PluginID: "camera",
+		Log:      &pluginapi.LogEntry{Level: pluginapi.LogError, Message: "lost two"},
+		Dropped:  2,
+	}, 1)
+
+	retained, ok := subscriber.next()
+	if !ok || retained.Log == nil || retained.Log.Message != "retained" {
+		t.Fatalf("first queued event = %+v, want retained log", retained)
+	}
+	subscriber.pop(retained)
+	for range 2 {
+		nonLog, ok := subscriber.next()
+		if !ok || nonLog.Type == EventPluginLog {
+			t.Fatalf("queued non-log event = %+v", nonLog)
+		}
+		subscriber.pop(nonLog)
+	}
+	subscriber.enqueue(Event{
+		Sequence: 6,
+		Type:     EventPluginLog,
+		PluginID: "camera",
+		Log:      &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "delivered"},
+		Dropped:  3,
+	}, 1)
+
+	delivered, ok := subscriber.next()
+	if !ok || delivered.Log == nil || delivered.Log.Message != "delivered" || delivered.Dropped != 11 {
+		t.Fatalf("composed event = %+v, want delivered with Dropped 11", delivered)
+	}
+}
+
 func TestEventHubCancellationAndCloseAreIndependentAndIdempotent(t *testing.T) {
 	// Catches shared subscriber cancellation, leaked subscription channels,
 	// and Close panics/deadlocks on repeated calls.

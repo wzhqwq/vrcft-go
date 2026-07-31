@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
@@ -264,6 +265,7 @@ func (m *pluginManager) supervisorConfig(
 	preference PluginPreference,
 ) pluginSupervisorConfig {
 	id := plugin.Manifest.ID
+	var droppedLog atomic.Uint64
 	return pluginSupervisorConfig{
 		Plugin:       plugin,
 		Preference:   preference,
@@ -308,13 +310,18 @@ func (m *pluginManager) supervisorConfig(
 				Status:   &statusCopy,
 			})
 		},
-		PublishLog: func(entry pluginapi.LogEntry) {
+		PublishLog: func(log observedPluginLog) {
+			log.Dropped = saturatingAddUint64(log.Dropped, droppedLog.Swap(0))
+			entry := log.Entry
 			entry.PluginID = id
-			m.publishIfStarted(Event{
+			if !m.publishIfStarted(Event{
 				Type:     EventPluginLog,
 				PluginID: id,
 				Log:      &entry,
-			})
+				Dropped:  log.Dropped,
+			}) {
+				accumulateDropped(&droppedLog, saturatingAddUint64(log.Dropped, 1))
+			}
 		},
 		SupervisorCapacity: m.options.ControlCapacity,
 	}
@@ -328,14 +335,15 @@ func (m *pluginManager) publishSnapshot(id string, snapshot RuntimeSnapshot) {
 	})
 }
 
-func (m *pluginManager) publishIfStarted(event Event) {
+func (m *pluginManager) publishIfStarted(event Event) bool {
 	m.mu.RLock()
 	_, exists := m.supervisors[event.PluginID]
 	started := m.lifecycle == managerStarted && exists
 	m.mu.RUnlock()
 	if started {
-		m.events.Publish(event)
+		return m.events.Publish(event)
 	}
+	return false
 }
 
 func (m *pluginManager) List() []RuntimeSnapshot {

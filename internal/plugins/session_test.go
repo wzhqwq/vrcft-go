@@ -649,6 +649,53 @@ func TestPluginSessionClassifiesFailureAtItsSource(t *testing.T) {
 	})
 }
 
+func TestPluginSessionRuntimeLogPreservesUpstreamDroppedCount(t *testing.T) {
+	hostRaw, pluginRaw := net.Pipe()
+	hostConn := ipc.WrapConn(hostRaw)
+	pluginConn := ipc.WrapConn(pluginRaw)
+	t.Cleanup(func() {
+		_ = hostConn.Close()
+		_ = pluginConn.Close()
+	})
+
+	logs := make(chan observedPluginLog, 1)
+	session := &processSession{
+		config: sessionConfig{Plugin: newSessionTestInstalledPlugin(t)},
+		deps: sessionDependencies{onLog: func(instanceID uint64, log observedPluginLog) {
+			if instanceID != 73 {
+				t.Errorf("log instance ID = %d, want 73", instanceID)
+			}
+			logs <- log
+		}},
+		instanceID:     73,
+		heartbeatPulse: make(chan struct{}, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	readerDone := make(chan error, 1)
+	go func() { readerDone <- session.readRuntime(ctx, hostConn) }()
+
+	sendSessionPayload(t, pluginConn, protocol.Log{
+		Level:   pluginapi.LogWarn,
+		Message: "bounded upstream loss",
+		Dropped: 2,
+	})
+	got := awaitValue(t, logs)
+	if got.Dropped != 2 {
+		t.Fatalf("observed Dropped = %d, want 2", got.Dropped)
+	}
+	if got.Entry.PluginID != session.config.Plugin.Manifest.ID ||
+		got.Entry.Level != pluginapi.LogWarn ||
+		got.Entry.Message != "bounded upstream loss" ||
+		got.Entry.Time.IsZero() {
+		t.Fatalf("observed LogEntry = %+v, want sanitized runtime fields", got.Entry)
+	}
+
+	cancel()
+	if err := awaitValue(t, readerDone); err != nil {
+		t.Fatalf("readRuntime() after cancel error = %v", err)
+	}
+}
+
 func sourceClassificationSessionConfig(t *testing.T) sessionConfig {
 	t.Helper()
 	return sessionConfig{
@@ -920,7 +967,7 @@ func TestPluginSessionRoutesRuntimeMessagesAndRejectsWrongDirection(t *testing.T
 			heartbeats := make(chan uint64, 1)
 			frameMetrics := make(chan sessionTestFrameMetric, 3)
 			statuses := make(chan pluginapi.DeviceStatus, 1)
-			logs := make(chan pluginapi.LogEntry, 1)
+			logs := make(chan observedPluginLog, 1)
 			firstFrameAt := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
 			frameTimes := make(chan time.Time, 3)
 			frameTimes <- firstFrameAt
@@ -969,11 +1016,11 @@ func TestPluginSessionRoutesRuntimeMessagesAndRejectsWrongDirection(t *testing.T
 					}
 					statuses <- status
 				},
-				onLog: func(instanceID uint64, entry pluginapi.LogEntry) {
+				onLog: func(instanceID uint64, log observedPluginLog) {
 					if instanceID != 8 {
 						t.Errorf("log instance ID = %d, want 8", instanceID)
 					}
-					logs <- entry
+					logs <- log
 				},
 			}
 			config := sessionConfig{
@@ -1047,8 +1094,8 @@ func TestPluginSessionRoutesRuntimeMessagesAndRejectsWrongDirection(t *testing.T
 			if got := awaitValue(t, statuses); got != (pluginapi.DeviceStatus{State: pluginapi.DeviceReady}) {
 				t.Fatalf("status = %#v", got)
 			}
-			if got := awaitValue(t, logs); got.PluginID != config.Plugin.Manifest.ID ||
-				got.Level != pluginapi.LogInfo || got.Message != "device ready" {
+			if got := awaitValue(t, logs); got.Entry.PluginID != config.Plugin.Manifest.ID ||
+				got.Entry.Level != pluginapi.LogInfo || got.Entry.Message != "device ready" || got.Dropped != 0 {
 				t.Fatalf("log entry = %#v", got)
 			}
 

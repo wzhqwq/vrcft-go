@@ -763,6 +763,58 @@ func TestPluginSupervisorCriticalCallbacksSurviveTelemetryBackpressure(t *testin
 	}
 }
 
+func TestPluginSupervisorTelemetryLogLossComposesOnNextPublishedLog(t *testing.T) {
+	published := make(chan observedPluginLog, 1)
+	supervisor := &serializedPluginSupervisor{
+		config: pluginSupervisorConfig{PublishLog: func(log observedPluginLog) {
+			published <- log
+		}},
+		callback: make(chan supervisorCallback, 1),
+		done:     make(chan struct{}),
+	}
+	callbacks := supervisor.sessionCallbacks(91)
+	supervisor.callback <- supervisorCallback{kind: supervisorHeartbeat, instanceID: 91}
+
+	producerReturned := make(chan struct{})
+	go func() {
+		callbacks.Log(91, observedPluginLog{
+			Entry:   pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "lost one"},
+			Dropped: 4,
+		})
+		close(producerReturned)
+	}()
+	select {
+	case <-producerReturned:
+	case <-time.After(time.Second):
+		t.Fatal("Log callback blocked on full telemetry queue")
+	}
+	callbacks.Log(91, observedPluginLog{
+		Entry:   pluginapi.LogEntry{Level: pluginapi.LogWarn, Message: "lost two"},
+		Dropped: 2,
+	})
+	callbacks.Heartbeat(91, time.Unix(1, 0))
+	callbacks.Frame(91, time.Unix(2, 0), 60)
+	callbacks.Status(91, pluginapi.DeviceStatus{State: pluginapi.DeviceReady})
+
+	<-supervisor.callback
+	callbacks.Log(91, observedPluginLog{
+		Entry:   pluginapi.LogEntry{Level: pluginapi.LogError, Message: "delivered"},
+		Dropped: 3,
+	})
+	accepted := <-supervisor.callback
+	state := supervisorLoopState{
+		snapshot:   RuntimeSnapshot{State: StateRunning},
+		session:    newSupervisorTestSession(),
+		instanceID: 91,
+	}
+	supervisor.handleCallback(&state, accepted)
+
+	got := awaitValue(t, published)
+	if got.Entry.Message != "delivered" || got.Dropped != 11 {
+		t.Fatalf("published log = %+v, want delivered with Dropped 11", got)
+	}
+}
+
 func TestPluginSupervisorClearsRuntimeMetricsAcrossRestart(t *testing.T) {
 	factory := newSupervisorTestFactory()
 	clock := newSupervisorTestClock(time.Unix(395, 0))

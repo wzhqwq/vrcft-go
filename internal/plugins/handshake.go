@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 
+	"github.com/wzhqwq/vrcft-go/internal/ipc"
 	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
 	"github.com/wzhqwq/vrcft-go/pkg/protocol"
 )
@@ -32,7 +33,7 @@ func hostHandshake(
 	expectedToken, validExpectedToken := decodeSessionToken(token)
 	message, err := conn.Receive(ctx)
 	if err != nil {
-		return handshakeResult{}, handshakeConnectionError(ctx, err)
+		return handshakeResult{}, handshakeReceiveError(ctx, err)
 	}
 	hello, ok := message.Payload.(protocol.Hello)
 	if message.Version != protocol.Version || message.Type != protocol.MessageHello || !ok {
@@ -61,7 +62,7 @@ func hostHandshake(
 
 	message, err = conn.Receive(ctx)
 	if err != nil {
-		return handshakeResult{}, handshakeConnectionError(ctx, err)
+		return handshakeResult{}, handshakeReceiveError(ctx, err)
 	}
 	if message.Version != protocol.Version || message.Type != protocol.MessageReady {
 		return handshakeResult{}, ErrProtocolViolation
@@ -112,6 +113,20 @@ func handshakeConnectionError(ctx context.Context, err error) error {
 		return errors.Join(ErrHandshakeTimeout, context.DeadlineExceeded)
 	}
 	return opaqueHandshakeCause{cause: err}
+}
+
+func handshakeReceiveError(ctx context.Context, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return handshakeConnectionError(ctx, err)
+	}
+	if isProtocolFramingError(err) {
+		return ErrProtocolViolation
+	}
+	return handshakeConnectionError(ctx, err)
+}
+
+func isProtocolFramingError(err error) bool {
+	return errors.Is(err, ipc.ErrMalformedFrame) || errors.Is(err, ipc.ErrFrameTooLarge)
 }
 
 type opaqueHandshakeCause struct{ cause error }

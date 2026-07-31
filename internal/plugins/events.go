@@ -270,11 +270,14 @@ func (s *eventSubscriber) enqueue(event Event, capacity int) {
 		s.states[key] = event.clone()
 	case EventPluginLog:
 		if len(s.logs) >= capacity {
-			s.droppedLog++
+			s.droppedLog = saturatingAddUint64(
+				s.droppedLog,
+				saturatingAddUint64(event.Dropped, 1),
+			)
 			return
 		}
 		if s.droppedLog != 0 {
-			event.Dropped = s.droppedLog
+			event.Dropped = saturatingAddUint64(event.Dropped, s.droppedLog)
 			s.droppedLog = 0
 		}
 		s.logs = append(s.logs, event.clone())

@@ -74,6 +74,85 @@ func TestManagerStartupBuildsFixedSortedRegistryAndPreservesUnavailablePreferenc
 	}
 }
 
+func TestManagerLogIngressLossComposesPerPluginWithoutBlocking(t *testing.T) {
+	alpha := managerTestPlugin("vendor.alpha")
+	beta := managerTestPlugin("vendor.beta")
+	hub := &eventHub{
+		publish: make(chan Event, 1),
+		done:    make(chan struct{}),
+	}
+	manager := &pluginManager{
+		options:   DefaultOptions(),
+		events:    hub,
+		lifecycle: managerStarted,
+		supervisors: map[string]pluginSupervisor{
+			alpha.Manifest.ID: &managerTestSupervisor{},
+			beta.Manifest.ID:  &managerTestSupervisor{},
+		},
+	}
+	alphaLog := manager.supervisorConfig(alpha, PluginPreference{}).PublishLog
+	betaLog := manager.supervisorConfig(beta, PluginPreference{}).PublishLog
+
+	hub.publish <- Event{Type: EventPluginStatus, PluginID: alpha.Manifest.ID}
+	producerReturned := make(chan struct{})
+	go func() {
+		alphaLog(observedPluginLog{
+			Entry:   pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "lost alpha"},
+			Dropped: 4,
+		})
+		close(producerReturned)
+	}()
+	select {
+	case <-producerReturned:
+	case <-time.After(time.Second):
+		t.Fatal("Manager PublishLog blocked on full event-hub ingress")
+	}
+	<-hub.publish
+	alphaLog(observedPluginLog{
+		Entry:   pluginapi.LogEntry{Level: pluginapi.LogWarn, Message: "delivered alpha"},
+		Dropped: 2,
+	})
+	alphaEvent := <-hub.publish
+	if alphaEvent.PluginID != alpha.Manifest.ID || alphaEvent.Log.Message != "delivered alpha" || alphaEvent.Dropped != 7 {
+		t.Fatalf("alpha event = %+v, want delivered alpha with Dropped 7", alphaEvent)
+	}
+
+	hub.publish <- Event{Type: EventPluginStatus, PluginID: beta.Manifest.ID}
+	betaLog(observedPluginLog{
+		Entry:   pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "lost beta"},
+		Dropped: 1,
+	})
+	<-hub.publish
+	alphaLog(observedPluginLog{Entry: pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "alpha independent"}})
+	if got := <-hub.publish; got.Dropped != 0 {
+		t.Fatalf("alpha independent Dropped = %d, want 0", got.Dropped)
+	}
+	betaLog(observedPluginLog{Entry: pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "delivered beta"}})
+	if got := <-hub.publish; got.Dropped != 2 {
+		t.Fatalf("beta composed Dropped = %d, want 2", got.Dropped)
+	}
+
+	close(hub.done)
+	closedReturned := make(chan struct{})
+	go func() {
+		var calls sync.WaitGroup
+		for _, publish := range []func(observedPluginLog){alphaLog, betaLog} {
+			calls.Add(1)
+			go func(publish func(observedPluginLog)) {
+				defer calls.Done()
+				publish(observedPluginLog{Entry: pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "during close"}})
+			}(publish)
+		}
+		calls.Wait()
+		close(closedReturned)
+	}()
+	select {
+	case <-closedReturned:
+	case <-time.After(time.Second):
+		t.Fatal("Manager PublishLog blocked after event-hub close")
+	}
+}
+
 func TestManagerStartupRollsBackAndCanRetry(t *testing.T) {
 	catalog := &managerTestCatalog{plugins: []InstalledPlugin{
 		managerTestPlugin("vendor.alpha"),

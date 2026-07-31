@@ -48,7 +48,7 @@ type sessionDependencies struct {
 	now              func() time.Time
 	onFrame          func(uint64, time.Time, float64)
 	onStatus         func(uint64, pluginapi.DeviceStatus)
-	onLog            func(uint64, pluginapi.LogEntry)
+	onLog            func(uint64, observedPluginLog)
 	onUnresponsive   func(uint64)
 }
 
@@ -620,6 +620,9 @@ func (s *processSession) readRuntime(ctx context.Context, conn protocol.Conn) er
 			if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 				return nil
 			}
+			if isProtocolFramingError(err) {
+				return ErrProtocolViolation
+			}
 			return opaqueSessionCause{kind: "plugins: IPC reader failure", cause: err}
 		}
 		switch payload := message.Payload.(type) {
@@ -646,11 +649,14 @@ func (s *processSession) readRuntime(ctx context.Context, conn protocol.Conn) er
 			}
 		case protocol.Log:
 			if s.deps.onLog != nil {
-				s.deps.onLog(s.instanceID, pluginapi.LogEntry{
-					Time:     time.Now(),
-					PluginID: s.config.Plugin.Manifest.ID,
-					Level:    payload.Level,
-					Message:  payload.Message,
+				s.deps.onLog(s.instanceID, observedPluginLog{
+					Entry: pluginapi.LogEntry{
+						Time:     time.Now(),
+						PluginID: s.config.Plugin.Manifest.ID,
+						Level:    payload.Level,
+						Message:  payload.Message,
+					},
+					Dropped: payload.Dropped,
 				})
 			}
 		case protocol.ShutdownAck:

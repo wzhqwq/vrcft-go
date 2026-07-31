@@ -115,7 +115,7 @@ type supervisorSessionCallbacks struct {
 	Frame          func(uint64, time.Time, float64)
 	Unresponsive   func(uint64)
 	Status         func(uint64, pluginapi.DeviceStatus)
-	Log            func(uint64, pluginapi.LogEntry)
+	Log            func(uint64, observedPluginLog)
 }
 
 type supervisorSessionFactory func(
@@ -136,7 +136,7 @@ type pluginSupervisorConfig struct {
 	NewTimer           func(time.Duration) supervisorTimer
 	Publish            func(RuntimeSnapshot)
 	PublishStatus      func(pluginapi.DeviceStatus)
-	PublishLog         func(pluginapi.LogEntry)
+	PublishLog         func(observedPluginLog)
 	SupervisorCapacity int
 }
 
@@ -181,7 +181,7 @@ type supervisorCallback struct {
 	at         time.Time
 	frameRate  float64
 	status     pluginapi.DeviceStatus
-	log        pluginapi.LogEntry
+	log        observedPluginLog
 }
 
 type supervisorStopIntent uint8
@@ -203,6 +203,7 @@ type serializedPluginSupervisor struct {
 	callback         chan supervisorCallback
 	done             chan struct{}
 	snapshot         atomic.Value
+	droppedLog       atomic.Uint64
 }
 
 type supervisorQueuedControl struct {
@@ -893,6 +894,9 @@ func (s *serializedPluginSupervisor) sessionCallbacks(instanceID uint64) supervi
 		case s.callback <- callback:
 		case <-s.done:
 		default:
+			if callback.kind == supervisorLog {
+				accumulateDropped(&s.droppedLog, saturatingAddUint64(callback.log.Dropped, 1))
+			}
 		}
 	}
 	sendCritical := func(callback supervisorCallback) {
@@ -924,8 +928,8 @@ func (s *serializedPluginSupervisor) sessionCallbacks(instanceID uint64) supervi
 		Status: func(_ uint64, status pluginapi.DeviceStatus) {
 			sendTelemetry(supervisorCallback{kind: supervisorStatus, instanceID: instanceID, status: status})
 		},
-		Log: func(_ uint64, entry pluginapi.LogEntry) {
-			sendTelemetry(supervisorCallback{kind: supervisorLog, instanceID: instanceID, log: entry})
+		Log: func(_ uint64, log observedPluginLog) {
+			sendTelemetry(supervisorCallback{kind: supervisorLog, instanceID: instanceID, log: log})
 		},
 	}
 }
@@ -977,6 +981,7 @@ func (s *serializedPluginSupervisor) handleCallback(
 		}
 	case supervisorLog:
 		if s.config.PublishLog != nil {
+			callback.log.Dropped = saturatingAddUint64(callback.log.Dropped, s.droppedLog.Swap(0))
 			s.config.PublishLog(callback.log)
 		}
 	default:
