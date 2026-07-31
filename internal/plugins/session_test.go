@@ -1884,6 +1884,55 @@ type sessionReplayBlockingConn struct {
 	replayOnce        sync.Once
 }
 
+type sessionBlockedReplayConn struct {
+	protocol.Conn
+	replayType        protocol.MessageType
+	initializeEntered chan struct{}
+	releaseInitialize chan struct{}
+	replayEntered     chan struct{}
+	releaseReplay     chan struct{}
+	closed            chan struct{}
+	initOnce          sync.Once
+	replayOnce        sync.Once
+	closeOnce         sync.Once
+}
+
+func (c *sessionBlockedReplayConn) Send(ctx context.Context, message protocol.Message) error {
+	switch message.Type {
+	case protocol.MessageInitialize:
+		c.initOnce.Do(func() { close(c.initializeEntered) })
+		select {
+		case <-c.releaseInitialize:
+		case <-c.closed:
+			return net.ErrClosed
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	default:
+		if message.Type == c.replayType {
+			c.replayOnce.Do(func() { close(c.replayEntered) })
+			select {
+			case <-c.releaseReplay:
+			case <-c.closed:
+				return net.ErrClosed
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return c.Conn.Send(ctx, message)
+}
+
+func (c *sessionBlockedReplayConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+type sessionReceiveResult struct {
+	message protocol.Message
+	err     error
+}
+
 type sessionGracefulReplayConn struct {
 	protocol.Conn
 	initializeEntered chan struct{}
@@ -1892,6 +1941,269 @@ type sessionGracefulReplayConn struct {
 	releaseReplay     chan struct{}
 	initOnce          sync.Once
 	replayOnce        sync.Once
+}
+
+func TestPluginSessionHeartbeatTimeoutCoversBlockedHandshakeReplay(t *testing.T) {
+	hostRaw, pluginRaw := net.Pipe()
+	hostConn := &sessionBlockedReplayConn{
+		Conn:              ipc.WrapConn(hostRaw),
+		replayType:        protocol.MessageConfigChanged,
+		initializeEntered: make(chan struct{}),
+		releaseInitialize: make(chan struct{}),
+		replayEntered:     make(chan struct{}),
+		releaseReplay:     make(chan struct{}),
+		closed:            make(chan struct{}),
+	}
+	pluginConn := ipc.WrapConn(pluginRaw)
+	t.Cleanup(func() {
+		_ = hostConn.Close()
+		_ = pluginConn.Close()
+	})
+	process := newSessionTestProcess()
+	token := handshakeToken(39)
+	unresponsive := make(chan uint64, 1)
+	session := newPluginSession(context.Background(), 31, sessionConfig{
+		Plugin: InstalledPlugin{
+			Manifest:   validManifest(),
+			RootDir:    `C:\plugins\camera`,
+			Executable: `C:\plugins\camera\plugin.exe`,
+		},
+		Startup:          validHandshakeStartup(),
+		HandshakeTimeout: time.Second,
+		HeartbeatTimeout: 25 * time.Millisecond,
+		GracefulTimeout:  30 * time.Millisecond,
+		KillTimeout:      30 * time.Millisecond,
+		ControlCapacity:  2,
+	}, sessionDependencies{
+		credentials: func() (string, string, error) {
+			return "session-replay-heartbeat", token, nil
+		},
+		listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+			return &sessionTestListener{conn: hostConn}, nil
+		},
+		launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+			go func() {
+				_ = pluginConn.Send(context.Background(), validHello(token))
+				_, _ = pluginConn.Receive(context.Background())
+				ready, _ := protocol.NewMessage(protocol.Ready{})
+				_ = pluginConn.Send(context.Background(), ready)
+				_, _ = pluginConn.Receive(context.Background())
+			}()
+			return process, nil
+		}},
+		onUnresponsive: func(instanceID uint64) {
+			unresponsive <- instanceID
+		},
+	})
+	awaitValue(t, hostConn.initializeEntered)
+	controlResult := make(chan error, 1)
+	go func() {
+		controlResult <- session.Control(context.Background(), controlRequest{
+			kind:  controlConfig,
+			state: controlState{Config: pluginapi.Config{Revision: 2, Data: []byte(`{"gain":0.7}`)}},
+		})
+	}()
+	waitSessionPendingControls(t, session.(*processSession), 1)
+	close(hostConn.releaseInitialize)
+	awaitValue(t, hostConn.replayEntered)
+
+	if got := awaitValue(t, unresponsive); got != 31 {
+		t.Fatalf("unresponsive instance ID = %d, want 31", got)
+	}
+	result := awaitSessionResult(t, session.Done())
+	if !errors.Is(result.Err, ErrHeartbeatTimeout) {
+		t.Fatalf("session error = %v, want ErrHeartbeatTimeout", result.Err)
+	}
+	if !errors.Is(result.Err, ErrGracefulShutdownTimeout) {
+		t.Fatalf("session error = %v, want bounded ErrGracefulShutdownTimeout cleanup", result.Err)
+	}
+	if got := process.kills(); got != 1 {
+		t.Fatalf("Kill() calls = %d, want exactly 1", got)
+	}
+	_ = awaitValue(t, controlResult)
+}
+
+func TestPluginSessionCanceledQueuedHandshakeControlIsNotReplayed(t *testing.T) {
+	hostRaw, pluginRaw := net.Pipe()
+	hostConn := &sessionBlockingInitializeConn{
+		Conn:    ipc.WrapConn(hostRaw),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	pluginConn := ipc.WrapConn(pluginRaw)
+	t.Cleanup(func() {
+		_ = hostConn.Close()
+		_ = pluginConn.Close()
+	})
+	process := newSessionTestProcess()
+	token := handshakeToken(40)
+	receiveCtx, cancelReceive := context.WithCancel(context.Background())
+	defer cancelReceive()
+	pluginResult := make(chan sessionReceiveResult, 1)
+	session := newPluginSession(context.Background(), 32, sessionConfig{
+		Plugin: InstalledPlugin{
+			Manifest:   validManifest(),
+			RootDir:    `C:\plugins\camera`,
+			Executable: `C:\plugins\camera\plugin.exe`,
+		},
+		Startup:          validHandshakeStartup(),
+		HandshakeTimeout: time.Second,
+		HeartbeatTimeout: time.Minute,
+		GracefulTimeout:  30 * time.Millisecond,
+		KillTimeout:      30 * time.Millisecond,
+		ControlCapacity:  2,
+	}, sessionDependencies{
+		credentials: func() (string, string, error) {
+			return "session-canceled-pending-control", token, nil
+		},
+		listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+			return &sessionTestListener{conn: hostConn}, nil
+		},
+		launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+			go func() {
+				_ = pluginConn.Send(context.Background(), validHello(token))
+				_, _ = pluginConn.Receive(context.Background())
+				ready, _ := protocol.NewMessage(protocol.Ready{})
+				if err := pluginConn.Send(context.Background(), ready); err != nil {
+					pluginResult <- sessionReceiveResult{err: err}
+					return
+				}
+				message, err := pluginConn.Receive(receiveCtx)
+				pluginResult <- sessionReceiveResult{message: message, err: err}
+			}()
+			return process, nil
+		}},
+	})
+	awaitValue(t, hostConn.entered)
+	controlCtx, cancelControl := context.WithCancel(context.Background())
+	controlResult := make(chan error, 1)
+	go func() {
+		controlResult <- session.Control(controlCtx, controlRequest{
+			kind:  controlActive,
+			state: controlState{Active: true},
+		})
+	}()
+	waitSessionPendingControls(t, session.(*processSession), 1)
+	cancelControl()
+	if err := awaitValue(t, controlResult); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Control() error = %v, want context.Canceled", err)
+	}
+
+	close(hostConn.release)
+	waitSessionPhase(t, session.(*processSession), sessionReady)
+	cancelReceive()
+	observed := awaitValue(t, pluginResult)
+	if observed.err == nil {
+		t.Fatalf("plugin received canceled control payload %T", observed.message.Payload)
+	}
+	if !errors.Is(observed.err, context.Canceled) {
+		t.Fatalf("plugin receive error = %v, want context.Canceled with no control message", observed.err)
+	}
+	process.wait <- nil
+	assertUnexpectedExitResult(t, awaitSessionResult(t, session.Done()))
+}
+
+func TestPluginSessionReplayClaimWinsCallerCancellation(t *testing.T) {
+	hostRaw, pluginRaw := net.Pipe()
+	hostConn := &sessionBlockedReplayConn{
+		Conn:              ipc.WrapConn(hostRaw),
+		replayType:        protocol.MessageActiveChanged,
+		initializeEntered: make(chan struct{}),
+		releaseInitialize: make(chan struct{}),
+		replayEntered:     make(chan struct{}),
+		releaseReplay:     make(chan struct{}),
+		closed:            make(chan struct{}),
+	}
+	pluginConn := ipc.WrapConn(pluginRaw)
+	t.Cleanup(func() {
+		_ = hostConn.Close()
+		_ = pluginConn.Close()
+	})
+	process := newSessionTestProcess()
+	token := handshakeToken(41)
+	secondReceiveCtx, cancelSecondReceive := context.WithCancel(context.Background())
+	defer cancelSecondReceive()
+	firstPluginResult := make(chan sessionReceiveResult, 1)
+	secondPluginResult := make(chan sessionReceiveResult, 1)
+	session := newPluginSession(context.Background(), 33, sessionConfig{
+		Plugin: InstalledPlugin{
+			Manifest:   validManifest(),
+			RootDir:    `C:\plugins\camera`,
+			Executable: `C:\plugins\camera\plugin.exe`,
+		},
+		Startup:          validHandshakeStartup(),
+		HandshakeTimeout: time.Second,
+		HeartbeatTimeout: time.Minute,
+		GracefulTimeout:  30 * time.Millisecond,
+		KillTimeout:      30 * time.Millisecond,
+		ControlCapacity:  2,
+	}, sessionDependencies{
+		credentials: func() (string, string, error) {
+			return "session-replay-claim-control", token, nil
+		},
+		listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+			return &sessionTestListener{conn: hostConn}, nil
+		},
+		launcher: sessionTestLauncher{start: func(context.Context, ProcessSpec) (Process, error) {
+			go func() {
+				_ = pluginConn.Send(context.Background(), validHello(token))
+				_, _ = pluginConn.Receive(context.Background())
+				ready, _ := protocol.NewMessage(protocol.Ready{})
+				if err := pluginConn.Send(context.Background(), ready); err != nil {
+					firstPluginResult <- sessionReceiveResult{err: err}
+					return
+				}
+				message, err := pluginConn.Receive(context.Background())
+				firstPluginResult <- sessionReceiveResult{message: message, err: err}
+				if err != nil {
+					return
+				}
+				message, err = pluginConn.Receive(secondReceiveCtx)
+				secondPluginResult <- sessionReceiveResult{message: message, err: err}
+			}()
+			return process, nil
+		}},
+	})
+	awaitValue(t, hostConn.initializeEntered)
+	controlCtx, cancelControl := context.WithCancel(context.Background())
+	replayClaimed := make(chan struct{})
+	controlResult := make(chan error, 1)
+	go func() {
+		controlResult <- session.Control(controlCtx, controlRequest{
+			kind:          controlActive,
+			state:         controlState{Active: true},
+			onSendAttempt: func() { close(replayClaimed) },
+		})
+	}()
+	waitSessionPendingControls(t, session.(*processSession), 1)
+	close(hostConn.releaseInitialize)
+	awaitValue(t, replayClaimed)
+	awaitValue(t, hostConn.replayEntered)
+	cancelControl()
+	close(hostConn.releaseReplay)
+
+	observed := awaitValue(t, firstPluginResult)
+	if observed.err != nil {
+		t.Fatalf("plugin receive replay error = %v", observed.err)
+	}
+	active, ok := observed.message.Payload.(protocol.ActiveChanged)
+	if !ok || !active.Active {
+		t.Fatalf("plugin replay payload = %#v, want ActiveChanged(true)", observed.message.Payload)
+	}
+	if err := awaitValue(t, controlResult); err != nil {
+		t.Fatalf("Control() error = %v, want successful claimed replay", err)
+	}
+	waitSessionPhase(t, session.(*processSession), sessionReady)
+	cancelSecondReceive()
+	second := awaitValue(t, secondPluginResult)
+	if second.err == nil {
+		t.Fatalf("plugin received duplicate replay payload %T", second.message.Payload)
+	}
+	if !errors.Is(second.err, context.Canceled) {
+		t.Fatalf("second plugin receive error = %v, want context.Canceled", second.err)
+	}
+	process.wait <- nil
+	assertUnexpectedExitResult(t, awaitSessionResult(t, session.Done()))
 }
 
 func (c *sessionGracefulReplayConn) Send(ctx context.Context, message protocol.Message) error {

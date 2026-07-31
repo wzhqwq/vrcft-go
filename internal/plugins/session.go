@@ -74,11 +74,13 @@ type pendingSessionControl struct {
 }
 
 type sessionWorkers struct {
-	readerCtx     context.Context
-	cancelReader  context.CancelFunc
-	readerResult  chan error
-	processResult chan error
-	writerResult  chan error
+	readerCtx      context.Context
+	cancelReader   context.CancelFunc
+	cancelWatchdog context.CancelFunc
+	readerResult   chan error
+	processResult  chan error
+	writerResult   chan error
+	watchdogResult chan error
 }
 
 type processSession struct {
@@ -94,7 +96,7 @@ type processSession struct {
 	mu             sync.Mutex
 	phase          sessionPhase
 	writer         *sessionWriter
-	pending        []pendingSessionControl
+	pending        []*pendingSessionControl
 	result         sessionResult
 	stopOnce       sync.Once
 	heartbeatPulse chan struct{}
@@ -155,14 +157,18 @@ func (s *processSession) Control(ctx context.Context, request controlRequest) er
 		if request.kind == controlConfig {
 			request.state.Config = request.state.Config.Clone()
 		}
-		pending := pendingSessionControl{request: request, result: make(chan error, 1)}
+		pending := &pendingSessionControl{request: request, result: make(chan error, 1)}
 		s.pending = append(s.pending, pending)
 		s.mu.Unlock()
 		select {
 		case err := <-pending.result:
 			return err
 		case <-ctx.Done():
-			return ctx.Err()
+			ctxErr := ctx.Err()
+			if s.removePendingControl(pending) {
+				return ctxErr
+			}
+			return <-pending.result
 		}
 	case sessionReady:
 		writer := s.writer
@@ -172,6 +178,21 @@ func (s *processSession) Control(ctx context.Context, request controlRequest) er
 		s.mu.Unlock()
 		return ErrInvalidState
 	}
+}
+
+func (s *processSession) removePendingControl(pending *pendingSessionControl) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index, candidate := range s.pending {
+		if candidate != pending {
+			continue
+		}
+		copy(s.pending[index:], s.pending[index+1:])
+		s.pending[len(s.pending)-1] = nil
+		s.pending = s.pending[:len(s.pending)-1]
+		return true
+	}
+	return false
 }
 
 func (s *processSession) Stop(ctx context.Context) error {
@@ -305,6 +326,7 @@ func (s *processSession) startAndWait() sessionResult {
 	s.mu.Unlock()
 
 	workers := s.startSessionWorkers(conn, process, writer)
+	defer workers.cancelWatchdog()
 	stopped, err := s.replayPendingControls(conn, process, writer, workers)
 	if stopped {
 		workers.cancelReader()
@@ -356,16 +378,20 @@ func (s *processSession) startSessionWorkers(
 	writer *sessionWriter,
 ) sessionWorkers {
 	readerCtx, cancelReader := context.WithCancel(context.Background())
+	watchdogCtx, cancelWatchdog := context.WithCancel(context.Background())
 	workers := sessionWorkers{
-		readerCtx:     readerCtx,
-		cancelReader:  cancelReader,
-		readerResult:  make(chan error, 1),
-		processResult: make(chan error, 1),
-		writerResult:  make(chan error, 1),
+		readerCtx:      readerCtx,
+		cancelReader:   cancelReader,
+		cancelWatchdog: cancelWatchdog,
+		readerResult:   make(chan error, 1),
+		processResult:  make(chan error, 1),
+		writerResult:   make(chan error, 1),
+		watchdogResult: make(chan error, 1),
 	}
 	go func() { workers.readerResult <- s.readRuntime(readerCtx, conn) }()
 	go func() { workers.processResult <- process.Wait() }()
 	go func() { workers.writerResult <- writer.terminalError() }()
+	go s.watchHeartbeat(watchdogCtx.Done(), workers.watchdogResult)
 	return workers
 }
 
@@ -443,6 +469,18 @@ func (s *processSession) replayPendingControls(
 				writerErr = opaqueSessionCause{kind: "plugins: IPC writer failure", cause: writerErr}
 			}
 			return true, errors.Join(writerErr, shutdownErr)
+		case watchdogErr := <-workers.watchdogResult:
+			s.beginReplayStop()
+			if s.deps.onUnresponsive != nil {
+				s.deps.onUnresponsive(s.instanceID)
+			}
+			shutdownErr := s.shutdownProcess(
+				conn, process, writer,
+				workers.processResult, workers.readerResult, workers.writerResult,
+				workers.cancelReader,
+			)
+			s.completeReplayControl(writer, pending, controlResult)
+			return true, errors.Join(watchdogErr, shutdownErr)
 		case <-s.ctx.Done():
 			s.beginReplayStop()
 			shutdownErr := s.shutdownProcess(
@@ -474,7 +512,7 @@ func (s *processSession) rejectPendingLocked(err error) {
 
 func (s *processSession) completeReplayControl(
 	writer *sessionWriter,
-	pending pendingSessionControl,
+	pending *pendingSessionControl,
 	controlResult <-chan error,
 ) {
 	select {
@@ -502,10 +540,7 @@ func (s *processSession) runRuntime(
 	readerResult := workers.readerResult
 	processResult := workers.processResult
 	writerResult := workers.writerResult
-	watchdogResult := make(chan error, 1)
-	stopWatchdog := make(chan struct{})
-	defer close(stopWatchdog)
-	go s.watchHeartbeat(stopWatchdog, watchdogResult)
+	watchdogResult := workers.watchdogResult
 
 	select {
 	case processErr := <-processResult:
