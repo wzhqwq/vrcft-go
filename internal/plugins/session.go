@@ -45,6 +45,8 @@ type sessionDependencies struct {
 	onProcessStarted func(uint64, int)
 	onReady          func(uint64)
 	onHeartbeat      func(uint64, time.Time)
+	now              func() time.Time
+	onFrame          func(uint64, time.Time, float64)
 	onStatus         func(uint64, pluginapi.DeviceStatus)
 	onLog            func(uint64, pluginapi.LogEntry)
 	onUnresponsive   func(uint64)
@@ -99,11 +101,16 @@ type processSession struct {
 	shutdownAck    chan struct{}
 	shutdownState  atomic.Uint32
 	ackQueued      atomic.Bool
+	lastFrameAt    time.Time
+	frameRate      float64
 }
 
 func newPluginSession(parent context.Context, instanceID uint64, config sessionConfig, dependencies sessionDependencies) pluginSession {
 	if parent == nil {
 		parent = context.Background()
+	}
+	if dependencies.now == nil {
+		dependencies.now = time.Now
 	}
 	config.Startup = cloneStartup(config.Startup)
 	ctx, cancel := context.WithCancel(parent)
@@ -581,6 +588,11 @@ func (s *processSession) readRuntime(ctx context.Context, conn protocol.Conn) er
 			if s.deps.frameSink != nil {
 				s.deps.frameSink.Submit(s.config.Plugin.Manifest.ID, payload.Generation, payload.Frame)
 			}
+			at := s.deps.now()
+			frameRate := s.observeFrameRate(at)
+			if s.deps.onFrame != nil {
+				s.deps.onFrame(s.instanceID, at, frameRate)
+			}
 		case protocol.Status:
 			if s.deps.onStatus != nil {
 				s.deps.onStatus(s.instanceID, payload.Status)
@@ -612,6 +624,27 @@ func (s *processSession) readRuntime(ctx context.Context, conn protocol.Conn) er
 			return ErrProtocolViolation
 		}
 	}
+}
+
+func (s *processSession) observeFrameRate(at time.Time) float64 {
+	const smoothingAlpha = 0.2
+
+	if s.lastFrameAt.IsZero() {
+		s.lastFrameAt = at
+		return 0
+	}
+	elapsed := at.Sub(s.lastFrameAt)
+	if elapsed <= 0 {
+		return s.frameRate
+	}
+	instantaneous := 1 / elapsed.Seconds()
+	if s.frameRate == 0 {
+		s.frameRate = instantaneous
+	} else {
+		s.frameRate += smoothingAlpha * (instantaneous - s.frameRate)
+	}
+	s.lastFrameAt = at
+	return s.frameRate
 }
 
 func (s *processSession) watchHeartbeat(stop <-chan struct{}, result chan<- error) {

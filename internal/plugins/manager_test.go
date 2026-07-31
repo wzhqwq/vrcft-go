@@ -818,9 +818,21 @@ func TestManagerMultiPluginCrashRestartDoesNotInterruptPeerFramesOrControls(t *t
 	if request := beta.awaitControl(t); request.kind != controlActive || !request.state.Active {
 		t.Fatalf("beta control = %+v, want Active(true)", request)
 	}
-	beta.sendFrame(7, trackingmodel.TrackingFrame{})
+	eventCtx, cancelEvents := context.WithCancel(context.Background())
+	t.Cleanup(cancelEvents)
+	events := manager.Subscribe(eventCtx)
+	frameAt := time.Date(2026, 7, 31, 11, 0, 0, 0, time.UTC)
+	beta.sendFrame(7, trackingmodel.TrackingFrame{}, frameAt, 100)
 	if got := sink.count("vendor.beta"); got != 1 {
 		t.Fatalf("beta frames = %d, want 1 while alpha restarts", got)
+	}
+	frameEvent := receiveManagerEventMatching(t, events, func(event Event) bool {
+		return event.PluginID == "vendor.beta" &&
+			event.Snapshot != nil &&
+			event.Snapshot.LastFrameAt == frameAt
+	})
+	if frameEvent.Snapshot.FrameRate != 100 {
+		t.Fatalf("beta frame rate = %v, want 100", frameEvent.Snapshot.FrameRate)
 	}
 	if got := sessions.count("vendor.beta"); got != 1 {
 		t.Fatalf("beta launches = %d, want unaffected original session", got)
@@ -1361,8 +1373,13 @@ func (s *managerScriptedSession) finish(result sessionResult) {
 func (s *managerScriptedSession) sendFrame(
 	generation uint64,
 	frame trackingmodel.TrackingFrame,
+	at time.Time,
+	rate float64,
 ) {
 	s.dependencies.frameSink.Submit("vendor.beta", generation, frame)
+	if s.dependencies.onFrame != nil {
+		s.dependencies.onFrame(s.instanceID, at, rate)
+	}
 }
 
 func (s *managerScriptedSession) awaitControl(t *testing.T) controlRequest {

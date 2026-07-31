@@ -289,6 +289,7 @@ func (m *pluginManager) supervisorConfig(
 				onProcessStarted: callbacks.ProcessStarted,
 				onReady:          callbacks.Ready,
 				onHeartbeat:      callbacks.Heartbeat,
+				onFrame:          callbacks.Frame,
 				onUnresponsive:   callbacks.Unresponsive,
 				onStatus:         callbacks.Status,
 				onLog:            callbacks.Log,

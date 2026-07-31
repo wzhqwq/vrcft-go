@@ -736,12 +736,44 @@ type sessionTestFrame struct {
 	frame      trackingmodel.TrackingFrame
 }
 
+type sessionTestFrameMetric struct {
+	instanceID uint64
+	at         time.Time
+	rate       float64
+}
+
 type sessionTestFrameSink struct {
-	frames chan sessionTestFrame
+	frames    chan sessionTestFrame
+	submitted chan struct{}
 }
 
 func (s *sessionTestFrameSink) Submit(pluginID string, generation uint64, frame trackingmodel.TrackingFrame) {
 	s.frames <- sessionTestFrame{pluginID: pluginID, generation: generation, frame: frame}
+	if s.submitted != nil {
+		s.submitted <- struct{}{}
+	}
+}
+
+func TestProcessSessionFrameRateUsesConstantSpaceEMA(t *testing.T) {
+	session := &processSession{}
+	first := time.Date(2026, 7, 31, 9, 0, 0, 0, time.UTC)
+	observations := []struct {
+		at   time.Time
+		want float64
+	}{
+		{at: first, want: 0},
+		{at: first.Add(10 * time.Millisecond), want: 100},
+		{at: first.Add(30 * time.Millisecond), want: 90},
+		// A non-monotonic clock sample changes neither the EMA nor its valid
+		// timestamp base.
+		{at: first.Add(25 * time.Millisecond), want: 90},
+		{at: first.Add(50 * time.Millisecond), want: 82},
+	}
+	for _, observation := range observations {
+		if got := session.observeFrameRate(observation.at); got != observation.want {
+			t.Fatalf("observeFrameRate(%v) = %v, want %v", observation.at, got, observation.want)
+		}
+	}
 }
 
 func TestPluginSessionRoutesRuntimeMessagesAndRejectsWrongDirection(t *testing.T) {
@@ -765,10 +797,19 @@ func TestPluginSessionRoutesRuntimeMessagesAndRejectsWrongDirection(t *testing.T
 			process := newSessionTestProcess()
 			token := handshakeToken(22)
 			ready := make(chan struct{})
-			sink := &sessionTestFrameSink{frames: make(chan sessionTestFrame, 1)}
+			sink := &sessionTestFrameSink{
+				frames:    make(chan sessionTestFrame, 3),
+				submitted: make(chan struct{}, 3),
+			}
 			heartbeats := make(chan uint64, 1)
+			frameMetrics := make(chan sessionTestFrameMetric, 3)
 			statuses := make(chan pluginapi.DeviceStatus, 1)
 			logs := make(chan pluginapi.LogEntry, 1)
+			firstFrameAt := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
+			frameTimes := make(chan time.Time, 3)
+			frameTimes <- firstFrameAt
+			frameTimes <- firstFrameAt.Add(10 * time.Millisecond)
+			frameTimes <- firstFrameAt.Add(30 * time.Millisecond)
 			dependencies := sessionDependencies{
 				credentials: func() (string, string, error) {
 					return "session-runtime-pipe", token, nil
@@ -794,6 +835,17 @@ func TestPluginSessionRoutesRuntimeMessagesAndRejectsWrongDirection(t *testing.T
 				frameSink: sink,
 				onHeartbeat: func(instanceID uint64, _ time.Time) {
 					heartbeats <- instanceID
+				},
+				now: func() time.Time {
+					return <-frameTimes
+				},
+				onFrame: func(instanceID uint64, at time.Time, rate float64) {
+					select {
+					case <-sink.submitted:
+					default:
+						t.Error("frame metric callback ran before FrameSink.Submit")
+					}
+					frameMetrics <- sessionTestFrameMetric{instanceID: instanceID, at: at, rate: rate}
 				},
 				onStatus: func(instanceID uint64, status pluginapi.DeviceStatus) {
 					if instanceID != 8 {
@@ -842,6 +894,8 @@ func TestPluginSessionRoutesRuntimeMessagesAndRejectsWrongDirection(t *testing.T
 			frame := trackingmodel.TrackingFrame{Sequence: 31, TimestampNS: 99}
 			sendSessionPayload(t, pluginConn, protocol.Heartbeat{UptimeMS: 123})
 			sendSessionPayload(t, pluginConn, protocol.TrackingFrame{Generation: 12, Frame: frame})
+			sendSessionPayload(t, pluginConn, protocol.TrackingFrame{Generation: 12, Frame: frame})
+			sendSessionPayload(t, pluginConn, protocol.TrackingFrame{Generation: 12, Frame: frame})
 			sendSessionPayload(t, pluginConn, protocol.Status{
 				Status: pluginapi.DeviceStatus{State: pluginapi.DeviceReady},
 			})
@@ -853,6 +907,30 @@ func TestPluginSessionRoutesRuntimeMessagesAndRejectsWrongDirection(t *testing.T
 			gotFrame := awaitValue(t, sink.frames)
 			if gotFrame.pluginID != config.Plugin.Manifest.ID || gotFrame.generation != 12 || gotFrame.frame != frame {
 				t.Fatalf("FrameSink call = %#v", gotFrame)
+			}
+			gotFrame = awaitValue(t, sink.frames)
+			if gotFrame.pluginID != config.Plugin.Manifest.ID || gotFrame.generation != 12 || gotFrame.frame != frame {
+				t.Fatalf("second FrameSink call = %#v", gotFrame)
+			}
+			gotFrame = awaitValue(t, sink.frames)
+			if gotFrame.pluginID != config.Plugin.Manifest.ID || gotFrame.generation != 12 || gotFrame.frame != frame {
+				t.Fatalf("third FrameSink call = %#v", gotFrame)
+			}
+			firstMetric := awaitValue(t, frameMetrics)
+			if firstMetric.instanceID != 8 || firstMetric.at != firstFrameAt || firstMetric.rate != 0 {
+				t.Fatalf("first frame metric = %+v, want instance 8, at %v, rate 0", firstMetric, firstFrameAt)
+			}
+			secondMetric := awaitValue(t, frameMetrics)
+			if secondMetric.instanceID != 8 ||
+				secondMetric.at != firstFrameAt.Add(10*time.Millisecond) ||
+				secondMetric.rate != 100 {
+				t.Fatalf("second frame metric = %+v, want instance 8, 10ms later, rate 100Hz", secondMetric)
+			}
+			thirdMetric := awaitValue(t, frameMetrics)
+			if thirdMetric.instanceID != 8 ||
+				thirdMetric.at != firstFrameAt.Add(30*time.Millisecond) ||
+				thirdMetric.rate != 90 {
+				t.Fatalf("third frame metric = %+v, want instance 8, 20ms later, rolling rate 90Hz", thirdMetric)
 			}
 			if got := awaitValue(t, statuses); got != (pluginapi.DeviceStatus{State: pluginapi.DeviceReady}) {
 				t.Fatalf("status = %#v", got)
