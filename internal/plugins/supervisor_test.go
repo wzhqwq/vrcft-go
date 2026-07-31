@@ -80,7 +80,7 @@ func TestPluginSupervisorControlsStateAndOwnsStartup(t *testing.T) {
 	if got := supervisor.Snapshot(); got.State != StateHandshaking || got.PID != 4321 {
 		t.Fatalf("heartbeat before Ready changed lifecycle state: %+v", got)
 	}
-	launch.callbacks.Ready(launch.instanceID)
+	launch.callbacks.Ready(launch.instanceID, validHandshakeDescriptor())
 	awaitSupervisorState(t, supervisor, StateRunning)
 	nextConfig := pluginapi.Config{Revision: 2, Data: []byte(`{"threshold":2}`)}
 	if err := supervisor.Command(context.Background(), supervisorCommand{kind: supervisorConfig, config: nextConfig}); err != nil {
@@ -124,6 +124,135 @@ func TestPluginSupervisorControlsStateAndOwnsStartup(t *testing.T) {
 			t.Errorf("state %q was never published", state)
 		}
 	}
+}
+
+func TestPluginSupervisorUsesRuntimeDisplayMetadataOnlyForCurrentReadySession(t *testing.T) {
+	factory := newSupervisorTestFactory()
+	clock := newSupervisorTestClock(time.Unix(125, 0))
+	plugin := supervisorTestPlugin()
+	restart := DefaultRestartPolicy()
+	restart.MaxFailures = 2
+	supervisor, err := newPluginSupervisor(pluginSupervisorConfig{
+		Plugin:     plugin,
+		Preference: PluginPreference{Enabled: true},
+		Restart:    restart,
+		NewSession: factory.newSession,
+		Now:        clock.now,
+		NewTimer:   clock.newTimer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSupervisor(t, supervisor)
+
+	assertManifestDisplay := func(state State) {
+		t.Helper()
+		awaitSupervisorState(t, supervisor, state)
+		snapshot := supervisor.Snapshot()
+		if snapshot.Name != plugin.Manifest.Name || snapshot.Description != plugin.Manifest.Description {
+			t.Fatalf("%s display metadata = %q/%q, want manifest %q/%q", state,
+				snapshot.Name, snapshot.Description, plugin.Manifest.Name, plugin.Manifest.Description)
+		}
+	}
+	assertRuntimeDisplay := func(state State, descriptor pluginapi.Descriptor) {
+		t.Helper()
+		awaitSupervisorState(t, supervisor, state)
+		snapshot := supervisor.Snapshot()
+		if snapshot.Name != descriptor.Name || snapshot.Description != descriptor.Description {
+			t.Fatalf("%s display metadata = %q/%q, want runtime %q/%q", state,
+				snapshot.Name, snapshot.Description, descriptor.Name, descriptor.Description)
+		}
+	}
+
+	first := factory.awaitLaunch(t)
+	assertManifestDisplay(StateStarting)
+	first.callbacks.ProcessStarted(first.instanceID, 1)
+	runtimeOne := validHandshakeDescriptor()
+	runtimeOne.Name = "Runtime One"
+	runtimeOne.Description = "First authenticated runtime"
+	first.callbacks.Ready(first.instanceID, runtimeOne)
+	assertRuntimeDisplay(StateRunning, runtimeOne)
+	first.session.finish(sessionResult{})
+	assertManifestDisplay(StateStopped)
+
+	if err := supervisor.Command(context.Background(), supervisorCommand{kind: supervisorRestart}); err != nil {
+		t.Fatal(err)
+	}
+	second := factory.awaitLaunch(t)
+	second.callbacks.ProcessStarted(second.instanceID, 2)
+	stale := validHandshakeDescriptor()
+	stale.Name = "Stale Runtime"
+	stale.Description = "Retired session metadata"
+	first.callbacks.Ready(first.instanceID, stale)
+	assertManifestDisplay(StateHandshaking)
+	runtimeTwo := validHandshakeDescriptor()
+	runtimeTwo.Name = "Runtime Two"
+	runtimeTwo.Description = "Second authenticated runtime"
+	second.callbacks.Ready(second.instanceID, runtimeTwo)
+	assertRuntimeDisplay(StateRunning, runtimeTwo)
+
+	second.session.blockStop()
+	disableDone := make(chan error, 1)
+	go func() {
+		disableDone <- supervisor.Command(context.Background(), supervisorCommand{kind: supervisorDisable})
+	}()
+	second.session.awaitStop(t)
+	assertManifestDisplay(StateStopping)
+	second.session.releaseStop()
+	if err := awaitSupervisorError(t, disableDone); err != nil {
+		t.Fatal(err)
+	}
+	assertManifestDisplay(StateDisabled)
+
+	if err := supervisor.Command(context.Background(), supervisorCommand{kind: supervisorEnable}); err != nil {
+		t.Fatal(err)
+	}
+	third := factory.awaitLaunch(t)
+	third.callbacks.ProcessStarted(third.instanceID, 3)
+	runtimeThree := validHandshakeDescriptor()
+	runtimeThree.Name = "Runtime Three"
+	runtimeThree.Description = "Third authenticated runtime"
+	third.callbacks.Ready(third.instanceID, runtimeThree)
+	assertRuntimeDisplay(StateRunning, runtimeThree)
+	third.session.finish(sessionResult{Err: errors.New("retryable failure"), Retryable: true})
+	assertManifestDisplay(StateBackoff)
+	clock.fireNext(t)
+
+	fourth := factory.awaitLaunch(t)
+	assertManifestDisplay(StateStarting)
+	fourth.callbacks.ProcessStarted(fourth.instanceID, 4)
+	assertManifestDisplay(StateHandshaking)
+	runtimeFour := validHandshakeDescriptor()
+	runtimeFour.Name = "Runtime Four"
+	runtimeFour.Description = "Fourth authenticated runtime"
+	fourth.callbacks.Ready(fourth.instanceID, runtimeFour)
+	assertRuntimeDisplay(StateRunning, runtimeFour)
+	fourth.session.finish(sessionResult{Err: ErrDescriptorMismatch, Retryable: false})
+	assertManifestDisplay(StateIncompatible)
+
+	if err := supervisor.Command(context.Background(), supervisorCommand{kind: supervisorRestart}); err != nil {
+		t.Fatal(err)
+	}
+	fifth := factory.awaitLaunch(t)
+	fifth.callbacks.ProcessStarted(fifth.instanceID, 5)
+	runtimeFive := validHandshakeDescriptor()
+	runtimeFive.Name = "Runtime Five"
+	runtimeFive.Description = "Fifth authenticated runtime"
+	fifth.callbacks.Ready(fifth.instanceID, runtimeFive)
+	assertRuntimeDisplay(StateRunning, runtimeFive)
+	fifth.session.finish(sessionResult{Err: errors.New("first crash"), Retryable: true})
+	assertManifestDisplay(StateBackoff)
+	clock.fireNext(t)
+
+	sixth := factory.awaitLaunch(t)
+	sixth.callbacks.ProcessStarted(sixth.instanceID, 6)
+	runtimeSix := validHandshakeDescriptor()
+	runtimeSix.Name = "Runtime Six"
+	runtimeSix.Description = "Sixth authenticated runtime"
+	sixth.callbacks.Ready(sixth.instanceID, runtimeSix)
+	assertRuntimeDisplay(StateRunning, runtimeSix)
+	sixth.session.finish(sessionResult{Err: errors.New("second crash"), Retryable: true})
+	assertManifestDisplay(StateCrashed)
 }
 
 func TestPluginSupervisorFiniteRestartAndStableReset(t *testing.T) {
@@ -230,7 +359,7 @@ func TestPluginSupervisorStableWindowResetsWhileSessionIsRunning(t *testing.T) {
 	clock.fireNext(t)
 	second := factory.awaitLaunch(t)
 	second.callbacks.ProcessStarted(second.instanceID, 2)
-	second.callbacks.Ready(second.instanceID)
+	second.callbacks.Ready(second.instanceID, validHandshakeDescriptor())
 	awaitSupervisorState(t, supervisor, StateRunning)
 	stableTimer := clock.awaitTimer(t)
 	if stableTimer.delay != time.Minute {
@@ -274,7 +403,7 @@ func TestPluginSupervisorStableTimerIsCanceledWhenSessionStops(t *testing.T) {
 	clock.fireNext(t)
 	second := factory.awaitLaunch(t)
 	second.callbacks.ProcessStarted(second.instanceID, 2)
-	second.callbacks.Ready(second.instanceID)
+	second.callbacks.Ready(second.instanceID, validHandshakeDescriptor())
 	awaitSupervisorState(t, supervisor, StateRunning)
 	stableTimer := clock.awaitTimer(t)
 	if err := supervisor.Command(context.Background(), supervisorCommand{kind: supervisorDisable}); err != nil {
@@ -627,7 +756,7 @@ func TestPluginSupervisorCriticalCallbacksSurviveTelemetryBackpressure(t *testin
 		at:         clock.now(),
 	}
 	launch.callbacks.ProcessStarted(launch.instanceID, 55)
-	launch.callbacks.Ready(launch.instanceID)
+	launch.callbacks.Ready(launch.instanceID, validHandshakeDescriptor())
 	awaitSupervisorState(t, supervisor, StateRunning)
 	if got := supervisor.Snapshot().PID; got != 55 {
 		t.Fatalf("PID = %d", got)
@@ -651,7 +780,7 @@ func TestPluginSupervisorClearsRuntimeMetricsAcrossRestart(t *testing.T) {
 	defer closeSupervisor(t, supervisor)
 	launch := factory.awaitLaunch(t)
 	launch.callbacks.ProcessStarted(launch.instanceID, 77)
-	launch.callbacks.Ready(launch.instanceID)
+	launch.callbacks.Ready(launch.instanceID, validHandshakeDescriptor())
 	awaitSupervisorState(t, supervisor, StateRunning)
 	launch.callbacks.Heartbeat(launch.instanceID, clock.now())
 	launch.callbacks.Frame(launch.instanceID, clock.now(), 90)
@@ -709,13 +838,13 @@ func TestPluginSupervisorSuppressesNonRetryableAndIgnoresStaleCallbacks(t *testi
 			}
 			newLaunch := factory.awaitLaunch(t)
 			launch.callbacks.ProcessStarted(launch.instanceID, 1)
-			launch.callbacks.Ready(launch.instanceID)
+			launch.callbacks.Ready(launch.instanceID, validHandshakeDescriptor())
 			launch.callbacks.Heartbeat(launch.instanceID, clock.now())
 			if got := supervisor.Snapshot().State; got != StateStarting {
 				t.Fatalf("stale callback changed state to %q", got)
 			}
 			newLaunch.callbacks.ProcessStarted(newLaunch.instanceID, 2)
-			newLaunch.callbacks.Ready(newLaunch.instanceID)
+			newLaunch.callbacks.Ready(newLaunch.instanceID, validHandshakeDescriptor())
 			awaitSupervisorState(t, supervisor, StateRunning)
 			newLaunch.callbacks.Unresponsive(newLaunch.instanceID)
 			awaitSupervisorState(t, supervisor, StateUnresponsive)
@@ -745,7 +874,7 @@ func TestPluginSupervisorIgnoresStaleSessionResult(t *testing.T) {
 	current := factory.awaitLaunch(t)
 	old.session.finish(sessionResult{Err: errors.New("stale crash"), Retryable: true})
 	current.callbacks.ProcessStarted(current.instanceID, 9)
-	current.callbacks.Ready(current.instanceID)
+	current.callbacks.Ready(current.instanceID, validHandshakeDescriptor())
 	awaitSupervisorState(t, supervisor, StateRunning)
 	if got := supervisor.Snapshot(); got.ConsecutiveFailures != 0 || got.RestartCount != 1 {
 		t.Fatalf("stale result changed snapshot = %+v", got)
@@ -873,7 +1002,7 @@ func TestPluginSupervisorRetainsAcceptedConfigAcrossRetiredRuntimeDelivery(t *te
 
 	first := factory.awaitLaunch(t)
 	first.callbacks.ProcessStarted(first.instanceID, 1001)
-	first.callbacks.Ready(first.instanceID)
+	first.callbacks.Ready(first.instanceID, validHandshakeDescriptor())
 	awaitSupervisorState(t, supervisor, StateRunning)
 	first.session.blockControl()
 
@@ -921,7 +1050,7 @@ func TestPluginSupervisorPublishesDurableConfigRuntimeFailureAndClearsItOnSucces
 
 	launch := factory.awaitLaunch(t)
 	launch.callbacks.ProcessStarted(launch.instanceID, 1001)
-	launch.callbacks.Ready(launch.instanceID)
+	launch.callbacks.Ready(launch.instanceID, validHandshakeDescriptor())
 	awaitSupervisorState(t, supervisor, StateRunning)
 	runtimeErr := errors.New("runtime delivery failed")
 	launch.session.controlErr = runtimeErr
@@ -972,7 +1101,7 @@ func TestPluginSupervisorRetainsDurableConfigWhenRuntimeQueueIsFull(t *testing.T
 
 	first := factory.awaitLaunch(t)
 	first.callbacks.ProcessStarted(first.instanceID, 1001)
-	first.callbacks.Ready(first.instanceID)
+	first.callbacks.Ready(first.instanceID, validHandshakeDescriptor())
 	awaitSupervisorState(t, supervisor, StateRunning)
 	first.session.blockControl()
 

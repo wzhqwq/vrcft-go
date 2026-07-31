@@ -44,6 +44,7 @@ func TestRuntimeSnapshotPinsStatesAndFields(t *testing.T) {
 	snapshot := RuntimeSnapshot{
 		ID:                     "camera",
 		Name:                   "Camera",
+		Description:            "Camera runtime",
 		Version:                "1.2.3",
 		Capabilities:           trackingmodel.CapabilityEye,
 		Enabled:                true,
@@ -61,7 +62,8 @@ func TestRuntimeSnapshotPinsStatesAndFields(t *testing.T) {
 		RestartCount:           7,
 		LastError:              "sanitized",
 	}
-	if snapshot.ID != "camera" || snapshot.Name != "Camera" || snapshot.Version != "1.2.3" ||
+	if snapshot.ID != "camera" || snapshot.Name != "Camera" || snapshot.Description != "Camera runtime" ||
+		snapshot.Version != "1.2.3" ||
 		snapshot.Capabilities != trackingmodel.CapabilityEye || !snapshot.Enabled || !snapshot.Active ||
 		snapshot.State != StateRunning || snapshot.PID != 42 || snapshot.ConfigRevision != 3 ||
 		snapshot.SubscriptionGeneration != 4 || snapshot.StartedAt != now ||

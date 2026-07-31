@@ -24,6 +24,7 @@ const (
 type RuntimeSnapshot struct {
 	ID           string
 	Name         string
+	Description  string
 	Version      string
 	Capabilities trackingmodel.Capability
 

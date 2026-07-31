@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -182,6 +184,14 @@ func newWindowsIntegrationHarness(t *testing.T, behavior string, maxFailures int
 	if err != nil {
 		t.Fatalf("os.Executable() error = %v", err)
 	}
+	rootDir := t.TempDir()
+	entrypoint := "plugin-helper.exe"
+	installedExecutable := filepath.Join(rootDir, entrypoint)
+	copyIntegrationExecutable(t, executable, installedExecutable)
+	rootDir, installedExecutable, err = resolveLaunchPaths(rootDir, entrypoint)
+	if err != nil {
+		t.Fatalf("resolveLaunchPaths() error = %v", err)
+	}
 	plugin := InstalledPlugin{
 		Manifest: Manifest{
 			SchemaVersion: 1,
@@ -191,11 +201,11 @@ func newWindowsIntegrationHarness(t *testing.T, behavior string, maxFailures int
 			Description:   "Real process and named pipe integration helper.",
 			ProtocolMin:   protocol.Version,
 			ProtocolMax:   protocol.Version,
-			Entrypoint:    "unused-by-static-test-catalog.exe",
+			Entrypoint:    entrypoint,
 			Capabilities:  trackingmodel.CapabilityEye,
 		},
-		RootDir:    t.TempDir(),
-		Executable: executable,
+		RootDir:    rootDir,
+		Executable: installedExecutable,
 		Source:     SourceDev,
 	}
 	catalog := &managerTestCatalog{plugins: []InstalledPlugin{plugin}}
@@ -249,6 +259,26 @@ func newWindowsIntegrationHarness(t *testing.T, behavior string, maxFailures int
 		}
 	})
 	return harness
+}
+
+func copyIntegrationExecutable(t *testing.T, source, destination string) {
+	t.Helper()
+	input, err := os.Open(source)
+	if err != nil {
+		t.Fatalf("open integration helper source: %v", err)
+	}
+	defer input.Close()
+	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
+	if err != nil {
+		t.Fatalf("create integration helper: %v", err)
+	}
+	if _, err := io.Copy(output, input); err != nil {
+		_ = output.Close()
+		t.Fatalf("copy integration helper: %v", err)
+	}
+	if err := output.Close(); err != nil {
+		t.Fatalf("close integration helper: %v", err)
+	}
 }
 
 func (h *windowsIntegrationHarness) startAndEnable() {

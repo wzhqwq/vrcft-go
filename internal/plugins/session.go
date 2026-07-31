@@ -43,7 +43,7 @@ type sessionDependencies struct {
 	launcher         ProcessLauncher
 	frameSink        FrameSink
 	onProcessStarted func(uint64, int)
-	onReady          func(uint64)
+	onReady          func(uint64, pluginapi.Descriptor)
 	onHeartbeat      func(uint64, time.Time)
 	now              func() time.Time
 	onFrame          func(uint64, time.Time, float64)
@@ -264,9 +264,21 @@ func (s *processSession) startAndWait() sessionResult {
 		result.Err = err
 		return result
 	}
+	workingDir, executable, err := resolveLaunchPaths(
+		s.config.Plugin.RootDir,
+		s.config.Plugin.Manifest.Entrypoint,
+	)
+	if err != nil {
+		result.Err = err
+		return result
+	}
+	if !sameWorkingDirectoryPath(workingDir, s.config.Plugin.RootDir) {
+		result.Err = ErrInvalidEntrypoint
+		return result
+	}
 	process, err := launcher.Start(s.ctx, ProcessSpec{
-		Executable: s.config.Plugin.Executable,
-		WorkingDir: s.config.Plugin.RootDir,
+		Executable: executable,
+		WorkingDir: workingDir,
 		Env:        environment,
 	})
 	if err != nil {
@@ -295,7 +307,7 @@ func (s *processSession) startAndWait() sessionResult {
 	conn = &onceSessionConn{Conn: conn}
 	defer conn.Close()
 
-	_, err = hostHandshake(handshakeCtx, conn, s.config.Plugin.Manifest, token, s.config.Startup)
+	handshake, err := hostHandshake(handshakeCtx, conn, s.config.Plugin.Manifest, token, s.config.Startup)
 	cancelHandshake()
 	if err != nil {
 		result.Err = errors.Join(err, s.cleanupStartedProcess(process))
@@ -303,7 +315,7 @@ func (s *processSession) startAndWait() sessionResult {
 		return result
 	}
 	if s.deps.onReady != nil {
-		s.deps.onReady(s.instanceID)
+		s.deps.onReady(s.instanceID, handshake.Descriptor)
 	}
 
 	result.StartedAt = time.Now()

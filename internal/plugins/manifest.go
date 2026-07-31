@@ -99,40 +99,49 @@ func validateEntrypoint(entrypoint string) error {
 }
 
 func resolveEntrypoint(rootDir, entrypoint string) (string, error) {
+	_, executable, err := resolveLaunchPaths(rootDir, entrypoint)
+	return executable, err
+}
+
+func resolveLaunchPaths(rootDir, entrypoint string) (string, string, error) {
 	if err := validateEntrypoint(entrypoint); err != nil {
-		return "", err
+		return "", "", err
 	}
 	absoluteRoot, err := filepath.Abs(rootDir)
 	if err != nil {
-		return "", fmt.Errorf("%w: root path is invalid", ErrInvalidEntrypoint)
+		return "", "", fmt.Errorf("%w: root path is invalid", ErrInvalidEntrypoint)
 	}
 	canonicalRoot, err := filepath.EvalSymlinks(absoluteRoot)
 	if err != nil {
-		return "", fmt.Errorf("%w: root cannot be resolved", ErrInvalidEntrypoint)
+		return "", "", fmt.Errorf("%w: root cannot be resolved", ErrInvalidEntrypoint)
+	}
+	canonicalRoot, err = filepath.Abs(canonicalRoot)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: root path is invalid", ErrInvalidEntrypoint)
 	}
 	rootInfo, err := os.Stat(canonicalRoot)
 	if err != nil || !rootInfo.IsDir() {
-		return "", fmt.Errorf("%w: root is not a directory", ErrInvalidEntrypoint)
+		return "", "", fmt.Errorf("%w: root is not a directory", ErrInvalidEntrypoint)
 	}
 
 	candidate := filepath.Join(canonicalRoot, entrypoint)
 	canonicalExecutable, err := filepath.EvalSymlinks(candidate)
 	if err != nil {
-		return "", fmt.Errorf("%w: executable cannot be resolved", ErrInvalidEntrypoint)
+		return "", "", fmt.Errorf("%w: executable cannot be resolved", ErrInvalidEntrypoint)
 	}
 	canonicalExecutable, err = filepath.Abs(canonicalExecutable)
 	if err != nil {
-		return "", fmt.Errorf("%w: executable path is invalid", ErrInvalidEntrypoint)
+		return "", "", fmt.Errorf("%w: executable path is invalid", ErrInvalidEntrypoint)
 	}
 	contained, err := isContainedPath(canonicalRoot, canonicalExecutable)
 	if err != nil || !contained {
-		return "", fmt.Errorf("%w: executable escapes its root directory", ErrInvalidEntrypoint)
+		return "", "", fmt.Errorf("%w: executable escapes its root directory", ErrInvalidEntrypoint)
 	}
 	info, err := os.Stat(canonicalExecutable)
 	if err != nil || !info.Mode().IsRegular() {
-		return "", fmt.Errorf("%w: executable is not a regular file", ErrInvalidEntrypoint)
+		return "", "", fmt.Errorf("%w: executable is not a regular file", ErrInvalidEntrypoint)
 	}
-	return canonicalExecutable, nil
+	return canonicalRoot, canonicalExecutable, nil
 }
 
 func isContainedPath(root, target string) (bool, error) {

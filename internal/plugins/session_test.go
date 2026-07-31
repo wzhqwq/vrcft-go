@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -104,6 +105,146 @@ func (l sessionTestLauncher) Start(ctx context.Context, spec ProcessSpec) (Proce
 	return l.start(ctx, spec)
 }
 
+func TestPluginSessionRevalidatesEntrypointBeforeLaunch(t *testing.T) {
+	t.Run("entrypoint disappeared", func(t *testing.T) {
+		plugin := newSessionTestInstalledPlugin(t)
+		if err := os.Remove(plugin.Executable); err != nil {
+			t.Fatal(err)
+		}
+
+		launchCalls := 0
+		result := runLaunchValidationSession(t, plugin, func(context.Context, ProcessSpec) (Process, error) {
+			launchCalls++
+			return nil, errors.New("launcher must not be called")
+		})
+		if launchCalls != 0 {
+			t.Fatalf("launcher calls = %d, want 0", launchCalls)
+		}
+		if !errors.Is(result.Err, ErrInvalidEntrypoint) || result.Retryable {
+			t.Fatalf("session result = %+v, want non-retryable ErrInvalidEntrypoint", result)
+		}
+		if strings.Contains(result.Err.Error(), plugin.RootDir) ||
+			strings.Contains(result.Err.Error(), plugin.Executable) {
+			t.Fatalf("entrypoint error disclosed a registered path: %v", result.Err)
+		}
+	})
+
+	t.Run("registered root redirected", func(t *testing.T) {
+		plugin := newSessionTestInstalledPlugin(t)
+		retiredRoot := plugin.RootDir + "-retired"
+		if err := os.Rename(plugin.RootDir, retiredRoot); err != nil {
+			t.Fatal(err)
+		}
+		outsideRoot := filepath.Join(filepath.Dir(plugin.RootDir), "outside")
+		if err := os.Mkdir(outsideRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(outsideRoot, plugin.Manifest.Entrypoint), []byte("outside"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outsideRoot, plugin.RootDir); err != nil {
+			t.Skipf("directory symlink creation unavailable: %v", err)
+		}
+
+		launchCalls := 0
+		result := runLaunchValidationSession(t, plugin, func(context.Context, ProcessSpec) (Process, error) {
+			launchCalls++
+			return nil, errors.New("launcher must not be called")
+		})
+		if launchCalls != 0 {
+			t.Fatalf("launcher calls = %d, want 0", launchCalls)
+		}
+		if !errors.Is(result.Err, ErrInvalidEntrypoint) || result.Retryable {
+			t.Fatalf("session result = %+v, want non-retryable ErrInvalidEntrypoint", result)
+		}
+	})
+
+	t.Run("unchanged root passes freshly canonical paths", func(t *testing.T) {
+		plugin := newSessionTestInstalledPlugin(t)
+		wantRoot, err := filepath.EvalSymlinks(plugin.RootDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantRoot, err = filepath.Abs(wantRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantExecutable, err := filepath.EvalSymlinks(filepath.Join(plugin.RootDir, plugin.Manifest.Entrypoint))
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantExecutable, err = filepath.Abs(wantExecutable)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		startErr := errors.New("controlled launcher failure")
+		var got ProcessSpec
+		result := runLaunchValidationSession(t, plugin, func(_ context.Context, spec ProcessSpec) (Process, error) {
+			got = spec
+			return nil, startErr
+		})
+		if !errors.Is(result.Err, startErr) {
+			t.Fatalf("session error = %v, want controlled launcher failure", result.Err)
+		}
+		if got.WorkingDir != wantRoot || got.Executable != wantExecutable || len(got.Args) != 0 {
+			t.Fatalf("ProcessSpec paths = %#v, want canonical root %q and executable %q", got, wantRoot, wantExecutable)
+		}
+	})
+}
+
+func newSessionTestInstalledPlugin(t *testing.T) InstalledPlugin {
+	t.Helper()
+	base := t.TempDir()
+	root := filepath.Join(base, "registered")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := validManifest()
+	if err := os.WriteFile(filepath.Join(root, manifest.Entrypoint), []byte("binary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, err = filepath.Abs(canonicalRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := resolveEntrypoint(canonicalRoot, manifest.Entrypoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return InstalledPlugin{Manifest: manifest, RootDir: canonicalRoot, Executable: executable}
+}
+
+func runLaunchValidationSession(
+	t *testing.T,
+	plugin InstalledPlugin,
+	start func(context.Context, ProcessSpec) (Process, error),
+) sessionResult {
+	t.Helper()
+	session := newPluginSession(context.Background(), 101, sessionConfig{
+		Plugin:           plugin,
+		Startup:          validHandshakeStartup(),
+		HandshakeTimeout: time.Second,
+		HeartbeatTimeout: time.Minute,
+		GracefulTimeout:  20 * time.Millisecond,
+		KillTimeout:      20 * time.Millisecond,
+		ControlCapacity:  2,
+	}, sessionDependencies{
+		credentials: func() (string, string, error) {
+			return "session-launch-validation", handshakeToken(101), nil
+		},
+		listen: func(ipc.ServerConfig) (ipc.Listener, error) {
+			return &sessionTestListener{}, nil
+		},
+		launcher: sessionTestLauncher{start: start},
+	})
+	return awaitSessionResult(t, session.Done())
+}
+
 func TestPluginSessionListensBeforeLaunchAndCompletesRealHandshake(t *testing.T) {
 	hostRaw, pluginRaw := net.Pipe()
 	hostConn := ipc.WrapConn(hostRaw)
@@ -123,7 +264,7 @@ func TestPluginSessionListensBeforeLaunchAndCompletesRealHandshake(t *testing.T)
 		started        ProcessSpec
 		pluginErr      = make(chan error, 1)
 		processStarted = make(chan int, 1)
-		ready          = make(chan struct{}, 1)
+		ready          = make(chan pluginapi.Descriptor, 1)
 	)
 
 	dependencies := sessionDependencies{
@@ -177,19 +318,15 @@ func TestPluginSessionListensBeforeLaunchAndCompletesRealHandshake(t *testing.T)
 			}
 			processStarted <- pid
 		},
-		onReady: func(instanceID uint64) {
+		onReady: func(instanceID uint64, descriptor pluginapi.Descriptor) {
 			if instanceID != 7 {
 				t.Errorf("Ready instance ID = %d, want 7", instanceID)
 			}
-			ready <- struct{}{}
+			ready <- descriptor
 		},
 	}
 	config := sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -210,7 +347,9 @@ func TestPluginSessionListensBeforeLaunchAndCompletesRealHandshake(t *testing.T)
 	case <-time.After(pluginSessionTestTimeout):
 		t.Fatal("plugin handshake did not complete")
 	}
-	awaitValue(t, ready)
+	if descriptor := awaitValue(t, ready); !reflect.DeepEqual(descriptor, validHandshakeDescriptor()) {
+		t.Fatalf("Ready Descriptor = %+v, want validated Hello Descriptor", descriptor)
+	}
 
 	mu.Lock()
 	gotOrder := append([]string(nil), order...)
@@ -257,11 +396,7 @@ func TestPluginSessionOwnsStartupConfigBeforeAsyncLaunch(t *testing.T) {
 	initializeResult := make(chan pluginapi.Startup, 1)
 	startup := validHandshakeStartup()
 	session := newPluginSession(context.Background(), 22, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          startup,
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -340,11 +475,7 @@ func TestPluginSessionStartupFailuresCleanOwnedResources(t *testing.T) {
 				}
 			}
 			session := newPluginSession(context.Background(), 16, sessionConfig{
-				Plugin: InstalledPlugin{
-					Manifest:   validManifest(),
-					RootDir:    `C:\plugins\camera`,
-					Executable: `C:\plugins\camera\plugin.exe`,
-				},
+				Plugin:           newSessionTestInstalledPlugin(t),
 				Startup:          validHandshakeStartup(),
 				HandshakeTimeout: 20 * time.Millisecond,
 				HeartbeatTimeout: time.Minute,
@@ -393,7 +524,7 @@ func TestPluginSessionStartupFailuresCleanOwnedResources(t *testing.T) {
 func TestPluginSessionClassifiesFailureAtItsSource(t *testing.T) {
 	t.Run("accept transport remains retryable", func(t *testing.T) {
 		process := newSessionTestProcess()
-		session := newPluginSession(context.Background(), 31, sourceClassificationSessionConfig(), sessionDependencies{
+		session := newPluginSession(context.Background(), 31, sourceClassificationSessionConfig(t), sessionDependencies{
 			credentials: sourceClassificationCredentials,
 			listen: func(ipc.ServerConfig) (ipc.Listener, error) {
 				return &sessionTestListener{err: os.ErrNotExist}, nil
@@ -411,7 +542,7 @@ func TestPluginSessionClassifiesFailureAtItsSource(t *testing.T) {
 
 	t.Run("handshake transport remains retryable", func(t *testing.T) {
 		process := newSessionTestProcess()
-		session := newPluginSession(context.Background(), 32, sourceClassificationSessionConfig(), sessionDependencies{
+		session := newPluginSession(context.Background(), 32, sourceClassificationSessionConfig(t), sessionDependencies{
 			credentials: sourceClassificationCredentials,
 			listen: func(ipc.ServerConfig) (ipc.Listener, error) {
 				return &sessionTestListener{conn: failingHandshakeConn{err: os.ErrNotExist}}, nil
@@ -436,7 +567,7 @@ func TestPluginSessionClassifiesFailureAtItsSource(t *testing.T) {
 			_ = pluginConn.Close()
 		})
 		process := newSessionTestProcess()
-		session := newPluginSession(context.Background(), 33, sourceClassificationSessionConfig(), sessionDependencies{
+		session := newPluginSession(context.Background(), 33, sourceClassificationSessionConfig(t), sessionDependencies{
 			credentials: sourceClassificationCredentials,
 			listen: func(ipc.ServerConfig) (ipc.Listener, error) {
 				return &sessionTestListener{conn: hostConn}, nil
@@ -463,7 +594,7 @@ func TestPluginSessionClassifiesFailureAtItsSource(t *testing.T) {
 		{name: "working directory permission", err: classifiedStartError(startFailureWorkingDirectory, "access denied", os.ErrPermission)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			session := newPluginSession(context.Background(), 34, sourceClassificationSessionConfig(), sessionDependencies{
+			session := newPluginSession(context.Background(), 34, sourceClassificationSessionConfig(t), sessionDependencies{
 				credentials: sourceClassificationCredentials,
 				listen: func(ipc.ServerConfig) (ipc.Listener, error) {
 					return &sessionTestListener{}, nil
@@ -492,7 +623,7 @@ func TestPluginSessionClassifiesFailureAtItsSource(t *testing.T) {
 		})
 		process := newSessionTestProcess()
 		token := handshakeToken(44)
-		session := newPluginSession(context.Background(), 35, sourceClassificationSessionConfig(), sessionDependencies{
+		session := newPluginSession(context.Background(), 35, sourceClassificationSessionConfig(t), sessionDependencies{
 			credentials: func() (string, string, error) {
 				return "session-source-classification", token, nil
 			},
@@ -518,13 +649,10 @@ func TestPluginSessionClassifiesFailureAtItsSource(t *testing.T) {
 	})
 }
 
-func sourceClassificationSessionConfig() sessionConfig {
+func sourceClassificationSessionConfig(t *testing.T) sessionConfig {
+	t.Helper()
 	return sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -567,11 +695,7 @@ func TestPluginSessionHandshakeTimeoutClosesConnectionAndProcess(t *testing.T) {
 	process := newSessionTestProcess()
 	start := time.Now()
 	session := newPluginSession(context.Background(), 17, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: 25 * time.Millisecond,
 		HeartbeatTimeout: time.Minute,
@@ -614,11 +738,7 @@ func TestPluginSessionStartupCleanupHonorsKillTimeout(t *testing.T) {
 		process.unblockOnKill = false
 		process.mu.Unlock()
 		session := newPluginSession(context.Background(), 26, sessionConfig{
-			Plugin: InstalledPlugin{
-				Manifest:   validManifest(),
-				RootDir:    `C:\plugins\camera`,
-				Executable: `C:\plugins\camera\plugin.exe`,
-			},
+			Plugin:           newSessionTestInstalledPlugin(t),
 			Startup:          validHandshakeStartup(),
 			HandshakeTimeout: time.Second,
 			HeartbeatTimeout: time.Minute,
@@ -663,11 +783,7 @@ func TestPluginSessionStartupCleanupHonorsKillTimeout(t *testing.T) {
 		process.mu.Unlock()
 		expectedToken := handshakeToken(34)
 		session := newPluginSession(context.Background(), 27, sessionConfig{
-			Plugin: InstalledPlugin{
-				Manifest:   validManifest(),
-				RootDir:    `C:\plugins\camera`,
-				Executable: `C:\plugins\camera\plugin.exe`,
-			},
+			Plugin:           newSessionTestInstalledPlugin(t),
 			Startup:          validHandshakeStartup(),
 			HandshakeTimeout: time.Second,
 			HeartbeatTimeout: time.Minute,
@@ -861,11 +977,7 @@ func TestPluginSessionRoutesRuntimeMessagesAndRejectsWrongDirection(t *testing.T
 				},
 			}
 			config := sessionConfig{
-				Plugin: InstalledPlugin{
-					Manifest:   validManifest(),
-					RootDir:    `C:\plugins\camera`,
-					Executable: `C:\plugins\camera\plugin.exe`,
-				},
+				Plugin:           newSessionTestInstalledPlugin(t),
 				Startup:          validHandshakeStartup(),
 				HandshakeTimeout: time.Second,
 				HeartbeatTimeout: time.Minute,
@@ -1114,11 +1226,7 @@ func TestPluginSessionAckBeforeShutdownSendDoesNotSatisfyStop(t *testing.T) {
 	token := handshakeToken(36)
 	ready := make(chan struct{})
 	session := newPluginSession(context.Background(), 28, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -1217,11 +1325,7 @@ func TestPluginSessionAckDuringShutdownSendAttemptRequiresSendSuccess(t *testing
 			token := handshakeToken(38)
 			ready := make(chan struct{})
 			session := newPluginSession(context.Background(), 30, sessionConfig{
-				Plugin: InstalledPlugin{
-					Manifest:   validManifest(),
-					RootDir:    `C:\plugins\camera`,
-					Executable: `C:\plugins\camera\plugin.exe`,
-				},
+				Plugin:           newSessionTestInstalledPlugin(t),
 				Startup:          validHandshakeStartup(),
 				HandshakeTimeout: time.Second,
 				HeartbeatTimeout: time.Minute,
@@ -1406,11 +1510,7 @@ func TestPluginSessionWriterFailureTerminatesWithOpaqueCause(t *testing.T) {
 	token := handshakeToken(25)
 	ready := make(chan struct{})
 	session := newPluginSession(context.Background(), 15, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -1532,11 +1632,7 @@ func TestPluginSessionJoinsReaderWriterAndProcessErrorsWhenStopRaces(t *testing.
 	token := handshakeToken(28)
 	ready := make(chan struct{})
 	session := newPluginSession(context.Background(), 19, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -1625,11 +1721,7 @@ func TestPluginSessionCancellationDoesNotReplacePrimaryReaderError(t *testing.T)
 	token := handshakeToken(29)
 	ready := make(chan struct{})
 	session := newPluginSession(context.Background(), 20, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -1724,11 +1816,7 @@ func TestPluginSessionProcessFirstDrainsLateWriterCause(t *testing.T) {
 	token := handshakeToken(30)
 	ready := make(chan struct{})
 	session := newPluginSession(context.Background(), 21, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -1832,11 +1920,7 @@ func TestPluginSessionRetainsConcurrentTerminalErrorsWithoutSecrets(t *testing.T
 	startup := validHandshakeStartup()
 	startup.Config.Data = []byte(`{"value":"` + configSecret + `"}`)
 	session := newPluginSession(context.Background(), 13, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          startup,
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -1963,11 +2047,7 @@ func TestPluginSessionHeartbeatTimeoutCoversBlockedHandshakeReplay(t *testing.T)
 	token := handshakeToken(39)
 	unresponsive := make(chan uint64, 1)
 	session := newPluginSession(context.Background(), 31, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: 25 * time.Millisecond,
@@ -2041,11 +2121,7 @@ func TestPluginSessionCanceledQueuedHandshakeControlIsNotReplayed(t *testing.T) 
 	defer cancelReceive()
 	pluginResult := make(chan sessionReceiveResult, 1)
 	session := newPluginSession(context.Background(), 32, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -2126,11 +2202,7 @@ func TestPluginSessionReplayClaimWinsCallerCancellation(t *testing.T) {
 	firstPluginResult := make(chan sessionReceiveResult, 1)
 	secondPluginResult := make(chan sessionReceiveResult, 1)
 	session := newPluginSession(context.Background(), 33, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -2244,11 +2316,7 @@ func TestPluginSessionStopDuringReplayUsesGracefulShutdown(t *testing.T) {
 	token := handshakeToken(37)
 	pluginDone := make(chan error, 1)
 	session := newPluginSession(context.Background(), 29, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -2366,11 +2434,7 @@ func TestPluginSessionStopRemainsBoundedDuringBlockedHandshakeReplay(t *testing.
 	process := newSessionTestProcess()
 	token := handshakeToken(32)
 	session := newPluginSession(context.Background(), 24, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -2487,11 +2551,7 @@ func TestPluginSessionHandshakeControlRaceDeliversEveryChangeOnceInOrder(t *test
 		}},
 	}
 	session := newPluginSession(context.Background(), 14, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: time.Minute,
@@ -2627,11 +2687,7 @@ func startReadyPluginSessionWithHeartbeat(
 		return process, nil
 	}}
 	session := newPluginSession(context.Background(), instanceID, sessionConfig{
-		Plugin: InstalledPlugin{
-			Manifest:   validManifest(),
-			RootDir:    `C:\plugins\camera`,
-			Executable: `C:\plugins\camera\plugin.exe`,
-		},
+		Plugin:           newSessionTestInstalledPlugin(t),
 		Startup:          validHandshakeStartup(),
 		HandshakeTimeout: time.Second,
 		HeartbeatTimeout: heartbeatTimeout,

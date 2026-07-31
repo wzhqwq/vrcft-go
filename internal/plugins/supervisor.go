@@ -110,7 +110,7 @@ type supervisorTimer interface {
 
 type supervisorSessionCallbacks struct {
 	ProcessStarted func(uint64, int)
-	Ready          func(uint64)
+	Ready          func(uint64, pluginapi.Descriptor)
 	Heartbeat      func(uint64, time.Time)
 	Frame          func(uint64, time.Time, float64)
 	Unresponsive   func(uint64)
@@ -176,6 +176,7 @@ const (
 type supervisorCallback struct {
 	kind       supervisorCallbackKind
 	instanceID uint64
+	descriptor pluginapi.Descriptor
 	pid        int
 	at         time.Time
 	frameRate  float64
@@ -284,6 +285,7 @@ func newPluginSupervisor(config pluginSupervisorConfig) (pluginSupervisor, error
 	initial := RuntimeSnapshot{
 		ID:                     config.Plugin.Manifest.ID,
 		Name:                   config.Plugin.Manifest.Name,
+		Description:            config.Plugin.Manifest.Description,
 		Version:                config.Plugin.Manifest.Version,
 		Capabilities:           config.Plugin.Manifest.Capabilities,
 		Enabled:                config.Preference.Enabled,
@@ -442,7 +444,7 @@ func (s *serializedPluginSupervisor) handleCommand(
 		s.cancelTimer(state)
 		if state.session == nil {
 			state.snapshot.State = StateDisabled
-			clearRuntimeMetrics(&state.snapshot)
+			s.clearRuntimeMetrics(&state.snapshot)
 			state.snapshot.NextRestartAt = time.Time{}
 			s.publish(state)
 			command.signalAdmission(nil)
@@ -462,7 +464,7 @@ func (s *serializedPluginSupervisor) handleCommand(
 		s.cancelTimer(state)
 		if !state.snapshot.Enabled {
 			state.snapshot.State = StateDisabled
-			clearRuntimeMetrics(&state.snapshot)
+			s.clearRuntimeMetrics(&state.snapshot)
 			s.publish(state)
 			command.signalAdmission(nil)
 			command.reply <- nil
@@ -502,7 +504,7 @@ func (s *serializedPluginSupervisor) handleCommand(
 		}
 		if state.session == nil {
 			state.snapshot.State = StateDisabled
-			clearRuntimeMetrics(&state.snapshot)
+			s.clearRuntimeMetrics(&state.snapshot)
 			s.publish(state)
 			command.signalAdmission(nil)
 			command.reply <- nil
@@ -737,7 +739,7 @@ func (s *serializedPluginSupervisor) beginStop(
 		state.closeReply = reply
 	}
 	state.snapshot.State = StateStopping
-	clearRuntimeMetrics(&state.snapshot)
+	s.clearRuntimeMetrics(&state.snapshot)
 	s.publish(state)
 	instanceID := state.instanceID
 	session := state.session
@@ -761,7 +763,7 @@ func (s *serializedPluginSupervisor) handleStopResult(
 	state.stopIntent = supervisorStopNone
 	state.session = nil
 	state.sessionOutcome = nil
-	clearRuntimeMetrics(&state.snapshot)
+	s.clearRuntimeMetrics(&state.snapshot)
 	switch intent {
 	case supervisorStopDisable:
 		state.snapshot.State = StateDisabled
@@ -795,7 +797,7 @@ func (s *serializedPluginSupervisor) handleStopResult(
 func (s *serializedPluginSupervisor) startSession(state *supervisorLoopState) {
 	s.cancelStableTimer(state)
 	state.snapshot.State = StateStarting
-	clearRuntimeMetrics(&state.snapshot)
+	s.clearRuntimeMetrics(&state.snapshot)
 	state.snapshot.NextRestartAt = time.Time{}
 	if state.launches > 0 {
 		state.snapshot.RestartCount++
@@ -815,7 +817,7 @@ func (s *serializedPluginSupervisor) startSession(state *supervisorLoopState) {
 	if session == nil {
 		state.snapshot.State = StateIncompatible
 		state.snapshot.LastError = sanitizedSupervisorError(ErrInvalidState)
-		clearRuntimeMetrics(&state.snapshot)
+		s.clearRuntimeMetrics(&state.snapshot)
 		s.publish(state)
 		return
 	}
@@ -847,7 +849,7 @@ func (s *serializedPluginSupervisor) handleSessionResult(
 	s.cancelStableTimer(state)
 	s.retireControls(state)
 	state.session = nil
-	clearRuntimeMetrics(&state.snapshot)
+	s.clearRuntimeMetrics(&state.snapshot)
 	result := outcome.result
 	if result.Err == nil {
 		state.snapshot.State = StateStopped
@@ -859,7 +861,7 @@ func (s *serializedPluginSupervisor) handleSessionResult(
 		state.snapshot.State = StateIncompatible
 		state.snapshot.LastError = sanitizedSupervisorError(result.Err)
 		state.snapshot.NextRestartAt = time.Time{}
-		clearRuntimeMetrics(&state.snapshot)
+		s.clearRuntimeMetrics(&state.snapshot)
 		s.publish(state)
 		return
 	}
@@ -868,7 +870,7 @@ func (s *serializedPluginSupervisor) handleSessionResult(
 	}
 	state.snapshot.ConsecutiveFailures++
 	state.snapshot.LastError = sanitizedSupervisorError(result.Err)
-	clearRuntimeMetrics(&state.snapshot)
+	s.clearRuntimeMetrics(&state.snapshot)
 	if !state.snapshot.Enabled || state.snapshot.ConsecutiveFailures >= s.config.Restart.MaxFailures {
 		if state.snapshot.ConsecutiveFailures >= s.config.Restart.MaxFailures {
 			state.snapshot.LastError = ErrRestartLimitReached.Error()
@@ -903,8 +905,12 @@ func (s *serializedPluginSupervisor) sessionCallbacks(instanceID uint64) supervi
 		ProcessStarted: func(_ uint64, pid int) {
 			sendCritical(supervisorCallback{kind: supervisorProcessStarted, instanceID: instanceID, pid: pid})
 		},
-		Ready: func(_ uint64) {
-			sendCritical(supervisorCallback{kind: supervisorReady, instanceID: instanceID})
+		Ready: func(_ uint64, descriptor pluginapi.Descriptor) {
+			sendCritical(supervisorCallback{
+				kind:       supervisorReady,
+				instanceID: instanceID,
+				descriptor: descriptor,
+			})
 		},
 		Heartbeat: func(_ uint64, at time.Time) {
 			sendTelemetry(supervisorCallback{kind: supervisorHeartbeat, instanceID: instanceID, at: at})
@@ -943,6 +949,8 @@ func (s *serializedPluginSupervisor) handleCallback(
 		if state.snapshot.State != StateHandshaking {
 			return
 		}
+		state.snapshot.Name = callback.descriptor.Name
+		state.snapshot.Description = callback.descriptor.Description
 		state.snapshot.State = StateRunning
 		state.snapshot.StartedAt = s.config.Now()
 		s.armStableTimer(state)
@@ -1005,7 +1013,9 @@ func (s *serializedPluginSupervisor) cancelStableTimer(state *supervisorLoopStat
 	state.stableInstance = 0
 }
 
-func clearRuntimeMetrics(snapshot *RuntimeSnapshot) {
+func (s *serializedPluginSupervisor) clearRuntimeMetrics(snapshot *RuntimeSnapshot) {
+	snapshot.Name = s.config.Plugin.Manifest.Name
+	snapshot.Description = s.config.Plugin.Manifest.Description
 	snapshot.PID = 0
 	snapshot.StartedAt = time.Time{}
 	snapshot.LastHeartbeatAt = time.Time{}

@@ -1291,9 +1291,17 @@ func (f *managerScriptedSessionFactory) create(
 	session := &managerScriptedSession{
 		instanceID:   instanceID,
 		dependencies: dependencies,
-		startup:      cloneStartup(config.Startup),
-		done:         make(chan sessionResult, 1),
-		controls:     make(chan controlRequest, 8),
+		descriptor: pluginapi.Descriptor{
+			APIVersion:   pluginapi.APIVersion,
+			ID:           config.Plugin.Manifest.ID,
+			Name:         config.Plugin.Manifest.Name,
+			Version:      config.Plugin.Manifest.Version,
+			Description:  config.Plugin.Manifest.Description,
+			Capabilities: config.Plugin.Manifest.Capabilities,
+		},
+		startup:  cloneStartup(config.Startup),
+		done:     make(chan sessionResult, 1),
+		controls: make(chan controlRequest, 8),
 	}
 	f.mu.Lock()
 	id := config.Plugin.Manifest.ID
@@ -1336,6 +1344,7 @@ func (f *managerScriptedSessionFactory) count(id string) int {
 type managerScriptedSession struct {
 	instanceID   uint64
 	dependencies sessionDependencies
+	descriptor   pluginapi.Descriptor
 	startup      pluginapi.Startup
 	done         chan sessionResult
 	controls     chan controlRequest
@@ -1360,7 +1369,7 @@ func (s *managerScriptedSession) Done() <-chan sessionResult { return s.done }
 
 func (s *managerScriptedSession) ready() {
 	s.dependencies.onProcessStarted(s.instanceID, 1234)
-	s.dependencies.onReady(s.instanceID)
+	s.dependencies.onReady(s.instanceID, s.descriptor)
 }
 
 func (s *managerScriptedSession) finish(result sessionResult) {
