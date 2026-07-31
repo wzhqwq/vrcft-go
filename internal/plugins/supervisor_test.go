@@ -810,8 +810,43 @@ func TestPluginSupervisorTelemetryLogLossComposesOnNextPublishedLog(t *testing.T
 	supervisor.handleCallback(&state, accepted)
 
 	got := awaitValue(t, published)
-	if got.Entry.Message != "delivered" || got.Dropped != 11 {
-		t.Fatalf("published log = %+v, want delivered with Dropped 11", got)
+	if got.InstanceID != 91 || got.Entry.Message != "delivered" || got.Dropped != 11 {
+		t.Fatalf("published log = %+v, want instance 91 delivered with Dropped 11", got)
+	}
+}
+
+func TestPluginSupervisorTelemetryLossDoesNotCrossSessionInstances(t *testing.T) {
+	published := make(chan observedPluginLog, 1)
+	supervisor := &serializedPluginSupervisor{
+		config: pluginSupervisorConfig{PublishLog: func(log observedPluginLog) {
+			published <- log
+		}},
+		callback: make(chan supervisorCallback, 1),
+		done:     make(chan struct{}),
+	}
+	oldCallbacks := supervisor.sessionCallbacks(1)
+	currentCallbacks := supervisor.sessionCallbacks(2)
+	supervisor.callback <- supervisorCallback{kind: supervisorHeartbeat, instanceID: 1}
+	oldCallbacks.Log(1, observedPluginLog{
+		Entry:   pluginapi.LogEntry{Level: pluginapi.LogWarn, Message: "lost old session"},
+		Dropped: 4,
+	})
+	<-supervisor.callback
+
+	currentCallbacks.Log(2, observedPluginLog{
+		Entry:   pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "current session"},
+		Dropped: 2,
+	})
+	state := supervisorLoopState{
+		snapshot:   RuntimeSnapshot{State: StateRunning},
+		session:    newSupervisorTestSession(),
+		instanceID: 2,
+	}
+	supervisor.handleCallback(&state, <-supervisor.callback)
+
+	got := awaitValue(t, published)
+	if got.Entry.Message != "current session" || got.Dropped != 2 {
+		t.Fatalf("current-session log = %+v, want Dropped 2 without old-session loss", got)
 	}
 }
 

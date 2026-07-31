@@ -203,7 +203,6 @@ type serializedPluginSupervisor struct {
 	callback         chan supervisorCallback
 	done             chan struct{}
 	snapshot         atomic.Value
-	droppedLog       atomic.Uint64
 }
 
 type supervisorQueuedControl struct {
@@ -889,14 +888,22 @@ func (s *serializedPluginSupervisor) handleSessionResult(
 }
 
 func (s *serializedPluginSupervisor) sessionCallbacks(instanceID uint64) supervisorSessionCallbacks {
+	var droppedLog atomic.Uint64
 	sendTelemetry := func(callback supervisorCallback) {
+		if callback.kind == supervisorLog {
+			callback.log.Dropped = saturatingAddUint64(callback.log.Dropped, droppedLog.Swap(0))
+			select {
+			case s.callback <- callback:
+			case <-s.done:
+			default:
+				accumulateDropped(&droppedLog, saturatingAddUint64(callback.log.Dropped, 1))
+			}
+			return
+		}
 		select {
 		case s.callback <- callback:
 		case <-s.done:
 		default:
-			if callback.kind == supervisorLog {
-				accumulateDropped(&s.droppedLog, saturatingAddUint64(callback.log.Dropped, 1))
-			}
 		}
 	}
 	sendCritical := func(callback supervisorCallback) {
@@ -929,6 +936,7 @@ func (s *serializedPluginSupervisor) sessionCallbacks(instanceID uint64) supervi
 			sendTelemetry(supervisorCallback{kind: supervisorStatus, instanceID: instanceID, status: status})
 		},
 		Log: func(_ uint64, log observedPluginLog) {
+			log.InstanceID = instanceID
 			sendTelemetry(supervisorCallback{kind: supervisorLog, instanceID: instanceID, log: log})
 		},
 	}
@@ -981,7 +989,6 @@ func (s *serializedPluginSupervisor) handleCallback(
 		}
 	case supervisorLog:
 		if s.config.PublishLog != nil {
-			callback.log.Dropped = saturatingAddUint64(callback.log.Dropped, s.droppedLog.Swap(0))
 			s.config.PublishLog(callback.log)
 		}
 	default:

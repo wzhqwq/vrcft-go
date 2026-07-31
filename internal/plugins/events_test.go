@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -191,6 +192,96 @@ func TestEventSubscriberAddsUpstreamAndLocalLogLoss(t *testing.T) {
 	delivered, ok := subscriber.next()
 	if !ok || delivered.Log == nil || delivered.Log.Message != "delivered" || delivered.Dropped != 11 {
 		t.Fatalf("composed event = %+v, want delivered with Dropped 11", delivered)
+	}
+}
+
+func TestEventSubscriberLogLossDoesNotCrossPluginIDs(t *testing.T) {
+	subscriber := &eventSubscriber{states: make(map[string]Event)}
+	subscriber.enqueue(Event{
+		Sequence: 1,
+		Type:     EventPluginLog,
+		PluginID: "filler",
+		Log:      &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "retained"},
+	}, 1)
+	subscriber.enqueue(Event{
+		Sequence: 2,
+		Type:     EventPluginLog,
+		PluginID: "alpha",
+		Log:      &pluginapi.LogEntry{Level: pluginapi.LogWarn, Message: "lost alpha"},
+		Dropped:  4,
+	}, 1)
+	retained, ok := subscriber.next()
+	if !ok {
+		t.Fatal("subscriber retained no filler log")
+	}
+	subscriber.pop(retained)
+
+	subscriber.enqueue(Event{
+		Sequence: 3,
+		Type:     EventPluginLog,
+		PluginID: "beta",
+		Log:      &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "beta"},
+		Dropped:  2,
+	}, 1)
+	beta, ok := subscriber.next()
+	if !ok {
+		t.Fatal("subscriber queued no beta log")
+	}
+	subscriber.pop(beta)
+	subscriber.enqueue(Event{
+		Sequence: 4,
+		Type:     EventPluginLog,
+		PluginID: "alpha",
+		Log:      &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "alpha"},
+		Dropped:  3,
+	}, 1)
+	alpha, ok := subscriber.next()
+	if !ok {
+		t.Fatal("subscriber queued no alpha log")
+	}
+
+	if beta.Dropped != 2 || alpha.Dropped != 8 {
+		t.Fatalf("cross-plugin Dropped = beta %d alpha %d, want 2/8", beta.Dropped, alpha.Dropped)
+	}
+}
+
+func TestEventSubscriberPerPluginLogLossSaturatesIndependently(t *testing.T) {
+	subscriber := &eventSubscriber{states: make(map[string]Event)}
+	subscriber.enqueue(Event{
+		Sequence: 1,
+		Type:     EventPluginLog,
+		PluginID: "filler",
+		Log:      &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "retained"},
+	}, 1)
+	subscriber.enqueue(Event{
+		Sequence: 2,
+		Type:     EventPluginLog,
+		PluginID: "alpha",
+		Log:      &pluginapi.LogEntry{Level: pluginapi.LogWarn, Message: "lost alpha"},
+		Dropped:  math.MaxUint64 - 1,
+	}, 1)
+	retained, _ := subscriber.next()
+	subscriber.pop(retained)
+
+	subscriber.enqueue(Event{
+		Sequence: 3,
+		Type:     EventPluginLog,
+		PluginID: "beta",
+		Log:      &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "beta"},
+	}, 1)
+	beta, _ := subscriber.next()
+	subscriber.pop(beta)
+	subscriber.enqueue(Event{
+		Sequence: 4,
+		Type:     EventPluginLog,
+		PluginID: "alpha",
+		Log:      &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "alpha"},
+		Dropped:  1,
+	}, 1)
+	alpha, _ := subscriber.next()
+
+	if beta.Dropped != 0 || alpha.Dropped != math.MaxUint64 {
+		t.Fatalf("saturated cross-plugin Dropped = beta %d alpha %d, want 0/MaxUint64", beta.Dropped, alpha.Dropped)
 	}
 }
 

@@ -8,8 +8,9 @@ import (
 )
 
 type observedPluginLog struct {
-	Entry   pluginapi.LogEntry
-	Dropped uint64
+	InstanceID uint64
+	Entry      pluginapi.LogEntry
+	Dropped    uint64
 }
 
 func saturatingAddUint64(left, right uint64) uint64 {

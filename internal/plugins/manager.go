@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
@@ -265,7 +264,11 @@ func (m *pluginManager) supervisorConfig(
 	preference PluginPreference,
 ) pluginSupervisorConfig {
 	id := plugin.Manifest.ID
-	var droppedLog atomic.Uint64
+	// PublishLog is called only by this plugin's serialized supervisor loop.
+	// That loop owns the instance and pending-loss state, preserving exact-next
+	// delivery without a blocking mutex on the log path.
+	var logInstanceID uint64
+	var droppedLog uint64
 	return pluginSupervisorConfig{
 		Plugin:       plugin,
 		Preference:   preference,
@@ -311,7 +314,12 @@ func (m *pluginManager) supervisorConfig(
 			})
 		},
 		PublishLog: func(log observedPluginLog) {
-			log.Dropped = saturatingAddUint64(log.Dropped, droppedLog.Swap(0))
+			if log.InstanceID != logInstanceID {
+				logInstanceID = log.InstanceID
+				droppedLog = 0
+			}
+			log.Dropped = saturatingAddUint64(log.Dropped, droppedLog)
+			droppedLog = 0
 			entry := log.Entry
 			entry.PluginID = id
 			if !m.publishIfStarted(Event{
@@ -320,7 +328,7 @@ func (m *pluginManager) supervisorConfig(
 				Log:      &entry,
 				Dropped:  log.Dropped,
 			}) {
-				accumulateDropped(&droppedLog, saturatingAddUint64(log.Dropped, 1))
+				droppedLog = saturatingAddUint64(log.Dropped, 1)
 			}
 		},
 		SupervisorCapacity: m.options.ControlCapacity,

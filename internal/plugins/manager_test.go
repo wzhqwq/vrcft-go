@@ -153,6 +153,36 @@ func TestManagerLogIngressLossComposesPerPluginWithoutBlocking(t *testing.T) {
 	}
 }
 
+func TestManagerLogIngressLossDoesNotCrossSessionInstances(t *testing.T) {
+	plugin := managerTestPlugin("vendor.alpha")
+	hub := &eventHub{publish: make(chan Event, 1), done: make(chan struct{})}
+	manager := &pluginManager{
+		options:     DefaultOptions(),
+		events:      hub,
+		lifecycle:   managerStarted,
+		supervisors: map[string]pluginSupervisor{plugin.Manifest.ID: nil},
+	}
+	publishLog := manager.supervisorConfig(plugin, PluginPreference{}).PublishLog
+
+	hub.publish <- Event{Type: EventPluginStatus, PluginID: plugin.Manifest.ID}
+	publishLog(observedPluginLog{
+		InstanceID: 1,
+		Entry:      pluginapi.LogEntry{Level: pluginapi.LogWarn, Message: "lost old session"},
+		Dropped:    4,
+	})
+	<-hub.publish
+	publishLog(observedPluginLog{
+		InstanceID: 2,
+		Entry:      pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "current session"},
+		Dropped:    2,
+	})
+
+	got := <-hub.publish
+	if got.Log == nil || got.Log.Message != "current session" || got.Dropped != 2 {
+		t.Fatalf("current-session Manager event = %+v, want Dropped 2 without old-session loss", got)
+	}
+}
+
 func TestManagerStartupRollsBackAndCanRetry(t *testing.T) {
 	catalog := &managerTestCatalog{plugins: []InstalledPlugin{
 		managerTestPlugin("vendor.alpha"),

@@ -68,7 +68,7 @@ type eventSubscriber struct {
 	logs       []Event
 	states     map[string]Event
 	stateOrder []string
-	droppedLog uint64
+	droppedLog map[string]uint64
 }
 
 func newEventHub(capacity int) *eventHub {
@@ -270,15 +270,18 @@ func (s *eventSubscriber) enqueue(event Event, capacity int) {
 		s.states[key] = event.clone()
 	case EventPluginLog:
 		if len(s.logs) >= capacity {
-			s.droppedLog = saturatingAddUint64(
-				s.droppedLog,
+			if s.droppedLog == nil {
+				s.droppedLog = make(map[string]uint64)
+			}
+			s.droppedLog[event.PluginID] = saturatingAddUint64(
+				s.droppedLog[event.PluginID],
 				saturatingAddUint64(event.Dropped, 1),
 			)
 			return
 		}
-		if s.droppedLog != 0 {
-			event.Dropped = saturatingAddUint64(event.Dropped, s.droppedLog)
-			s.droppedLog = 0
+		if dropped := s.droppedLog[event.PluginID]; dropped != 0 {
+			event.Dropped = saturatingAddUint64(event.Dropped, dropped)
+			delete(s.droppedLog, event.PluginID)
 		}
 		s.logs = append(s.logs, event.clone())
 	default:
