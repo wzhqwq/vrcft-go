@@ -146,6 +146,153 @@ func TestManagerStartupRollsBackWhenCallerCancelsDuringFinalSupervisorConstructi
 	if err := manager.Enable(context.Background(), "vendor.alpha"); !errors.Is(err, ErrManagerNotStarted) {
 		t.Fatalf("Enable() after cancellation error = %v, want ErrManagerNotStarted", err)
 	}
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start() with fresh context after cancellation error = %v", err)
+	}
+	if got := managerSnapshotIDs(manager.List()); !reflect.DeepEqual(got, []string{"vendor.alpha", "vendor.beta"}) {
+		t.Fatalf("List() after retry = %v, want rebuilt registry", got)
+	}
+	if err := manager.Close(context.Background()); err != nil {
+		t.Fatalf("Close() after retry error = %v", err)
+	}
+}
+
+func TestManagerStartupCancellationJoinsRollbackError(t *testing.T) {
+	catalog := &managerTestCatalog{plugins: []InstalledPlugin{
+		managerTestPlugin("vendor.alpha"),
+		managerTestPlugin("vendor.beta"),
+	}}
+	factory := newManagerTestSupervisorFactory()
+	rollbackErr := errors.New("rollback close failure")
+	ctx, cancel := context.WithCancel(context.Background())
+	manager, err := newManager(
+		catalog,
+		newManagerTestStore(emptyPluginSettings()),
+		managerTestLauncher{},
+		managerTestFrameSink{},
+		DefaultOptions(),
+		managerDependencies{newSupervisor: func(config pluginSupervisorConfig) (pluginSupervisor, error) {
+			supervisor, err := factory.create(config)
+			if config.Plugin.Manifest.ID == "vendor.beta" {
+				testSupervisor := supervisor.(*managerTestSupervisor)
+				testSupervisor.mu.Lock()
+				testSupervisor.closeErr = rollbackErr
+				testSupervisor.mu.Unlock()
+				cancel()
+			}
+			return supervisor, err
+		}},
+	)
+	if err != nil {
+		t.Fatalf("newManager() error = %v", err)
+	}
+
+	err = manager.Start(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start() error = %v, want context.Canceled", err)
+	}
+	if !errors.Is(err, rollbackErr) {
+		t.Fatalf("Start() error = %v, want rollback error %v", err, rollbackErr)
+	}
+	if got := factory.closeCount("vendor.alpha"); got != 1 {
+		t.Fatalf("alpha Close() calls = %d, want 1", got)
+	}
+	if got := factory.closeCount("vendor.beta"); got != 1 {
+		t.Fatalf("beta Close() calls = %d, want 1", got)
+	}
+}
+
+func TestManagerCloseDuringFinalStartupCancellationKeepsClosingLifecycle(t *testing.T) {
+	catalog := &managerTestCatalog{plugins: []InstalledPlugin{
+		managerTestPlugin("vendor.alpha"),
+		managerTestPlugin("vendor.beta"),
+	}}
+	factory := newManagerTestSupervisorFactory()
+	ctx, cancel := context.WithCancel(context.Background())
+	finalConstructed := make(chan struct{})
+	releaseFinalConstruction := make(chan struct{})
+	rollbackCloseGate := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseRollback := func() { releaseOnce.Do(func() { close(rollbackCloseGate) }) }
+	t.Cleanup(releaseRollback)
+
+	manager, err := newManager(
+		catalog,
+		newManagerTestStore(emptyPluginSettings()),
+		managerTestLauncher{},
+		managerTestFrameSink{},
+		DefaultOptions(),
+		managerDependencies{newSupervisor: func(config pluginSupervisorConfig) (pluginSupervisor, error) {
+			supervisor, err := factory.create(config)
+			if config.Plugin.Manifest.ID != "vendor.beta" {
+				return supervisor, err
+			}
+			for _, id := range []string{"vendor.alpha", "vendor.beta"} {
+				testSupervisor := factory.supervisor(id)
+				testSupervisor.mu.Lock()
+				testSupervisor.closeGate = rollbackCloseGate
+				testSupervisor.mu.Unlock()
+			}
+			cancel()
+			close(finalConstructed)
+			<-releaseFinalConstruction
+			return supervisor, err
+		}},
+	)
+	if err != nil {
+		t.Fatalf("newManager() error = %v", err)
+	}
+	implementation := manager.(*pluginManager)
+	implementation.events.Close()
+	blockingEvents := &eventHub{done: make(chan struct{}), stopped: make(chan struct{})}
+	implementation.events = blockingEvents
+	var releaseEventsOnce sync.Once
+	releaseEvents := func() { releaseEventsOnce.Do(func() { close(blockingEvents.stopped) }) }
+	t.Cleanup(releaseEvents)
+	startResult := make(chan error, 1)
+	go func() { startResult <- manager.Start(ctx) }()
+	awaitManagerSignal(t, finalConstructed)
+
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- manager.Close(context.Background()) }()
+	awaitManagerLifecycle(t, implementation, managerClosing)
+	select {
+	case err := <-closeResult:
+		t.Fatalf("Close() returned before startup completed: %v", err)
+	default:
+	}
+
+	close(releaseFinalConstruction)
+	awaitManagerSignal(t, factory.supervisor("vendor.alpha").closeStarted)
+	awaitManagerSignal(t, factory.supervisor("vendor.beta").closeStarted)
+	awaitManagerLifecycle(t, implementation, managerClosing)
+	select {
+	case err := <-startResult:
+		t.Fatalf("Start() returned before rollback Close() calls completed: %v", err)
+	default:
+	}
+
+	releaseRollback()
+	if err := awaitManagerError(t, startResult); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start() error = %v, want context.Canceled", err)
+	}
+	awaitManagerLifecycle(t, implementation, managerClosing)
+	releaseEvents()
+	if err := awaitManagerError(t, closeResult); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	awaitManagerLifecycle(t, implementation, managerClosed)
+	if got := manager.List(); len(got) != 0 {
+		t.Fatalf("List() after concurrent shutdown = %+v, want empty registry", got)
+	}
+	if err := manager.Start(context.Background()); !errors.Is(err, ErrManagerClosed) {
+		t.Fatalf("Start() after Close error = %v, want ErrManagerClosed", err)
+	}
+	for _, id := range []string{"vendor.alpha", "vendor.beta"} {
+		if got := factory.closeCount(id); got != 1 {
+			t.Fatalf("%s Close() calls = %d, want exactly 1", id, got)
+		}
+	}
 }
 
 func TestManagerRejectsInvalidDependenciesAndOptions(t *testing.T) {
@@ -932,8 +1079,17 @@ func (f *managerTestSupervisorFactory) preference(id string) PluginPreference {
 }
 
 func (f *managerTestSupervisorFactory) closed(id string) bool {
+	return f.closeCount(id) != 0
+}
+
+func (f *managerTestSupervisorFactory) closeCount(id string) int {
 	supervisor := f.supervisor(id)
-	return supervisor != nil && supervisor.closeCalls != 0
+	if supervisor == nil {
+		return 0
+	}
+	supervisor.mu.Lock()
+	defer supervisor.mu.Unlock()
+	return supervisor.closeCalls
 }
 
 type managerTestSupervisor struct {
@@ -1262,6 +1418,24 @@ func awaitManagerSignal(t *testing.T, signal <-chan struct{}) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for manager signal")
 	}
+}
+
+func awaitManagerLifecycle(t *testing.T, manager *pluginManager, want managerLifecycle) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		manager.mu.RLock()
+		got := manager.lifecycle
+		manager.mu.RUnlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	manager.mu.RLock()
+	got := manager.lifecycle
+	manager.mu.RUnlock()
+	t.Fatalf("manager lifecycle = %d, want %d", got, want)
 }
 
 func awaitManagerError(t *testing.T, result <-chan error) error {
