@@ -186,6 +186,13 @@ func TestManagerStartupCancellationJoinsRollbackError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newManager() error = %v", err)
 	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), time.Second)
+		defer closeCancel()
+		if err := manager.Close(closeCtx); err != nil {
+			t.Errorf("Close() cleanup error = %v", err)
+		}
+	})
 
 	err = manager.Start(ctx)
 	if !errors.Is(err, context.Canceled) {
@@ -211,6 +218,9 @@ func TestManagerCloseDuringFinalStartupCancellationKeepsClosingLifecycle(t *test
 	ctx, cancel := context.WithCancel(context.Background())
 	finalConstructed := make(chan struct{})
 	releaseFinalConstruction := make(chan struct{})
+	var releaseFinalOnce sync.Once
+	releaseFinal := func() { releaseFinalOnce.Do(func() { close(releaseFinalConstruction) }) }
+	t.Cleanup(releaseFinal)
 	rollbackCloseGate := make(chan struct{})
 	var releaseOnce sync.Once
 	releaseRollback := func() { releaseOnce.Do(func() { close(rollbackCloseGate) }) }
@@ -262,7 +272,7 @@ func TestManagerCloseDuringFinalStartupCancellationKeepsClosingLifecycle(t *test
 	default:
 	}
 
-	close(releaseFinalConstruction)
+	releaseFinal()
 	awaitManagerSignal(t, factory.supervisor("vendor.alpha").closeStarted)
 	awaitManagerSignal(t, factory.supervisor("vendor.beta").closeStarted)
 	awaitManagerLifecycle(t, implementation, managerClosing)
