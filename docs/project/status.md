@@ -1,11 +1,11 @@
 # Project Status
 
-- Generated: 2026-07-31T16:24:25Z
-- Commit: `5941ef226c3d82981ba39bc76e06612ffabe7cae`
-- Source fingerprint: `1c76935f59cf423c067511ba276818e54a1b445af55fa7f3a6b43d219055dd5f`
+- Generated: 2026-08-02T16:30:01Z
+- Commit: `0b7e3fe22870a1012cc47954f6ce3da1e6f29e3b`
+- Source fingerprint: `d384a6bc9f946824e81d9a078540d1112e50ed2fe6824dab32f65886d87c5b7c`
 - Dirty: `false`
 - State: `blocked`
-- Progress: 80.8% (118/146 weight)
+- Progress: 84.9% (124/146 weight)
 
 ## Milestones
 
@@ -14,7 +14,7 @@
 | M0 | complete | 100.0% (10/10) |
 | M1 | complete | 100.0% (47/47) |
 | M2 | complete | 100.0% (42/42) |
-| M3 | in_progress | 14.3% (1/7) |
+| M3 | complete | 100.0% (7/7) |
 | M4 | in_progress | 20.0% (1/5) |
 | M5 | not_started | 0.0% (0/0) |
 | M6 | blocked | 45.0% (9/20) |
@@ -38,7 +38,7 @@
 | M2 | internal-ipc | internal/ipc | complete | 100.0% (16/16) |
 | M2 | internal-plugins | internal/plugins | complete | 100.0% (18/18) |
 | M2 | pkg-pluginruntime | pkg/pluginruntime | complete | 100.0% (8/8) |
-| M3 | internal-tracking | internal/tracking | in_progress | 14.3% (1/7) |
+| M3 | internal-tracking | internal/tracking | complete | 100.0% (7/7) |
 | M4 | internal-processing | internal/processing | in_progress | 20.0% (1/5) |
 | M6 | end-to-end | docs/project | blocked | 0.0% (0/8) |
 | M6 | internal-application | internal/application | in_progress | 40.0% (2/5) |
@@ -49,8 +49,6 @@
 
 ## Failed Required Checks
 
-- `internal-tracking/merged-frame-implemented` (failed): matched (?s)type MergedFrame struct\s*\{\s*\}
-- `internal-tracking/service-implemented` (failed): required symbol not found
 - `internal-processing/pipeline-implemented` (failed): required symbol not found
 - `end-to-end/integration-test` (failed): open F:\dev\vrcft-go\internal\application\app_test.go: The system cannot find the file specified.
 - `end-to-end/pipeline-components` (blocked): aggregate member incomplete: internal-application:tracking-wired
@@ -61,4 +59,4 @@
 
 ## Next Action
 
-Address `internal-tracking/merged-frame-implemented`: matched (?s)type MergedFrame struct\s*\{\s*\}
+Address `internal-processing/pipeline-implemented`: required symbol not found
