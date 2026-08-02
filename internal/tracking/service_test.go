@@ -41,9 +41,6 @@ func TestGenerationNewServiceInitializesState(t *testing.T) {
 	if _, ok := s.LatestMerged(); ok {
 		t.Fatal("LatestMerged() ok = true before generation is set")
 	}
-	if s.sources == nil {
-		t.Fatal("NewService() sources map is nil, want initialized map")
-	}
 }
 
 func TestSetGenerationRejectsZeroWithoutMutation(t *testing.T) {

@@ -1,6 +1,7 @@
 package tracking
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -9,17 +10,15 @@ import (
 )
 
 type Service interface {
-	Submit(pluginID string, frame trackingmodel.TrackingFrame)
-
-	SetRouting(config RoutingConfig)
+	Submit(string, uint64, trackingmodel.TrackingFrame) error
+	SetGeneration(uint64) error
+	Generation() uint64
+	SetRouting(RoutingConfig) error
 	Routing() RoutingConfig
-
+	RemoveSource(string)
 	LatestMerged() (MergedFrame, bool)
-
-	SubscribeSummary() <-chan Summary
-}
-
-type Summary struct {
+	SubscribeMerged(context.Context) <-chan MergedFrame
+	SubscribeSummary(context.Context) <-chan Summary
 }
 
 type service struct {
@@ -36,17 +35,29 @@ type service struct {
 	lastHostTimeNS     int64
 	latestMerged       MergedFrame
 	hasLatest          bool
+
+	acceptedFrames uint64
+	rejectedFrames uint64
+	rejected       RejectionCounts
+	lastRejection  Rejection
+
+	mergedSubscribers  map[chan MergedFrame]struct{}
+	summarySubscribers map[chan Summary]struct{}
 }
 
-func NewService() *service {
+var _ Service = (*service)(nil)
+
+func NewService() Service {
 	return newServiceWithClock(func() int64 { return time.Now().UnixNano() })
 }
 
 func newServiceWithClock(now func() int64) *service {
 	return &service{
-		now:     now,
-		routing: defaultRouting(),
-		sources: make(map[string]sourceState),
+		now:                now,
+		routing:            defaultRouting(),
+		sources:            make(map[string]sourceState),
+		mergedSubscribers:  make(map[chan MergedFrame]struct{}),
+		summarySubscribers: make(map[chan Summary]struct{}),
 	}
 }
 
@@ -75,6 +86,8 @@ func (s *service) SetGeneration(generation uint64) error {
 		UpdatedAtNS: s.nextTimeLocked(),
 	}
 	s.hasLatest = true
+	s.publishMergedLocked()
+	s.publishSummaryLocked()
 	return nil
 }
 
@@ -90,38 +103,38 @@ func (s *service) Submit(pluginID string, generation uint64, frame trackingmodel
 	defer s.mu.Unlock()
 
 	if pluginID == "" {
-		return ErrInvalidPluginID
+		return s.rejectLocked(pluginID, generation, RejectionInvalidPluginID, ErrInvalidPluginID)
 	}
 	if s.generation == 0 {
-		return ErrGenerationUnset
+		return s.rejectLocked(pluginID, generation, RejectionGenerationUnset, ErrGenerationUnset)
 	}
 	if generation == 0 {
-		return ErrGenerationZero
+		return s.rejectLocked(pluginID, generation, RejectionGenerationZero, ErrGenerationZero)
 	}
 	if generation < s.generation {
-		return ErrStaleGeneration
+		return s.rejectLocked(pluginID, generation, RejectionStaleGeneration, ErrStaleGeneration)
 	}
 	if generation > s.generation {
-		return ErrFutureGeneration
+		return s.rejectLocked(pluginID, generation, RejectionFutureGeneration, ErrFutureGeneration)
 	}
 
 	canonical, err := frame.Canonicalize()
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidFrame, err)
+		return s.rejectLocked(pluginID, generation, RejectionInvalidFrame, fmt.Errorf("%w: %v", ErrInvalidFrame, err))
 	}
 
 	previous, exists := s.sources[pluginID]
 	if exists && canonical.Sequence <= previous.lastSequence {
-		return ErrSequenceNotIncreasing
+		return s.rejectLocked(pluginID, generation, RejectionSequenceNotIncreasing, ErrSequenceNotIncreasing)
 	}
 	if canonical.TimestampNS < 0 || canonical.SourceClockNS < 0 {
-		return ErrInvalidFrame
+		return s.rejectLocked(pluginID, generation, RejectionInvalidFrame, ErrInvalidFrame)
 	}
 	if exists && canonical.TimestampNS != 0 && previous.lastTimestampNS != 0 && canonical.TimestampNS < previous.lastTimestampNS {
-		return ErrTimestampRegression
+		return s.rejectLocked(pluginID, generation, RejectionTimestampRegression, ErrTimestampRegression)
 	}
 	if exists && canonical.SourceClockNS != 0 && previous.lastSourceClockNS != 0 && canonical.SourceClockNS < previous.lastSourceClockNS {
-		return ErrSourceClockRegression
+		return s.rejectLocked(pluginID, generation, RejectionSourceClockRegression, ErrSourceClockRegression)
 	}
 
 	lastTimestampNS := previous.lastTimestampNS
@@ -140,7 +153,11 @@ func (s *service) Submit(pluginID string, generation uint64, frame trackingmodel
 		lastTimestampNS:   lastTimestampNS,
 		lastSourceClockNS: lastSourceClockNS,
 	}
-	s.recomputeMergedLocked(selected)
+	if s.recomputeMergedLocked(selected) {
+		s.publishMergedLocked()
+	}
+	s.acceptedFrames = saturatingAdd(s.acceptedFrames, 1)
+	s.publishSummaryLocked()
 	return nil
 }
 

@@ -76,10 +76,13 @@ func (s *service) SetRouting(config RoutingConfig) error {
 		return nil
 	}
 	s.routing = config
+	defer s.publishSummaryLocked()
 	if s.generation == 0 {
 		return nil
 	}
-	s.recomputeMergedLocked(true)
+	if s.recomputeMergedLocked(true) {
+		s.publishMergedLocked()
+	}
 	return nil
 }
 
@@ -102,5 +105,8 @@ func (s *service) RemoveSource(pluginID string) {
 	}
 
 	delete(s.sources, pluginID)
-	s.recomputeMergedLocked(false)
+	if s.recomputeMergedLocked(false) {
+		s.publishMergedLocked()
+	}
+	s.publishSummaryLocked()
 }
