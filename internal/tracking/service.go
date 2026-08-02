@@ -2,7 +2,6 @@ package tracking
 
 import (
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -28,13 +27,15 @@ type service struct {
 
 	now func() int64
 
-	generation     uint64
-	routing        RoutingConfig
-	sources        map[string]sourceState
-	mergedSequence uint64
-	lastHostTimeNS int64
-	latestMerged   MergedFrame
-	hasLatest      bool
+	generation         uint64
+	routing            RoutingConfig
+	sources            map[string]sourceState
+	eyeSourceID        string
+	expressionSourceID string
+	mergedSequence     uint64
+	lastHostTimeNS     int64
+	latestMerged       MergedFrame
+	hasLatest          bool
 }
 
 func NewService() *service {
@@ -65,9 +66,9 @@ func (s *service) SetGeneration(generation uint64) error {
 
 	s.generation = generation
 	s.sources = make(map[string]sourceState)
-	if s.mergedSequence < math.MaxUint64 {
-		s.mergedSequence++
-	}
+	s.eyeSourceID = ""
+	s.expressionSourceID = ""
+	s.advanceMergedSequenceLocked()
 	s.latestMerged = MergedFrame{
 		Generation:  generation,
 		Sequence:    s.mergedSequence,
@@ -131,6 +132,7 @@ func (s *service) Submit(pluginID string, generation uint64, frame trackingmodel
 	if canonical.SourceClockNS != 0 {
 		lastSourceClockNS = canonical.SourceClockNS
 	}
+	selected := pluginID == s.eyeSourceID || pluginID == s.expressionSourceID
 	s.sources[pluginID] = sourceState{
 		frame:             canonical,
 		receivedAtNS:      s.nextTimeLocked(),
@@ -138,6 +140,7 @@ func (s *service) Submit(pluginID string, generation uint64, frame trackingmodel
 		lastTimestampNS:   lastTimestampNS,
 		lastSourceClockNS: lastSourceClockNS,
 	}
+	s.recomputeMergedLocked(selected)
 	return nil
 }
 
