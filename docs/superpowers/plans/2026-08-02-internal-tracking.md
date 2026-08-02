@@ -20,7 +20,7 @@
 - Producers must never block on merged or Summary subscribers; both channels have capacity one and latest-value replacement.
 - No frame history, unbounded ingest queue, calibration, filtering, avatar resolution, Application wiring, Head model, or shared-memory protocol is added.
 - Use strict TDD: establish the intended RED against unchanged production behavior, then make the smallest owning change.
-- Run temp-heavy Go commands serially on Windows with command-scoped `TMP`, `TEMP`, and `GOCACHE` below ignored `.superpowers/tmp/<task-name>`; set `GOTOOLCHAIN=local`.
+- Every temporary artifact must stay below ignored `.superpowers/tmp/`: `TMP`, `TEMP`, `GOCACHE`, build outputs, SDD ledger, task briefs, reports, and review packages. Use a unique `.superpowers/tmp/2026-08-02-internal-tracking/<task-name>` directory and set `GOTOOLCHAIN=local`.
 - Subagents do not stage, commit, download, install, or request permissions. The primary agent inspects and verifies each diff, owns commits, and owns project-status generation.
 - Preserve unrelated user changes. Do not push or open a PR unless the user explicitly requests it.
 
@@ -40,32 +40,28 @@
 
 ---
 
-### Task 1: Define Tracking Merge Contracts
+### Task 1: Define Supported Routing Contracts
 
 **Files:**
-- Modify: `internal/tracking/frame.go`
 - Modify: `internal/tracking/routing.go`
-- Modify: `internal/tracking/service.go`
 - Create: `internal/tracking/errors.go`
-- Create: `internal/tracking/summary.go`
 - Create: `internal/tracking/contracts_test.go`
 
 **Interfaces:**
-- Consumes: `trackingmodel.Capability`, `trackingmodel.EyeSample`, `trackingmodel.ExpressionSet`, `trackingmodel.TrackingFrame`.
-- Produces: `MergedFrame`, `SourceSelection`, `RoutingConfig`, `RejectionReason`, `RejectionCounts`, `Rejection`, `Summary`, and stable exported sentinel errors exactly as named in the design.
+- Consumes: the existing `SourceSelection` and `RoutingConfig` placeholders.
+- Produces: Head-free `SourceSelection`, Head-free `RoutingConfig`, default Auto routing, `ErrInvalidRouting`, and exact empty/non-empty routing validation used by Task 3.
 
 - [ ] **Step 1: Write contract RED tests**
 
-Create `contracts_test.go` with compile-time value construction plus routing validation tests. Reflection must prove that the obsolete Head field is absent.
+Create `contracts_test.go` with routing validation tests. Reflection is limited
+to the explicit removal contract for the obsolete Head field; it must not
+assert the total field count or freeze unrelated future fields.
 
 ```go
 func TestRoutingConfigContainsOnlySupportedGroups(t *testing.T) {
 	typ := reflect.TypeOf(RoutingConfig{})
 	if _, ok := typ.FieldByName("Head"); ok {
 		t.Fatal("RoutingConfig still exposes unsupported Head routing")
-	}
-	if typ.NumField() != 2 {
-		t.Fatalf("RoutingConfig fields = %d, want Eye and Expression", typ.NumField())
 	}
 }
 
@@ -91,39 +87,25 @@ func TestSourceSelectionValidation(t *testing.T) {
 }
 ```
 
-Also construct every `MergedFrame`, `Summary`, and `RejectionCounts` field in a test literal so accidental field-name/type drift is a compile failure.
-
 - [ ] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
 ```powershell
-$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\tracking-task-01'
+$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\2026-08-02-internal-tracking\task-01'
 $env:TMP=$taskTmp; $env:TEMP=$taskTmp; $env:GOCACHE="$taskTmp\gocache"; $env:GOTOOLCHAIN='local'
 New-Item -ItemType Directory -Force $env:TMP,$env:GOCACHE | Out-Null
-go test ./internal/tracking -run 'Test(RoutingConfigContainsOnlySupportedGroups|SourceSelectionValidation|TrackingContracts)' -count=1
+go test ./internal/tracking -run 'Test(RoutingConfigContainsOnlySupportedGroups|SourceSelectionValidation)' -count=1
 ```
 
-Expected: FAIL because Head still exists and the required fields, validation method, diagnostics, and sentinels do not exist.
+Expected: FAIL because Head still exists and routing validation/default behavior does not exist.
 
-- [ ] **Step 3: Implement the exact value contracts**
+- [ ] **Step 3: Implement the exact routing contract**
 
-Replace the empty types with the normative fields from the design. Implement routing validation using the exact empty/non-empty contract:
+Delete Head, retain the existing JSON shape for Eye and Expression, and
+implement the exact empty/non-empty validation contract:
 
 ```go
-type MergedFrame struct {
-	Generation  uint64
-	Sequence    uint64
-	UpdatedAtNS int64
-
-	Capabilities trackingmodel.Capability
-	Eye          trackingmodel.EyeSample
-	Expressions  trackingmodel.ExpressionSet
-
-	EyeSourceID        string
-	ExpressionSourceID string
-}
-
 type SourceSelection struct {
 	Auto     bool   `json:"auto"`
 	PluginID string `json:"pluginId,omitempty"`
@@ -158,95 +140,10 @@ func (c RoutingConfig) validate() error {
 	return errors.Join(c.Eye.validate(), c.Expression.validate())
 }
 ```
-
-Define fixed diagnostics exactly as value structs:
-
-```go
-type RejectionReason uint8
-
-const (
-	RejectionNone RejectionReason = iota
-	RejectionGenerationUnset
-	RejectionGenerationZero
-	RejectionStaleGeneration
-	RejectionFutureGeneration
-	RejectionInvalidPluginID
-	RejectionInvalidFrame
-	RejectionSequenceNotIncreasing
-	RejectionTimestampRegression
-	RejectionSourceClockRegression
-)
-
-type RejectionCounts struct {
-	GenerationUnset       uint64
-	GenerationZero        uint64
-	StaleGeneration       uint64
-	FutureGeneration      uint64
-	InvalidPluginID       uint64
-	InvalidFrame          uint64
-	SequenceNotIncreasing uint64
-	TimestampRegression   uint64
-	SourceClockRegression uint64
-}
-
-type Rejection struct {
-	PluginID   string
-	Generation uint64
-	Reason     RejectionReason
-}
-
-type Summary struct {
-	Generation uint64
-	Routing    RoutingConfig
-	SourceCount int
-
-	EyeSourceID         string
-	EyeAvailable        bool
-	ExpressionSourceID  string
-	ExpressionAvailable bool
-
-	AcceptedFrames uint64
-	RejectedFrames uint64
-	Rejected       RejectionCounts
-	LastRejection  Rejection
-}
-```
-
-Define each sentinel with a stable redacted message, for example:
+Define the one sentinel this behavior uses:
 
 ```go
-var (
-	ErrGenerationUnset = errors.New("tracking: generation is unset")
-	ErrGenerationZero = errors.New("tracking: generation must be positive")
-	ErrGenerationRegression = errors.New("tracking: generation regression")
-	ErrStaleGeneration = errors.New("tracking: stale generation")
-	ErrFutureGeneration = errors.New("tracking: future generation")
-	ErrInvalidPluginID = errors.New("tracking: invalid plugin ID")
-	ErrInvalidFrame = errors.New("tracking: invalid frame")
-	ErrSequenceNotIncreasing = errors.New("tracking: sequence is not increasing")
-	ErrTimestampRegression = errors.New("tracking: timestamp regression")
-	ErrSourceClockRegression = errors.New("tracking: source clock regression")
-	ErrInvalidRouting = errors.New("tracking: invalid routing")
-)
-```
-
-Define `Service` with the final method signatures, but do not add `NewService`
-until Task 2 provides a concrete implementation:
-
-```go
-type Service interface {
-	Submit(string, uint64, trackingmodel.TrackingFrame) error
-	SetGeneration(uint64) error
-	Generation() uint64
-
-	SetRouting(RoutingConfig) error
-	Routing() RoutingConfig
-	RemoveSource(string)
-
-	LatestMerged() (MergedFrame, bool)
-	SubscribeMerged(context.Context) <-chan MergedFrame
-	SubscribeSummary(context.Context) <-chan Summary
-}
+var ErrInvalidRouting = errors.New("tracking: invalid routing")
 ```
 
 - [ ] **Step 4: Run formatting and focused GREEN**
@@ -254,8 +151,8 @@ type Service interface {
 Run:
 
 ```powershell
-gofmt -w internal/tracking/frame.go internal/tracking/routing.go internal/tracking/service.go internal/tracking/errors.go internal/tracking/summary.go internal/tracking/contracts_test.go
-go test ./internal/tracking -run 'Test(RoutingConfigContainsOnlySupportedGroups|SourceSelectionValidation|TrackingContracts)' -count=20
+gofmt -w internal/tracking/routing.go internal/tracking/errors.go internal/tracking/contracts_test.go
+go test ./internal/tracking -run 'Test(RoutingConfigContainsOnlySupportedGroups|SourceSelectionValidation)' -count=20
 go test ./internal/tracking -count=1
 ```
 
@@ -266,8 +163,8 @@ Expected: all commands exit 0.
 Verify `git diff --check`, ensure only Task 1 files changed, then the primary agent commits:
 
 ```bash
-git add internal/tracking/frame.go internal/tracking/routing.go internal/tracking/service.go internal/tracking/errors.go internal/tracking/summary.go internal/tracking/contracts_test.go
-git commit -m "feat(tracking): define host merge contracts"
+git add internal/tracking/routing.go internal/tracking/errors.go internal/tracking/contracts_test.go
+git commit -m "feat(tracking): define supported routing"
 ```
 
 Run an independent task review. Fix every Critical or Important finding before Task 2.
@@ -277,14 +174,16 @@ Run an independent task review. Fix every Critical or Important finding before T
 ### Task 2: Implement Generation and Validated Latest-Source Ingest
 
 **Files:**
+- Modify: `internal/tracking/frame.go`
+- Modify: `internal/tracking/errors.go`
 - Modify: `internal/tracking/service.go`
 - Create: `internal/tracking/source.go`
 - Create: `internal/tracking/service_test.go`
 - Create: `internal/tracking/source_test.go`
 
 **Interfaces:**
-- Consumes: Task 1 sentinels and value contracts; `TrackingFrame.Canonicalize() (TrackingFrame, error)`.
-- Produces: an interim `NewService() *service`, linearizable `SetGeneration`, `Generation`, `Submit`, and `LatestMerged`; one current-generation `sourceState` per plugin. Task 4 changes the constructor return type to the final `Service` after all interface methods exist.
+- Consumes: Task 1 routing contracts and `TrackingFrame.Canonicalize() (TrackingFrame, error)`.
+- Produces: `MergedFrame`, generation/ingest sentinel errors, an interim `NewService() *service`, linearizable `SetGeneration`, `Generation`, `Submit`, and `LatestMerged`; one current-generation `sourceState` per plugin. Task 4 adds diagnostics and changes the constructor return type to the final `Service`.
 
 - [ ] **Step 1: Write generation RED tests**
 
@@ -352,7 +251,7 @@ After an accepted frame, mutate the caller's frame variable and assert the store
 Run:
 
 ```powershell
-$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\tracking-task-02'
+$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\2026-08-02-internal-tracking\task-02'
 $env:TMP=$taskTmp; $env:TEMP=$taskTmp; $env:GOCACHE="$taskTmp\gocache"; $env:GOTOOLCHAIN='local'
 New-Item -ItemType Directory -Force $env:TMP,$env:GOCACHE | Out-Null
 go test ./internal/tracking -run 'Test(ServiceGeneration|Submit)' -count=1
@@ -361,6 +260,37 @@ go test ./internal/tracking -run 'Test(ServiceGeneration|Submit)' -count=1
 Expected: FAIL because `NewService`, concrete generation state, and validated source ingest do not exist.
 
 - [ ] **Step 4: Implement the minimal generation state machine**
+
+The RED tests drive the merged snapshot value and stable generation/ingest
+errors at the point they first have behavior:
+
+```go
+type MergedFrame struct {
+	Generation  uint64
+	Sequence    uint64
+	UpdatedAtNS int64
+
+	Capabilities trackingmodel.Capability
+	Eye          trackingmodel.EyeSample
+	Expressions  trackingmodel.ExpressionSet
+
+	EyeSourceID        string
+	ExpressionSourceID string
+}
+
+var (
+	ErrGenerationUnset = errors.New("tracking: generation is unset")
+	ErrGenerationZero = errors.New("tracking: generation must be positive")
+	ErrGenerationRegression = errors.New("tracking: generation regression")
+	ErrStaleGeneration = errors.New("tracking: stale generation")
+	ErrFutureGeneration = errors.New("tracking: future generation")
+	ErrInvalidPluginID = errors.New("tracking: invalid plugin ID")
+	ErrInvalidFrame = errors.New("tracking: invalid frame")
+	ErrSequenceNotIncreasing = errors.New("tracking: sequence is not increasing")
+	ErrTimestampRegression = errors.New("tracking: timestamp regression")
+	ErrSourceClockRegression = errors.New("tracking: source clock regression")
+)
+```
 
 Create a concrete `service` with this state ownership:
 
@@ -484,7 +414,7 @@ func (s *service) Submit(pluginID string, generation uint64, frame trackingmodel
 Run:
 
 ```powershell
-gofmt -w internal/tracking/service.go internal/tracking/source.go internal/tracking/service_test.go internal/tracking/source_test.go
+gofmt -w internal/tracking/frame.go internal/tracking/errors.go internal/tracking/service.go internal/tracking/source.go internal/tracking/service_test.go internal/tracking/source_test.go
 go test ./internal/tracking -run 'Test(ServiceGeneration|Submit)' -count=50
 go test ./internal/tracking -count=1
 go test -race ./internal/tracking -run 'Test(ServiceGeneration|Submit)' -count=10
@@ -497,7 +427,7 @@ Expected: all commands exit 0 with no race report.
 Verify Task 2's RED report, inspect ownership and mutation order, run `git diff --check`, then commit:
 
 ```bash
-git add internal/tracking/service.go internal/tracking/source.go internal/tracking/service_test.go internal/tracking/source_test.go
+git add internal/tracking/frame.go internal/tracking/errors.go internal/tracking/service.go internal/tracking/source.go internal/tracking/service_test.go internal/tracking/source_test.go
 git commit -m "feat(tracking): validate generation-tagged frames"
 ```
 
@@ -579,7 +509,7 @@ Also assert:
 Run:
 
 ```powershell
-$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\tracking-task-03'
+$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\2026-08-02-internal-tracking\task-03'
 $env:TMP=$taskTmp; $env:TEMP=$taskTmp; $env:GOCACHE="$taskTmp\gocache"; $env:GOTOOLCHAIN='local'
 New-Item -ItemType Directory -Force $env:TMP,$env:GOCACHE | Out-Null
 go test ./internal/tracking -run 'Test(ServiceMerges|AutoRouting|ManualRouting|MergedSequence|RemoveSource)' -count=1
@@ -694,7 +624,7 @@ git commit -m "feat(tracking): route and merge plugin sources"
 **Files:**
 - Modify: `internal/tracking/service.go`
 - Modify: `internal/tracking/source.go`
-- Modify: `internal/tracking/summary.go`
+- Create: `internal/tracking/summary.go`
 - Create: `internal/tracking/subscription.go`
 - Create: `internal/tracking/summary_test.go`
 - Create: `internal/tracking/subscription_test.go`
@@ -760,7 +690,7 @@ Register and cancel subscribers concurrently with publication in a dedicated tes
 Run:
 
 ```powershell
-$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\tracking-task-04'
+$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\2026-08-02-internal-tracking\task-04'
 $env:TMP=$taskTmp; $env:TEMP=$taskTmp; $env:GOCACHE="$taskTmp\gocache"; $env:GOTOOLCHAIN='local'
 New-Item -ItemType Directory -Force $env:TMP,$env:GOCACHE | Out-Null
 go test ./internal/tracking -run 'Test(Summary|Saturating|MergedSubscriber|SummarySubscriber|SubscriberCancellation)' -count=1
@@ -769,6 +699,60 @@ go test ./internal/tracking -run 'Test(Summary|Saturating|MergedSubscriber|Summa
 Expected: FAIL because subscription methods and diagnostic counters do not yet exist.
 
 - [ ] **Step 4: Implement counters and immutable Summary construction**
+
+The RED tests now drive the fixed diagnostic values. Move the obsolete empty
+`Summary` declaration out of `service.go` and define these in `summary.go`:
+
+```go
+type RejectionReason uint8
+
+const (
+	RejectionNone RejectionReason = iota
+	RejectionGenerationUnset
+	RejectionGenerationZero
+	RejectionStaleGeneration
+	RejectionFutureGeneration
+	RejectionInvalidPluginID
+	RejectionInvalidFrame
+	RejectionSequenceNotIncreasing
+	RejectionTimestampRegression
+	RejectionSourceClockRegression
+)
+
+type RejectionCounts struct {
+	GenerationUnset       uint64
+	GenerationZero        uint64
+	StaleGeneration       uint64
+	FutureGeneration      uint64
+	InvalidPluginID       uint64
+	InvalidFrame          uint64
+	SequenceNotIncreasing uint64
+	TimestampRegression   uint64
+	SourceClockRegression uint64
+}
+
+type Rejection struct {
+	PluginID   string
+	Generation uint64
+	Reason     RejectionReason
+}
+
+type Summary struct {
+	Generation uint64
+	Routing    RoutingConfig
+	SourceCount int
+
+	EyeSourceID         string
+	EyeAvailable        bool
+	ExpressionSourceID  string
+	ExpressionAvailable bool
+
+	AcceptedFrames uint64
+	RejectedFrames uint64
+	Rejected       RejectionCounts
+	LastRejection  Rejection
+}
+```
 
 Use a single rejection helper after acquiring the service mutex:
 
@@ -847,10 +831,25 @@ when required, and launch one goroutine that waits for `ctx.Done`, locks,
 verifies the subscriber identity is still registered, removes it, and closes
 the channel.
 
-After both subscription methods exist, change `NewService` to return the final
-interface and add a compile-time assertion:
+After both subscription methods exist, replace the obsolete Service interface
+in `service.go`, change `NewService` to return that final interface, and add a
+compile-time assertion:
 
 ```go
+type Service interface {
+	Submit(string, uint64, trackingmodel.TrackingFrame) error
+	SetGeneration(uint64) error
+	Generation() uint64
+
+	SetRouting(RoutingConfig) error
+	Routing() RoutingConfig
+	RemoveSource(string)
+
+	LatestMerged() (MergedFrame, bool)
+	SubscribeMerged(context.Context) <-chan MergedFrame
+	SubscribeSummary(context.Context) <-chan Summary
+}
+
 func NewService() Service {
 	return newServiceWithClock(func() int64 { return time.Now().UnixNano() })
 }
@@ -957,7 +956,7 @@ and internally consistent Summary totals.
 Run:
 
 ```powershell
-$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\tracking-task-05'
+$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\2026-08-02-internal-tracking\task-05'
 $env:TMP=$taskTmp; $env:TEMP=$taskTmp; $env:GOCACHE="$taskTmp\gocache"; $env:GOTOOLCHAIN='local'
 New-Item -ItemType Directory -Force $env:TMP,$env:GOCACHE | Out-Null
 go test ./internal/tracking -run 'Test(PluginFrameSink|ServiceConcurrent)' -count=1
@@ -1024,7 +1023,7 @@ independent whole-package review after the adapter commit.
 **Files:**
 - Modify: `docs/project/packages/internal-tracking.md`
 - Modify: `docs/project/status.md` through `cmd/projectstatus -write`
-- Create ignored execution evidence under `.superpowers/sdd/2026-08-02-internal-tracking/` if the execution workflow uses an SDD ledger.
+- Create ignored execution evidence only under `.superpowers/tmp/2026-08-02-internal-tracking/sdd/`.
 
 **Interfaces:**
 - Consumes: reviewed Task 1–5 implementation and tests.
@@ -1064,7 +1063,7 @@ git commit -m "docs: specify host tracking merge"
 Then run with a fresh scoped cache:
 
 ```powershell
-$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\tracking-final-verification'
+$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\2026-08-02-internal-tracking\final-verification'
 $env:TMP=$taskTmp; $env:TEMP=$taskTmp; $env:GOCACHE="$taskTmp\gocache"; $env:GOTOOLCHAIN='local'
 New-Item -ItemType Directory -Force $env:TMP,$env:GOCACHE | Out-Null
 go test ./...
@@ -1098,7 +1097,7 @@ them.
 Run:
 
 ```powershell
-$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\tracking-status-write'
+$taskTmp='F:\dev\vrcft-go\.superpowers\tmp\2026-08-02-internal-tracking\status-write'
 $env:TMP=$taskTmp; $env:TEMP=$taskTmp; $env:GOCACHE="$taskTmp\gocache"; $env:GOTOOLCHAIN='local'
 New-Item -ItemType Directory -Force $env:TMP,$env:GOCACHE | Out-Null
 go run ./cmd/projectstatus -write
