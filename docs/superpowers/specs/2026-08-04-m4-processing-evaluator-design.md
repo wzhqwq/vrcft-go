@@ -211,6 +211,10 @@ slices before retaining the compiled configuration.
 
 `ChannelConfig` contains calibration, tuning, filter, and dropout policy.
 
+`ActiveStaleAfter` and every channel `StaleAfter` must be positive. Hold and
+decay durations must be non-negative; zero hold begins decay immediately, and
+zero decay moves directly to valid neutral after the hold boundary.
+
 `DefaultConfig()` is intentionally conservative:
 
 - calibration disabled, so the raw finite value passes through;
@@ -262,8 +266,9 @@ The fixed filter modes are `none`, `ema`, and `one_euro`.
   cutoff.
 
 A filter initializes from the first value after construction, generation reset,
-or affected-group source change. It updates only for a new merged input and a
-positive time delta. Repeating the same snapshot never double-ingests a sample.
+or replacement by a new non-empty group source. It updates only for a new
+merged input and a positive time delta. Repeating the same snapshot never
+double-ingests a sample.
 
 ### Input ordering and reset rules
 
@@ -273,7 +278,8 @@ positive time delta. Repeating the same snapshot never double-ingests a sample.
 - Host times and group freshness times must be non-negative and not later than
   the supplied processing time;
 - a repeated unsaturated merged revision must represent the same input value;
-- effective time must not regress; and
+- a new merged input requires processing time strictly greater than the prior
+  call, while an identical repeated input permits equal or later time; and
 - every value marked valid must be finite and consistent with capability.
 
 M3's saturating revision is handled explicitly: at the maximum revision, a
@@ -281,9 +287,12 @@ new value snapshot with non-regressing receive metadata is still accepted as a
 new input. An identical value snapshot is a repeated sample.
 
 A higher generation atomically resets all filter and dropout history before its
-first sample. Within one generation, changing a group source ID resets only that
-group. The new source's first value initializes its filters; values from two
-devices are never blended. Lip source changes affect only Lip active state.
+first sample. Within one generation, replacing source A with source B, or
+acquiring B from an empty state, resets only that numeric group. The new
+source's first value initializes its filters; values from two devices are never
+blended. A transition from A to no source preserves numeric history so the
+confirmed hold/decay policy can complete. Lip source changes affect only Lip
+active state because Lip has no numeric history.
 
 ### Freshness, dropout, and active state
 
@@ -307,9 +316,9 @@ For a previously valid numeric channel:
 A channel that has never received a valid sample remains invalid. Keeping the
 final neutral value valid lets OSC send one deterministic reset; subsequent
 change suppression prevents ongoing traffic. Capability loss begins dropout
-immediately. A source that merely stops updating begins dropout at its
-last-valid time plus `StaleAfter`, so a late caller tick advances directly to the
-correct timeline point.
+at the unavailable merged snapshot's Host `UpdatedAtNS`. A source that merely
+stops updating begins dropout at its last-valid time plus `StaleAfter`, so a
+late caller tick advances directly to the correct timeline point in both cases.
 
 ### Mutual exclusion
 
@@ -361,7 +370,8 @@ Compilation validates every requested ID, deduplicates repeated requests, and
 uses `internal/parameterdeps` to resolve the complete dependency closure. It
 builds one deterministic topological order. Unknown IDs, missing plans, cycles,
 or an unsupported/inconsistent operation fail compilation with stable wrapped
-errors.
+errors. An empty request succeeds with an empty immutable Plan and evaluates to
+an all-invalid Snapshot.
 
 Every plan's numeric operands are the primitive leaves in `Inputs` followed by
 the evaluated parameters in `DependsOn`, each in stable catalog order. The
