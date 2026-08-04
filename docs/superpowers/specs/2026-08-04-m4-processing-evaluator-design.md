@@ -363,15 +363,22 @@ builds one deterministic topological order. Unknown IDs, missing plans, cycles,
 or an unsupported/inconsistent operation fail compilation with stable wrapped
 errors.
 
+Every plan's numeric operands are the primitive leaves in `Inputs` followed by
+the evaluated parameters in `DependsOn`, each in stable catalog order. The
+existing `ParameterPupilDilation` metadata is corrected from `OperationDirect`
+to `OperationAverage`, because its two primitive operands are left and right
+pupil dilation. This keeps the rule in the dependency metadata and avoids an
+evaluator special case for that ParameterID.
+
 The evaluator supports exactly the five existing operations:
 
-- `Direct`: read one Eye, Expression, or Active leaf;
-- `Average`: arithmetic mean of every dependency;
-- `Max`: maximum of every dependency;
-- `SignedPair`: take the maximum of every dependency except the last and
-  subtract the last negative dependency; with two dependencies this is simply
+- `Direct`: read exactly one Eye, Expression, or Active operand;
+- `Average`: arithmetic mean of every operand;
+- `Max`: maximum of every operand;
+- `SignedPair`: take the maximum of every operand except the last and
+  subtract the last negative operand; with two operands this is simply
   positive minus negative; and
-- `SumClamp`: sum all dependencies and clamp to the target parameter range.
+- `SumClamp`: sum all operands and clamp to the target parameter range.
 
 The dependency order used by `SignedPair` is part of the fixed
 `internal/parameterdeps` operation contract and is covered for every such plan.
@@ -461,6 +468,8 @@ Tests use injected integer nanoseconds and no sleeps.
 Tests cover:
 
 - hand-calculated results for all five operations;
+- left/right primitive averaging for `ParameterPupilDilation` without an
+  evaluator ParameterID special case;
 - strict dependency validity;
 - generated range clamping and non-finite containment;
 - requested-ID deduplication and invalid compile inputs;
