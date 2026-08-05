@@ -13,7 +13,7 @@ const knownSubscriptionEye = trackingmodel.EyeValidLeftGaze |
 	trackingmodel.EyeValidLeftPupil |
 	trackingmodel.EyeValidRightPupil
 
-const knownSubscriptionCapabilities = trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression
+const knownSubscriptionCapabilities = trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression | trackingmodel.CapabilityLip
 
 type Subscription struct {
 	Generation   uint64

@@ -320,6 +320,20 @@ func awaitClosed(t *testing.T, events <-chan pluginapi.ControlEvent) {
 	}
 }
 
+func TestRuntimeNewAcceptsLipOnlyDescriptor(t *testing.T) {
+	descriptor := validTestDescriptor()
+	descriptor.Capabilities = trackingmodel.CapabilityLip
+	driver := &testDriver{descriptor: descriptor}
+
+	runtime, err := New(driver, newMemoryConn(1), testConfig())
+	if err != nil {
+		t.Fatalf("New(Lip-only driver) error = %v", err)
+	}
+	if runtime.descriptor.Capabilities != trackingmodel.CapabilityLip {
+		t.Fatalf("runtime descriptor capabilities = %#x, want Lip only", runtime.descriptor.Capabilities)
+	}
+}
+
 func TestLatestFrameSlotRejectsZeroGeneration(t *testing.T) {
 	slot := NewLatestFrameSlot()
 	if slot.Store(pendingFrame{}) {
@@ -436,6 +450,26 @@ func TestRuntimeHostPublishFrameUsesAtomicSubscriptionSnapshot(t *testing.T) {
 	pending, ok := host.frames.Load()
 	if !ok || pending.Generation != startup.Subscription.Generation || pending.Subscription != startup.Subscription || pending.Frame != frame {
 		t.Fatalf("pending frame = (%+v, %v), want generation-tagged snapshot", pending, ok)
+	}
+}
+
+func TestRuntimeHostPublishesLipOnlyFrame(t *testing.T) {
+	startup := validTestStartup()
+	startup.Subscription = pluginapi.Subscription{Generation: 3, Capabilities: trackingmodel.CapabilityLip}
+	host := newRuntimeHost(startup, 1, 1)
+
+	if !host.PublishFrame(trackingmodel.TrackingFrame{Sequence: 21, Capabilities: trackingmodel.CapabilityLip}) {
+		t.Fatal("PublishFrame(Lip-only) = false")
+	}
+	pending, ok := host.frames.Load()
+	if !ok {
+		t.Fatal("Lip-only frame was not stored")
+	}
+	if pending.Generation != 3 || pending.Frame.Capabilities != trackingmodel.CapabilityLip {
+		t.Fatalf("stored Lip-only frame = %+v, want generation 3 and Lip capability", pending)
+	}
+	if pending.Frame.Eye != (trackingmodel.EyeSample{}) || pending.Frame.Expressions != (trackingmodel.ExpressionSet{}) {
+		t.Fatalf("stored Lip-only frame gained numeric payload: %+v", pending.Frame)
 	}
 }
 

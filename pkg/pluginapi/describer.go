@@ -10,7 +10,7 @@ import (
 
 var (
 	descriptorIDPattern         = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
-	knownDescriptorCapabilities = trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression
+	knownDescriptorCapabilities = trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression | trackingmodel.CapabilityLip
 )
 
 type Descriptor struct {

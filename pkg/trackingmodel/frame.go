@@ -65,7 +65,7 @@ type EyeSample struct {
 // Validate rejects tracking metadata that cannot be represented by the v1
 // capability and validity contracts.
 func (f TrackingFrame) Validate() error {
-	const knownCapabilities = CapabilityEye | CapabilityExpression
+	const knownCapabilities = CapabilityEye | CapabilityExpression | CapabilityLip
 	if f.Capabilities&^knownCapabilities != 0 {
 		return errors.New("TrackingFrame.Capabilities contains unknown capability bits")
 	}

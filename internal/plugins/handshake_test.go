@@ -174,6 +174,43 @@ func TestHostHandshakeHelloInitializeReady(t *testing.T) {
 	}
 }
 
+func TestHostHandshakeAcceptsLipOnlyNegotiation(t *testing.T) {
+	host, plugin := newHandshakeWirePair()
+	t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })
+	token := handshakeToken(17)
+	manifest := validManifest()
+	manifest.Capabilities = trackingmodel.CapabilityLip
+	descriptor := validHandshakeDescriptor()
+	descriptor.Capabilities = trackingmodel.CapabilityLip
+	startup := validHandshakeStartup()
+	startup.Active = true
+	startup.Subscription = pluginapi.Subscription{Generation: 1, Capabilities: trackingmodel.CapabilityLip}
+	message := validHello(token)
+	hello := message.Payload.(protocol.Hello)
+	hello.Descriptor = descriptor
+	message.Payload = hello
+
+	call := runHostHandshake(context.Background(), host, manifest, token, startup)
+	if err := plugin.Send(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+	initializeMessage := receiveHandshakeMessage(t, plugin)
+	initialize, ok := initializeMessage.Payload.(protocol.Initialize)
+	if !ok || initialize.Startup.Subscription.Capabilities != trackingmodel.CapabilityLip {
+		t.Fatalf("Initialize payload = %#v, want Lip-only subscription", initializeMessage.Payload)
+	}
+	if err := plugin.Send(context.Background(), protocol.Message{Version: protocol.Version, Type: protocol.MessageReady, Payload: protocol.Ready{}}); err != nil {
+		t.Fatal(err)
+	}
+	result := awaitHandshake(t, call)
+	if result.err != nil {
+		t.Fatalf("hostHandshake(Lip-only) error = %v", result.err)
+	}
+	if result.result.Descriptor.Capabilities != trackingmodel.CapabilityLip {
+		t.Fatalf("negotiated descriptor capabilities = %#x, want Lip only", result.result.Descriptor.Capabilities)
+	}
+}
+
 func TestHostHandshakeInitializeOwnsStartupSnapshot(t *testing.T) {
 	host, plugin := newHandshakeWirePair()
 	t.Cleanup(func() { _ = host.Close(); _ = plugin.Close() })

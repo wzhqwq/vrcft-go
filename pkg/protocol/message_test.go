@@ -120,6 +120,41 @@ func TestMessageRoundTrips(t *testing.T) {
 	}
 }
 
+func TestMessageLipCapabilityRoundTrips(t *testing.T) {
+	message, err := NewMessage(TrackingFrame{
+		Generation: 9,
+		Frame: trackingmodel.TrackingFrame{
+			Sequence:     17,
+			Capabilities: trackingmodel.CapabilityLip,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewMessage(Lip-only frame) error = %v", err)
+	}
+	data, err := json.Marshal(message)
+	if err != nil {
+		t.Fatalf("Marshal(Lip-only frame) error = %v", err)
+	}
+	if !strings.Contains(string(data), `"Capabilities":4`) {
+		t.Fatalf("Marshal(Lip-only frame) = %s, want stable Lip wire bit 4", data)
+	}
+
+	var decoded Message
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal(Lip-only frame) error = %v", err)
+	}
+	got, ok := decoded.Payload.(TrackingFrame)
+	if !ok {
+		t.Fatalf("decoded payload = %T, want protocol.TrackingFrame", decoded.Payload)
+	}
+	if got.Generation != 9 || got.Frame.Sequence != 17 || got.Frame.Capabilities != trackingmodel.CapabilityLip {
+		t.Fatalf("decoded Lip-only frame = %#v, want preserved generation, sequence, and Lip capability", got)
+	}
+	if got.Frame.Eye != (trackingmodel.EyeSample{}) || got.Frame.Expressions != (trackingmodel.ExpressionSet{}) {
+		t.Fatalf("decoded Lip-only frame gained numeric payload: %#v", got.Frame)
+	}
+}
+
 func TestDefaultInitializeRoundTrips(t *testing.T) {
 	message, err := NewMessage(Initialize{})
 	if err != nil {

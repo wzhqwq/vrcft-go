@@ -89,6 +89,13 @@ func TestSubscriptionValidate(t *testing.T) {
 	}
 }
 
+func TestSubscriptionValidateAcceptsLipOnly(t *testing.T) {
+	subscription := Subscription{Generation: 1, Capabilities: trackingmodel.CapabilityLip}
+	if err := subscription.Validate(true); err != nil {
+		t.Fatalf("Validate(Lip-only subscription) error = %v, want nil", err)
+	}
+}
+
 func TestSubscriptionMembership(t *testing.T) {
 	wholeGroups := Subscription{Generation: 1, Capabilities: trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression}
 	if !wholeGroups.IncludesEye(trackingmodel.EyeValidRightPupil) {
@@ -138,6 +145,25 @@ func TestSubscriptionTrimFrameClearsUnsubscribedGroups(t *testing.T) {
 	}
 	if expressionOnly.Eye != (trackingmodel.EyeSample{}) {
 		t.Fatalf("expression-only frame retained eye data: %#v", expressionOnly.Eye)
+	}
+}
+
+func TestSubscriptionTrimFrameToLipOnlyDropsExpressionPayload(t *testing.T) {
+	frame := trackingmodel.TrackingFrame{
+		Capabilities: trackingmodel.CapabilityLip | trackingmodel.CapabilityExpression,
+	}
+	frame.Expressions.Set(trackingmodel.ExpressionJawOpen, 0.75)
+	subscription := Subscription{Generation: 1, Capabilities: trackingmodel.CapabilityLip}
+
+	trimmed := subscription.TrimFrame(frame)
+	if trimmed.Capabilities != trackingmodel.CapabilityLip {
+		t.Fatalf("TrimFrame().Capabilities = %#x, want Lip only", trimmed.Capabilities)
+	}
+	if trimmed.Expressions != (trackingmodel.ExpressionSet{}) {
+		t.Fatalf("TrimFrame() retained Expression payload for Lip-only subscription: %#v", trimmed.Expressions)
+	}
+	if trimmed.Eye != (trackingmodel.EyeSample{}) {
+		t.Fatalf("TrimFrame() synthesized Eye payload for Lip-only subscription: %#v", trimmed.Eye)
 	}
 }
 

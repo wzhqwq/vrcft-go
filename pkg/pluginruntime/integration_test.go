@@ -108,3 +108,56 @@ func TestRuntimeIntegrationSendsOnlySubscribedExpression(t *testing.T) {
 		t.Fatal("runtime did not stop after integration cancellation")
 	}
 }
+
+func TestRuntimeIntegrationPublishesLipOnlyFrame(t *testing.T) {
+	c := newMemoryConn(8)
+	descriptor := validTestDescriptor()
+	descriptor.Capabilities = trackingmodel.CapabilityLip
+	driver := &testDriver{descriptor: descriptor, run: func(ctx context.Context, host pluginapi.Host) error {
+		if !host.PublishFrame(trackingmodel.TrackingFrame{Sequence: 29, Capabilities: trackingmodel.CapabilityLip}) {
+			return errors.New("Lip-only frame was rejected")
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	runtime, err := New(driver, c, testConfig())
+	if err != nil {
+		t.Fatalf("New(Lip-only driver) error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+
+	helloMessage := receiveMessage(t, c)
+	hello, ok := helloMessage.Payload.(protocol.Hello)
+	if !ok || hello.Descriptor.Capabilities != trackingmodel.CapabilityLip {
+		t.Fatalf("runtime Hello = %#v, want Lip-only descriptor", helloMessage)
+	}
+	c.toRuntime <- mustMessage(t, protocol.Initialize{Startup: pluginapi.Startup{
+		Active: true,
+		Subscription: pluginapi.Subscription{
+			Generation:   43,
+			Capabilities: trackingmodel.CapabilityLip,
+		},
+	}})
+	if got := receiveMessage(t, c); got.Type != protocol.MessageReady {
+		t.Fatalf("second message = %v, want Ready", got.Type)
+	}
+
+	message := receiveMessage(t, c)
+	payload, ok := message.Payload.(protocol.TrackingFrame)
+	if !ok {
+		t.Fatalf("wire payload = %T, want protocol.TrackingFrame", message.Payload)
+	}
+	if payload.Generation != 43 || payload.Frame.Sequence != 29 || payload.Frame.Capabilities != trackingmodel.CapabilityLip {
+		t.Fatalf("wire Lip-only frame = %#v, want generation 43, sequence 29, and Lip capability", payload)
+	}
+	if payload.Frame.Eye != (trackingmodel.EyeSample{}) || payload.Frame.Expressions != (trackingmodel.ExpressionSet{}) {
+		t.Fatalf("wire Lip-only frame gained numeric payload: %#v", payload.Frame)
+	}
+
+	cancel()
+	if err := awaitResult(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
+}

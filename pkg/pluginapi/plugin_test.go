@@ -25,6 +25,14 @@ func TestDescriptorValidate(t *testing.T) {
 	}
 }
 
+func TestDescriptorValidateAcceptsLipOnly(t *testing.T) {
+	descriptor := validDescriptor()
+	descriptor.Capabilities = trackingmodel.CapabilityLip
+	if err := descriptor.Validate(); err != nil {
+		t.Fatalf("Validate(Lip-only descriptor) error = %v, want nil", err)
+	}
+}
+
 func TestDescriptorValidateAcceptsSemVerTwoPrereleaseAndBuildSyntax(t *testing.T) {
 	for _, version := range []string{
 		"1.0.0-alpha",

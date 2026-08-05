@@ -7,6 +7,40 @@ import (
 	"testing"
 )
 
+func TestCapabilityLipUsesNextStableBit(t *testing.T) {
+	if CapabilityEye != 1 || CapabilityExpression != 2 || CapabilityLip != 4 {
+		t.Fatalf("capability bits = (Eye=%d, Expression=%d, Lip=%d), want (1, 2, 4)", CapabilityEye, CapabilityExpression, CapabilityLip)
+	}
+}
+
+func TestTrackingFrameLipOnlyIsCanonical(t *testing.T) {
+	frame := TrackingFrame{
+		Sequence:      7,
+		TimestampNS:   11,
+		Capabilities:  CapabilityLip,
+		SourceClockNS: 13,
+		Eye: EyeSample{
+			LeftGaze:     Vec2{X: 1, Y: 2},
+			LeftOpenness: 0.5,
+		},
+	}
+	frame.Expressions.Values[ExpressionJawOpen] = 0.75
+
+	if err := frame.Validate(); err != nil {
+		t.Fatalf("Validate(Lip-only) error = %v", err)
+	}
+	got, err := frame.Canonicalize()
+	if err != nil {
+		t.Fatalf("Canonicalize(Lip-only) error = %v", err)
+	}
+	if got.Capabilities != CapabilityLip || got.Sequence != 7 || got.TimestampNS != 11 || got.SourceClockNS != 13 {
+		t.Fatalf("Canonicalize(Lip-only) metadata = %+v, want Lip capability and preserved frame metadata", got)
+	}
+	if got.Eye != (EyeSample{}) || got.Expressions != (ExpressionSet{}) {
+		t.Fatalf("Canonicalize(Lip-only) retained numeric payload: Eye=%+v Expressions=%+v", got.Eye, got.Expressions)
+	}
+}
+
 func TestTrackingFrameValidateRejectsMalformedValidity(t *testing.T) {
 	expressionTail := ExpressionMask{}
 	expressionTail.Words[len(expressionTail.Words)-1] = uint64(1) << (ExpressionCount % 64)

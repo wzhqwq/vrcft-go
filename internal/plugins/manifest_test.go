@@ -31,6 +31,14 @@ func TestManifestValidateAcceptsValidManifest(t *testing.T) {
 	}
 }
 
+func TestManifestValidateAcceptsLipOnly(t *testing.T) {
+	manifest := validManifest()
+	manifest.Capabilities = trackingmodel.CapabilityLip
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("Validate(Lip-only manifest) error = %v", err)
+	}
+}
+
 func TestManifestValidateRejectsInvalidFields(t *testing.T) {
 	tests := []struct {
 		name   string
