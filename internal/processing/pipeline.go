@@ -3,6 +3,7 @@ package processing
 import (
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/wzhqwq/vrcft-go/internal/tracking"
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
@@ -11,9 +12,11 @@ import (
 const eyeChannelCount = int(channelExpressionBase) - 1
 
 type channelState struct {
-	filter filterState
-	seen   bool
-	value  float32
+	filter         filterState
+	seen           bool
+	lastFreshAtNS  int64
+	lastFreshValue float32
+	dropoutStartNS int64
 }
 
 // Pipeline is a caller-serialized processing state machine.
@@ -76,6 +79,12 @@ func (p *Pipeline) processAt(frame tracking.MergedFrame, nowNS int64) (Canonical
 	}
 	if expressionReset {
 		p.resetChannels(eyeChannelCount, channelCount)
+	}
+	if !generationReset && previous.EyeSourceID != "" && frame.EyeSourceID == "" {
+		p.markUnavailable(frame.UpdatedAtNS, 0, eyeChannelCount)
+	}
+	if !generationReset && previous.ExpressionSourceID != "" && frame.ExpressionSourceID == "" {
+		p.markUnavailable(frame.UpdatedAtNS, eyeChannelCount, channelCount)
 	}
 
 	eyeFresh := frame.Capabilities.Has(trackingmodel.CapabilityEye) &&
@@ -162,6 +171,12 @@ func (p *Pipeline) resetChannels(start, end int) {
 	}
 }
 
+func (p *Pipeline) markUnavailable(atNS int64, start, end int) {
+	for index := start; index < end; index++ {
+		p.channels[index].recordUnavailable(atNS)
+	}
+}
+
 func (p *Pipeline) ingestRange(frame tracking.MergedFrame, atNS int64, start, end int) error {
 	for index := start; index < end; index++ {
 		id := ChannelID(index + 1)
@@ -182,8 +197,7 @@ func (p *Pipeline) ingestRange(frame tracking.MergedFrame, atNS int64, start, en
 		if err != nil {
 			return fmt.Errorf("channel %d filter: %w: %w", id, ErrInvalidInput, err)
 		}
-		p.channels[index].seen = true
-		p.channels[index].value = filtered
+		p.channels[index].recordFresh(filtered, atNS, config.Dropout)
 	}
 	return nil
 }
@@ -196,47 +210,61 @@ func (p *Pipeline) canonical(frame tracking.MergedFrame, nowNS int64) CanonicalF
 		EyeSourceID:        frame.EyeSourceID,
 		ExpressionSourceID: frame.ExpressionSourceID,
 		LipSourceID:        frame.LipSourceID,
+		EyeActive:          groupActive(frame.Capabilities.Has(trackingmodel.CapabilityEye), frame.EyeSourceID, frame.EyeUpdatedAtNS, nowNS, p.config.activeStaleAfter),
+		ExpressionActive:   groupActive(frame.Capabilities.Has(trackingmodel.CapabilityExpression), frame.ExpressionSourceID, frame.ExpressionUpdatedAtNS, nowNS, p.config.activeStaleAfter),
+		LipActive:          groupActive(frame.Capabilities.Has(trackingmodel.CapabilityLip), frame.LipSourceID, frame.LipUpdatedAtNS, nowNS, p.config.activeStaleAfter),
 	}
 
-	leftGaze := p.channels[ChannelEyeLeftGazeX-1].seen && p.channels[ChannelEyeLeftGazeY-1].seen
-	rightGaze := p.channels[ChannelEyeRightGazeX-1].seen && p.channels[ChannelEyeRightGazeY-1].seen
-	leftPupil := p.channels[ChannelEyeLeftPupilDiameter-1].seen && p.channels[ChannelEyeLeftPupilDilation-1].seen
-	rightPupil := p.channels[ChannelEyeRightPupilDiameter-1].seen && p.channels[ChannelEyeRightPupilDilation-1].seen
+	var candidates [channelCount]channelCandidate
+	for index, state := range p.channels {
+		id := ChannelID(index + 1)
+		candidates[index].value, candidates[index].valid = state.dropoutValue(p.config.channelConfig(id).Dropout, nowNS)
+	}
+	projectMutualExclusion(&candidates, p.config.mutualExclusion)
+
+	leftGaze := candidates[ChannelEyeLeftGazeX-1].valid && candidates[ChannelEyeLeftGazeY-1].valid
+	rightGaze := candidates[ChannelEyeRightGazeX-1].valid && candidates[ChannelEyeRightGazeY-1].valid
+	leftPupil := candidates[ChannelEyeLeftPupilDiameter-1].valid && candidates[ChannelEyeLeftPupilDilation-1].valid
+	rightPupil := candidates[ChannelEyeRightPupilDiameter-1].valid && candidates[ChannelEyeRightPupilDilation-1].valid
 	if leftGaze {
 		out.Eye.Valid |= trackingmodel.EyeValidLeftGaze
-		out.Eye.LeftGaze.X = p.channels[ChannelEyeLeftGazeX-1].value
-		out.Eye.LeftGaze.Y = p.channels[ChannelEyeLeftGazeY-1].value
+		out.Eye.LeftGaze.X = candidates[ChannelEyeLeftGazeX-1].value
+		out.Eye.LeftGaze.Y = candidates[ChannelEyeLeftGazeY-1].value
 	}
 	if rightGaze {
 		out.Eye.Valid |= trackingmodel.EyeValidRightGaze
-		out.Eye.RightGaze.X = p.channels[ChannelEyeRightGazeX-1].value
-		out.Eye.RightGaze.Y = p.channels[ChannelEyeRightGazeY-1].value
+		out.Eye.RightGaze.X = candidates[ChannelEyeRightGazeX-1].value
+		out.Eye.RightGaze.Y = candidates[ChannelEyeRightGazeY-1].value
 	}
-	if p.channels[ChannelEyeLeftOpenness-1].seen {
+	if candidates[ChannelEyeLeftOpenness-1].valid {
 		out.Eye.Valid |= trackingmodel.EyeValidLeftOpenness
-		out.Eye.LeftOpenness = p.channels[ChannelEyeLeftOpenness-1].value
+		out.Eye.LeftOpenness = candidates[ChannelEyeLeftOpenness-1].value
 	}
-	if p.channels[ChannelEyeRightOpenness-1].seen {
+	if candidates[ChannelEyeRightOpenness-1].valid {
 		out.Eye.Valid |= trackingmodel.EyeValidRightOpenness
-		out.Eye.RightOpenness = p.channels[ChannelEyeRightOpenness-1].value
+		out.Eye.RightOpenness = candidates[ChannelEyeRightOpenness-1].value
 	}
 	if leftPupil {
 		out.Eye.Valid |= trackingmodel.EyeValidLeftPupil
-		out.Eye.LeftPupilDiameterMM = p.channels[ChannelEyeLeftPupilDiameter-1].value
-		out.Eye.LeftPupilDilation = p.channels[ChannelEyeLeftPupilDilation-1].value
+		out.Eye.LeftPupilDiameterMM = candidates[ChannelEyeLeftPupilDiameter-1].value
+		out.Eye.LeftPupilDilation = candidates[ChannelEyeLeftPupilDilation-1].value
 	}
 	if rightPupil {
 		out.Eye.Valid |= trackingmodel.EyeValidRightPupil
-		out.Eye.RightPupilDiameterMM = p.channels[ChannelEyeRightPupilDiameter-1].value
-		out.Eye.RightPupilDilation = p.channels[ChannelEyeRightPupilDilation-1].value
+		out.Eye.RightPupilDiameterMM = candidates[ChannelEyeRightPupilDiameter-1].value
+		out.Eye.RightPupilDilation = candidates[ChannelEyeRightPupilDilation-1].value
 	}
 
 	for id := trackingmodel.ExpressionID(0); id < trackingmodel.ExpressionCount; id++ {
 		channel, _ := ExpressionChannel(id)
-		state := p.channels[channel-1]
-		if state.seen {
-			out.Expressions.Set(id, state.value)
+		candidate := candidates[channel-1]
+		if candidate.valid {
+			out.Expressions.Set(id, candidate.value)
 		}
 	}
 	return out
+}
+
+func groupActive(capable bool, source string, updatedAtNS, nowNS int64, staleAfter time.Duration) bool {
+	return capable && source != "" && nowNS-updatedAtNS <= int64(staleAfter)
 }

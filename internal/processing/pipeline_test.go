@@ -35,10 +35,144 @@ func TestPipelinePublishesCanonicalValueSnapshot(t *testing.T) {
 	jaw, jawValid := got.Expressions.Get(trackingmodel.ExpressionJawOpen)
 	if got.Generation != 1 || got.Revision != 1 || got.ProcessedAtNS != 100 ||
 		got.EyeSourceID != "eye" || got.ExpressionSourceID != "face" || got.LipSourceID != "" ||
-		got.EyeActive || got.ExpressionActive || got.LipActive ||
+		!got.EyeActive || !got.ExpressionActive || got.LipActive ||
 		got.Eye.Valid != trackingmodel.EyeValidLeftOpenness || got.Eye.LeftOpenness != 0.75 ||
 		!jawValid || jaw != 0.5 {
 		t.Fatalf("canonical = %#v, jaw = %v,%t", got, jaw, jawValid)
+	}
+}
+
+func TestActiveGroupsExpireIndependently(t *testing.T) {
+	config := DefaultConfig()
+	config.ActiveStaleAfter = 10
+	pipeline := mustPipeline(t, config)
+	frame := tracking.MergedFrame{
+		Generation:            1,
+		Sequence:              1,
+		UpdatedAtNS:           109,
+		Capabilities:          trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression | trackingmodel.CapabilityLip,
+		EyeSourceID:           "eye",
+		ExpressionSourceID:    "face",
+		LipSourceID:           "lip",
+		EyeUpdatedAtNS:        100,
+		ExpressionUpdatedAtNS: 105,
+		LipUpdatedAtNS:        109,
+	}
+	if got, err := pipeline.ProcessAt(frame, 109); err != nil || !got.EyeActive || !got.ExpressionActive || !got.LipActive {
+		t.Fatalf("initial active flags = (%t,%t,%t),%v; want all true", got.EyeActive, got.ExpressionActive, got.LipActive, err)
+	}
+
+	tests := []struct {
+		now                  int64
+		eye, expression, lip bool
+	}{
+		{now: 111, eye: false, expression: true, lip: true},
+		{now: 116, eye: false, expression: false, lip: true},
+		{now: 120, eye: false, expression: false, lip: false},
+	}
+	for _, test := range tests {
+		got, err := pipeline.ProcessAt(frame, test.now)
+		if err != nil {
+			t.Fatalf("now %d: %v", test.now, err)
+		}
+		if got.EyeActive != test.eye || got.ExpressionActive != test.expression || got.LipActive != test.lip {
+			t.Fatalf("now %d active flags = (%t,%t,%t); want (%t,%t,%t)", test.now, got.EyeActive, got.ExpressionActive, got.LipActive, test.eye, test.expression, test.lip)
+		}
+	}
+}
+
+func TestActiveLipOnlyFrameSetsOnlyLipActive(t *testing.T) {
+	config := DefaultConfig()
+	config.ActiveStaleAfter = 10
+	pipeline := mustPipeline(t, config)
+	frame := tracking.MergedFrame{
+		Generation:     1,
+		Sequence:       1,
+		UpdatedAtNS:    100,
+		Capabilities:   trackingmodel.CapabilityLip,
+		LipSourceID:    "lip",
+		LipUpdatedAtNS: 100,
+	}
+	got, err := pipeline.ProcessAt(frame, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EyeActive || got.ExpressionActive || !got.LipActive || got.Eye.Valid != 0 || got.Expressions != (trackingmodel.ExpressionSet{}) {
+		t.Fatalf("Lip-only output = %#v; want only Lip active and no numeric inference", got)
+	}
+}
+
+func TestActiveLipRemovalDoesNotChangeExpressionValue(t *testing.T) {
+	config := DefaultConfig()
+	config.ActiveStaleAfter = 10
+	pipeline := mustPipeline(t, config)
+	frame := expressionChannelsFrame(1, 100, "face", map[trackingmodel.ExpressionID]float32{
+		trackingmodel.ExpressionJawOpen: 0.6,
+	})
+	frame.Capabilities |= trackingmodel.CapabilityLip
+	frame.LipSourceID = "lip"
+	frame.LipUpdatedAtNS = 100
+	if _, err := pipeline.ProcessAt(frame, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	removed := frame
+	removed.Sequence = 2
+	removed.UpdatedAtNS = 105
+	removed.Capabilities &^= trackingmodel.CapabilityLip
+	removed.LipSourceID = ""
+	removed.LipUpdatedAtNS = 0
+	got, err := pipeline.ProcessAt(removed, 105)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ExpressionActive || got.LipActive {
+		t.Fatalf("active flags = Expression %t Lip %t; want true,false", got.ExpressionActive, got.LipActive)
+	}
+	assertExpression(t, got, trackingmodel.ExpressionJawOpen, 0.6, true)
+}
+
+func TestSourceChangeReplacementResetsAbsentNumericChannel(t *testing.T) {
+	pipeline := mustPipeline(t, dropoutTestConfig())
+	first := eyeFrame(1, 1, 100, "eye-a", 0.8)
+	if _, err := pipeline.ProcessAt(first, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	replacement := tracking.MergedFrame{
+		Generation:     1,
+		Sequence:       2,
+		UpdatedAtNS:    105,
+		Capabilities:   trackingmodel.CapabilityEye,
+		EyeSourceID:    "eye-b",
+		EyeUpdatedAtNS: 105,
+		Eye: trackingmodel.EyeSample{
+			Valid:         trackingmodel.EyeValidRightOpenness,
+			RightOpenness: 0.3,
+		},
+	}
+	got, err := pipeline.ProcessAt(replacement, 105)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Eye.Valid&trackingmodel.EyeValidLeftOpenness != 0 || got.Eye.Valid&trackingmodel.EyeValidRightOpenness == 0 || got.Eye.RightOpenness != 0.3 {
+		t.Fatalf("replacement Eye = %#v; want absent left invalid and right 0.3 valid", got.Eye)
+	}
+}
+
+func TestSourceChangeToEmptyPreservesHistoryAndStartsDropout(t *testing.T) {
+	pipeline := mustPipeline(t, dropoutTestConfig())
+	if _, err := pipeline.ProcessAt(eyeFrame(1, 1, 100, "eye-a", 0.8), 100); err != nil {
+		t.Fatal(err)
+	}
+
+	empty := tracking.MergedFrame{Generation: 1, Sequence: 2, UpdatedAtNS: 110}
+	got, err := pipeline.ProcessAt(empty, 120)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EyeSourceID != "" || got.EyeActive || got.Eye.Valid&trackingmodel.EyeValidLeftOpenness == 0 || got.Eye.LeftOpenness != 0.4 {
+		t.Fatalf("empty-source output = %#v; want inactive preserved history at decay midpoint 0.4", got)
 	}
 }
 
