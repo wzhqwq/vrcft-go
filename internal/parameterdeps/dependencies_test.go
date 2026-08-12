@@ -82,7 +82,6 @@ func TestRepresentativeDirectPlans(t *testing.T) {
 		{"right gaze x", parameters.ParameterEyeRightX, Inputs{Eye: EyeFieldsOf(EyeFieldRightGazeX)}},
 		{"right gaze y", parameters.ParameterEyeRightY, Inputs{Eye: EyeFieldsOf(EyeFieldRightGazeY)}},
 		{"left eyelid", parameters.ParameterEyeLidLeft, Inputs{Eye: EyeFieldsOf(EyeFieldLeftOpenness)}},
-		{"pupil dilation", parameters.ParameterPupilDilation, Inputs{Eye: EyeFieldsOf(EyeFieldLeftPupilDilation, EyeFieldRightPupilDilation)}},
 		{"right pupil diameter", parameters.ParameterPupilDiameterRight, Inputs{Eye: EyeFieldsOf(EyeFieldRightPupilDiameter)}},
 		{"left pupil diameter", parameters.ParameterPupilDiameterLeft, Inputs{Eye: EyeFieldsOf(EyeFieldLeftPupilDiameter)}},
 		{"expression", parameters.ParameterJawOpen, Inputs{Expressions: trackingmodel.ExpressionMaskOf(trackingmodel.ExpressionJawOpen)}},
@@ -97,6 +96,16 @@ func TestRepresentativeDirectPlans(t *testing.T) {
 				t.Fatalf("Plan(%d) = %+v, want direct %+v", tt.id, plan, tt.want)
 			}
 		})
+	}
+}
+
+func TestPupilDilationPlanAveragesBothEyes(t *testing.T) {
+	plan, ok := Plan(parameters.ParameterPupilDilation)
+	if !ok {
+		t.Fatal("missing PupilDilation plan")
+	}
+	if plan.Operation != OperationAverage || plan.Inputs.Eye != EyeFieldsOf(EyeFieldLeftPupilDilation, EyeFieldRightPupilDilation) {
+		t.Fatalf("plan = %#v", plan)
 	}
 }
 

@@ -226,7 +226,10 @@ func buildPlans() map[parameters.ParameterID]DependencyPlan {
 	directEye(parameters.ParameterEyeRightY, EyeFieldRightGazeY)
 	directEye(parameters.ParameterEyeLidRight, EyeFieldRightOpenness)
 	directEye(parameters.ParameterEyeLidLeft, EyeFieldLeftOpenness)
-	directEye(parameters.ParameterPupilDilation, EyeFieldLeftPupilDilation, EyeFieldRightPupilDilation)
+	plans[parameters.ParameterPupilDilation] = DependencyPlan{
+		Inputs:    Inputs{Eye: EyeFieldsOf(EyeFieldLeftPupilDilation, EyeFieldRightPupilDilation)},
+		Operation: OperationAverage,
+	}
 	directEye(parameters.ParameterPupilDiameterRight, EyeFieldRightPupilDiameter)
 	directEye(parameters.ParameterPupilDiameterLeft, EyeFieldLeftPupilDiameter)
 
