@@ -285,11 +285,13 @@ func TestSummarySubscriberSnapshotCannotMutateServiceState(t *testing.T) {
 	first := receiveSummary(t, service.SubscribeSummary(ctx))
 	first.Generation = 99
 	first.Routing.Eye = SourceSelection{PluginID: "mutated"}
+	first.Routing.Lip = SourceSelection{PluginID: "mutated"}
 	first.EyeSourceID = "mutated"
+	first.LipSourceID = "mutated"
 	first.LastRejection.PluginID = "mutated"
 
 	second := receiveSummary(t, service.SubscribeSummary(ctx))
-	wantRouting := RoutingConfig{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{Auto: true}}
+	wantRouting := RoutingConfig{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{Auto: true}, Lip: SourceSelection{Auto: true}}
 	if second != (Summary{Routing: wantRouting}) {
 		t.Fatalf("Summary after caller mutation = %+v, want unchanged initial Summary", second)
 	}
@@ -307,10 +309,48 @@ func TestMergedSubscriberSnapshotCannotMutateServiceState(t *testing.T) {
 	first.Generation = 99
 	first.Expressions.Values[trackingmodel.ExpressionJawOpen] = 0.1
 	first.ExpressionSourceID = "mutated"
+	first.LipSourceID = "mutated"
 
 	second := receiveMerged(t, service.SubscribeMerged(ctx))
 	if second != want {
 		t.Fatalf("merged snapshot after caller mutation = %#v, want unchanged %#v", second, want)
+	}
+}
+
+func TestSubscriberSelectedAndNonSelectedLipUpdatesPublishCorrectStreams(t *testing.T) {
+	service := newServiceWithClock(func() int64 { return 200 })
+	mustSetGeneration(t, service, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mergedUpdates := service.SubscribeMerged(ctx)
+	summaryUpdates := service.SubscribeSummary(ctx)
+	_ = receiveMerged(t, mergedUpdates)
+	_ = receiveSummary(t, summaryUpdates)
+
+	mustSubmit(t, service, "vendor.lip.z", 1, lipFrame(1))
+	selected := receiveMerged(t, mergedUpdates)
+	selectedSummary := receiveSummary(t, summaryUpdates)
+	if selected.LipSourceID != "vendor.lip.z" || selected.LipUpdatedAtNS == 0 || !selected.Capabilities.Has(trackingmodel.CapabilityLip) {
+		t.Fatalf("selected Lip merged = %#v, want selected Lip metadata and freshness", selected)
+	}
+	if selectedSummary.LipSourceID != "vendor.lip.z" || !selectedSummary.LipAvailable {
+		t.Fatalf("selected Lip Summary = %+v, want vendor.lip.z available", selectedSummary)
+	}
+
+	mustSubmit(t, service, "vendor.lip.a", 1, lipFrame(1))
+	nonSelectedSummary := receiveSummary(t, summaryUpdates)
+	if nonSelectedSummary.AcceptedFrames != 2 || nonSelectedSummary.SourceCount != 2 || nonSelectedSummary.LipSourceID != "vendor.lip.z" || !nonSelectedSummary.LipAvailable {
+		t.Fatalf("non-selected Lip Summary = %+v, want two sources and sticky vendor.lip.z", nonSelectedSummary)
+	}
+	assertNoMerged(t, mergedUpdates)
+
+	mustSubmit(t, service, "vendor.lip.z", 1, lipFrame(2))
+	updated := receiveMerged(t, mergedUpdates)
+	_ = receiveSummary(t, summaryUpdates)
+	wantUpdated := selected
+	wantUpdated.Sequence++
+	if updated != wantUpdated {
+		t.Fatalf("selected same-value Lip update = %#v, want forced publication with only Sequence changed from %#v", updated, selected)
 	}
 }
 

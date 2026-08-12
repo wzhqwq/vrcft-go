@@ -31,6 +31,7 @@ type service struct {
 	sources            map[string]sourceState
 	eyeSourceID        string
 	expressionSourceID string
+	lipSourceID        string
 	mergedSequence     uint64
 	lastHostTimeNS     int64
 	latestMerged       MergedFrame
@@ -79,6 +80,7 @@ func (s *service) SetGeneration(generation uint64) error {
 	s.sources = make(map[string]sourceState)
 	s.eyeSourceID = ""
 	s.expressionSourceID = ""
+	s.lipSourceID = ""
 	s.advanceMergedSequenceLocked()
 	s.latestMerged = MergedFrame{
 		Generation:  generation,
@@ -145,7 +147,7 @@ func (s *service) Submit(pluginID string, generation uint64, frame trackingmodel
 	if canonical.SourceClockNS != 0 {
 		lastSourceClockNS = canonical.SourceClockNS
 	}
-	selected := pluginID == s.eyeSourceID || pluginID == s.expressionSourceID
+	selected := pluginID == s.eyeSourceID || pluginID == s.expressionSourceID || pluginID == s.lipSourceID
 	s.sources[pluginID] = sourceState{
 		frame:             canonical,
 		receivedAtNS:      s.nextTimeLocked(),

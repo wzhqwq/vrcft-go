@@ -65,10 +65,10 @@ func TestServiceConcurrentOperationsRemainConsistent(t *testing.T) {
 	}()
 
 	routingConfigs := []RoutingConfig{
-		{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{Auto: true}},
-		{Eye: SourceSelection{PluginID: pluginIDs[0]}, Expression: SourceSelection{PluginID: pluginIDs[0]}},
-		{Eye: SourceSelection{PluginID: "vendor.missing"}, Expression: SourceSelection{PluginID: "vendor.missing"}},
-		{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{PluginID: pluginIDs[1]}},
+		{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{Auto: true}, Lip: SourceSelection{Auto: true}},
+		{Eye: SourceSelection{PluginID: pluginIDs[0]}, Expression: SourceSelection{PluginID: pluginIDs[0]}, Lip: SourceSelection{PluginID: pluginIDs[0]}},
+		{Eye: SourceSelection{PluginID: "vendor.missing"}, Expression: SourceSelection{PluginID: "vendor.missing"}, Lip: SourceSelection{PluginID: "vendor.missing"}},
+		{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{PluginID: pluginIDs[1]}, Lip: SourceSelection{Auto: true}},
 	}
 	workers.Add(1)
 	go func() {
@@ -167,7 +167,7 @@ func concurrentTrackingFrame(sequence uint64, worker int) trackingmodel.Tracking
 	value := float32(worker+1) / 10
 	frame := trackingmodel.TrackingFrame{
 		Sequence:     sequence,
-		Capabilities: trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression,
+		Capabilities: trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression | trackingmodel.CapabilityLip,
 		Eye: trackingmodel.EyeSample{
 			Valid:        trackingmodel.EyeValidLeftOpenness,
 			LeftOpenness: value,
@@ -243,8 +243,8 @@ func totalConcurrentRejectionCounts(counts RejectionCounts) uint64 {
 
 func assertConcurrentMergedConsistency(t *testing.T, merged MergedFrame, summary Summary, knownPlugin map[string]struct{}) {
 	t.Helper()
-	if merged.EyeSourceID != summary.EyeSourceID || merged.ExpressionSourceID != summary.ExpressionSourceID {
-		t.Fatalf("merged sources = (%q, %q), Summary sources = (%q, %q)", merged.EyeSourceID, merged.ExpressionSourceID, summary.EyeSourceID, summary.ExpressionSourceID)
+	if merged.EyeSourceID != summary.EyeSourceID || merged.ExpressionSourceID != summary.ExpressionSourceID || merged.LipSourceID != summary.LipSourceID {
+		t.Fatalf("merged sources = (%q, %q, %q), Summary sources = (%q, %q, %q)", merged.EyeSourceID, merged.ExpressionSourceID, merged.LipSourceID, summary.EyeSourceID, summary.ExpressionSourceID, summary.LipSourceID)
 	}
 
 	eyeAvailable := merged.Capabilities.Has(trackingmodel.CapabilityEye)
@@ -277,7 +277,22 @@ func assertConcurrentMergedConsistency(t *testing.T, merged MergedFrame, summary
 		t.Fatalf("unavailable Expression group retained source/data: source %q sample %#v", merged.ExpressionSourceID, merged.Expressions)
 	}
 
-	if (merged.EyeSourceID != "" || merged.ExpressionSourceID != "") && summary.SourceCount == 0 {
+	lipAvailable := merged.Capabilities.Has(trackingmodel.CapabilityLip)
+	if lipAvailable != summary.LipAvailable {
+		t.Fatalf("merged Lip capability = %t, Summary LipAvailable = %t", lipAvailable, summary.LipAvailable)
+	}
+	if lipAvailable {
+		if merged.LipSourceID == "" || merged.LipUpdatedAtNS == 0 {
+			t.Fatalf("available Lip group = (source %q, freshness %d), want selected source and nonzero freshness", merged.LipSourceID, merged.LipUpdatedAtNS)
+		}
+		if _, ok := knownPlugin[merged.LipSourceID]; !ok {
+			t.Fatalf("LipSourceID = %q, want a submitted plugin", merged.LipSourceID)
+		}
+	} else if merged.LipSourceID != "" || merged.LipUpdatedAtNS != 0 {
+		t.Fatalf("unavailable Lip group retained metadata: source %q freshness %d", merged.LipSourceID, merged.LipUpdatedAtNS)
+	}
+
+	if (merged.EyeSourceID != "" || merged.ExpressionSourceID != "" || merged.LipSourceID != "") && summary.SourceCount == 0 {
 		t.Fatal("available merged source with Summary.SourceCount = 0")
 	}
 }

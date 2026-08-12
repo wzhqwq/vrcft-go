@@ -13,6 +13,17 @@ func TestRoutingConfigContainsOnlySupportedGroups(t *testing.T) {
 	}
 }
 
+func TestRoutingConfigExposesLipWithStableJSONName(t *testing.T) {
+	// Mutation target: omitting Lip routing or changing its wire name.
+	field, found := reflect.TypeOf(RoutingConfig{}).FieldByName("Lip")
+	if !found {
+		t.Fatal("RoutingConfig must expose a Lip routing group")
+	}
+	if got := field.Tag.Get("json"); got != "lip" {
+		t.Fatalf("RoutingConfig.Lip json tag = %q, want %q", got, "lip")
+	}
+}
+
 func TestSourceSelectionValidation(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -52,7 +63,7 @@ func TestSourceSelectionValidation(t *testing.T) {
 	}
 }
 
-func TestDefaultRoutingSelectsAutoForBothGroups(t *testing.T) {
+func TestDefaultRoutingSelectsAutoForAllGroups(t *testing.T) {
 	// Mutation target: returning a manual selection or a non-empty plugin ID by default.
 	got := defaultRouting()
 	if got.Eye != (SourceSelection{Auto: true}) {
@@ -60,6 +71,9 @@ func TestDefaultRoutingSelectsAutoForBothGroups(t *testing.T) {
 	}
 	if got.Expression != (SourceSelection{Auto: true}) {
 		t.Fatalf("defaultRouting().Expression = %#v, want automatic selection without plugin", got.Expression)
+	}
+	if got.Lip != (SourceSelection{Auto: true}) {
+		t.Fatalf("defaultRouting().Lip = %#v, want automatic selection without plugin", got.Lip)
 	}
 }
 
@@ -73,6 +87,7 @@ func TestRoutingConfigValidationRejectsEachInvalidGroup(t *testing.T) {
 			routing: RoutingConfig{
 				Eye:        SourceSelection{Auto: true, PluginID: "osc"},
 				Expression: SourceSelection{Auto: true},
+				Lip:        SourceSelection{Auto: true},
 			},
 		},
 		{
@@ -80,13 +95,22 @@ func TestRoutingConfigValidationRejectsEachInvalidGroup(t *testing.T) {
 			routing: RoutingConfig{
 				Eye:        SourceSelection{Auto: true},
 				Expression: SourceSelection{Auto: true, PluginID: "osc"},
+				Lip:        SourceSelection{Auto: true},
+			},
+		},
+		{
+			name: "invalid lip",
+			routing: RoutingConfig{
+				Eye:        SourceSelection{Auto: true},
+				Expression: SourceSelection{Auto: true},
+				Lip:        SourceSelection{Auto: true, PluginID: "osc"},
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Mutation target: validating only Eye or only Expression.
+			// Mutation target: validating only a subset of Eye, Expression, and Lip.
 			err := tt.routing.validate()
 			if !errors.Is(err, ErrInvalidRouting) {
 				t.Fatalf("validate() error = %v, want errors.Is(err, ErrInvalidRouting)", err)

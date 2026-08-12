@@ -288,7 +288,7 @@ func TestSummaryGenerationAdvancePreservesDiagnosticsAndClearsSources(t *testing
 	if summary.Generation != 2 || summary.SourceCount != 0 {
 		t.Fatalf("generation/source count = (%d, %d), want (2, 0)", summary.Generation, summary.SourceCount)
 	}
-	if summary.EyeSourceID != "" || summary.EyeAvailable || summary.ExpressionSourceID != "" || summary.ExpressionAvailable {
+	if summary.EyeSourceID != "" || summary.EyeAvailable || summary.ExpressionSourceID != "" || summary.ExpressionAvailable || summary.LipSourceID != "" || summary.LipAvailable {
 		t.Fatalf("availability after generation advance = %+v, want all unavailable", summary)
 	}
 	if summary.AcceptedFrames != 2 || summary.RejectedFrames != 1 || summary.Rejected.GenerationUnset != 1 || summary.LastRejection != wantLast {
@@ -302,7 +302,7 @@ func TestSummaryCapabilityAvailabilityIgnoresEmptyValidityMasks(t *testing.T) {
 	mustSetGeneration(t, service, 1)
 	mustSubmit(t, service, "vendor.both", 1, trackingmodel.TrackingFrame{
 		Sequence:     1,
-		Capabilities: trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression,
+		Capabilities: trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression | trackingmodel.CapabilityLip,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -313,6 +313,9 @@ func TestSummaryCapabilityAvailabilityIgnoresEmptyValidityMasks(t *testing.T) {
 	}
 	if summary.ExpressionSourceID != "vendor.both" || !summary.ExpressionAvailable {
 		t.Fatalf("Expression summary = (%q, %t), want vendor.both available", summary.ExpressionSourceID, summary.ExpressionAvailable)
+	}
+	if summary.LipSourceID != "vendor.both" || !summary.LipAvailable {
+		t.Fatalf("Lip summary = (%q, %t), want vendor.both available", summary.LipSourceID, summary.LipAvailable)
 	}
 }
 
@@ -326,7 +329,7 @@ func TestSummarySubscriberReceivesInitialAndFrameUpdates(t *testing.T) {
 		t.Fatalf("SubscribeSummary() channel capacity = %d, want 1", cap(updates))
 	}
 	initial := receiveSummary(t, updates)
-	wantRouting := RoutingConfig{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{Auto: true}}
+	wantRouting := RoutingConfig{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{Auto: true}, Lip: SourceSelection{Auto: true}}
 	if initial != (Summary{Routing: wantRouting}) {
 		t.Fatalf("initial Summary = %+v, want only default routing %+v", initial, wantRouting)
 	}
@@ -361,6 +364,7 @@ func TestSummarySubscriberReceivesChangedControlsAndExistingRemoval(t *testing.T
 	manualMissing := RoutingConfig{
 		Eye:        SourceSelection{PluginID: "missing.eye"},
 		Expression: SourceSelection{PluginID: "missing.expression"},
+		Lip:        SourceSelection{PluginID: "missing.lip"},
 	}
 	if err := service.SetRouting(manualMissing); err != nil {
 		t.Fatalf("pre-generation SetRouting() error = %v", err)
@@ -384,7 +388,7 @@ func TestSummarySubscriberReceivesChangedControlsAndExistingRemoval(t *testing.T
 		t.Fatalf("non-selected removal Summary SourceCount = %d, want 1", got.SourceCount)
 	}
 
-	auto := RoutingConfig{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{Auto: true}}
+	auto := RoutingConfig{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{Auto: true}, Lip: SourceSelection{Auto: true}}
 	if err := service.SetRouting(auto); err != nil {
 		t.Fatalf("post-generation SetRouting() error = %v", err)
 	}
@@ -401,11 +405,11 @@ func TestSummarySubscriberIgnoresIdempotentInvalidAndUnknownControls(t *testing.
 	updates := service.SubscribeSummary(ctx)
 	_ = receiveSummary(t, updates)
 
-	auto := RoutingConfig{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{Auto: true}}
+	auto := RoutingConfig{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{Auto: true}, Lip: SourceSelection{Auto: true}}
 	if err := service.SetRouting(auto); err != nil {
 		t.Fatalf("equal SetRouting() error = %v", err)
 	}
-	invalid := RoutingConfig{Eye: SourceSelection{Auto: true, PluginID: "invalid"}, Expression: SourceSelection{Auto: true}}
+	invalid := RoutingConfig{Eye: SourceSelection{Auto: true, PluginID: "invalid"}, Expression: SourceSelection{Auto: true}, Lip: SourceSelection{Auto: true}}
 	if err := service.SetRouting(invalid); !errors.Is(err, ErrInvalidRouting) {
 		t.Fatalf("invalid SetRouting() error = %v, want ErrInvalidRouting", err)
 	}

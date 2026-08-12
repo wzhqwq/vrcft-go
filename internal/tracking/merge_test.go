@@ -16,10 +16,12 @@ func TestServiceMergesGroupsFromDifferentSources(t *testing.T) {
 	wantExpressions := trackingmodel.ExpressionSet{}
 	wantExpressions.Set(trackingmodel.ExpressionJawOpen, 0.75)
 	want := MergedFrame{
-		Generation:   2,
-		Sequence:     3,
-		UpdatedAtNS:  10,
-		Capabilities: trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression,
+		Generation:            2,
+		Sequence:              3,
+		UpdatedAtNS:           10,
+		EyeUpdatedAtNS:        10,
+		ExpressionUpdatedAtNS: 10,
+		Capabilities:          trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression,
 		Eye: trackingmodel.EyeSample{
 			Valid:        trackingmodel.EyeValidLeftOpenness,
 			LeftOpenness: 0.25,
@@ -58,6 +60,9 @@ func TestMergedSequenceIgnoresNonSelectedFramesAndAdvancesForSelectedIdenticalDa
 	if afterSelected.Eye != beforeNonSelected.Eye || afterSelected.EyeSourceID != "vendor.z" {
 		t.Fatalf("selected identical Submit content = %#v, want unchanged selected payload from vendor.z", afterSelected)
 	}
+	if afterSelected.EyeUpdatedAtNS <= beforeNonSelected.EyeUpdatedAtNS {
+		t.Fatalf("selected identical Eye freshness = %d, want greater than %d", afterSelected.EyeUpdatedAtNS, beforeNonSelected.EyeUpdatedAtNS)
+	}
 }
 
 func TestServiceMergesGenerationAdvanceClearsStickySourcesWithOneEmptyRevision(t *testing.T) {
@@ -82,8 +87,8 @@ func TestServiceMergesGenerationAdvanceClearsStickySourcesWithOneEmptyRevision(t
 	if got := latestMerged(t, s); got != want {
 		t.Fatalf("generation advance merged = %#v, want %#v", got, want)
 	}
-	if s.eyeSourceID != "" || s.expressionSourceID != "" {
-		t.Fatalf("sticky sources after generation advance = (%q, %q), want empty", s.eyeSourceID, s.expressionSourceID)
+	if s.eyeSourceID != "" || s.expressionSourceID != "" || s.lipSourceID != "" {
+		t.Fatalf("sticky sources after generation advance = (%q, %q, %q), want empty", s.eyeSourceID, s.expressionSourceID, s.lipSourceID)
 	}
 	if clockCalls != 5 {
 		t.Fatalf("Host clock calls after generation advance = %d, want exactly 5", clockCalls)
@@ -111,6 +116,7 @@ func TestMergedSequenceSaturatesAcrossRoutingSubmitAndRemovalChanges(t *testing.
 	manual := RoutingConfig{
 		Eye:        SourceSelection{PluginID: "eye.plugin"},
 		Expression: SourceSelection{Auto: true},
+		Lip:        SourceSelection{Auto: true},
 	}
 	if err := s.SetRouting(manual); err != nil {
 		t.Fatalf("SetRouting(manual) error = %v", err)
@@ -144,6 +150,7 @@ func TestMergedSequenceClampsRegressingHostClock(t *testing.T) {
 	manual := RoutingConfig{
 		Eye:        SourceSelection{PluginID: "eye.plugin"},
 		Expression: SourceSelection{Auto: true},
+		Lip:        SourceSelection{Auto: true},
 	}
 	if err := s.SetRouting(manual); err != nil {
 		t.Fatalf("SetRouting(manual) error = %v", err)
@@ -155,6 +162,72 @@ func TestMergedSequenceClampsRegressingHostClock(t *testing.T) {
 	}
 	if first.Sequence != 1 || second.Sequence != 2 || third.Sequence != 3 {
 		t.Fatalf("Sequence values = (%d, %d, %d), want (1, 2, 3)", first.Sequence, second.Sequence, third.Sequence)
+	}
+}
+
+func TestGroupFreshnessTracksSelectedSourceReceiptsIndependently(t *testing.T) {
+	now := int64(0)
+	s := newServiceWithClock(func() int64 {
+		now += 10
+		return now
+	})
+	mustSetGeneration(t, s, 1)
+	mustSubmit(t, s, "vendor.eye", 1, eyeFrame(1, 0.25))
+	afterEye := latestMerged(t, s)
+	if afterEye.EyeUpdatedAtNS != 20 || afterEye.ExpressionUpdatedAtNS != 0 || afterEye.LipUpdatedAtNS != 0 {
+		t.Fatalf("freshness after Eye = (%d, %d, %d), want (20, 0, 0)", afterEye.EyeUpdatedAtNS, afterEye.ExpressionUpdatedAtNS, afterEye.LipUpdatedAtNS)
+	}
+
+	mustSubmit(t, s, "vendor.expression", 1, expressionFrame(1, trackingmodel.ExpressionJawOpen, 0.5))
+	afterExpression := latestMerged(t, s)
+	if afterExpression.EyeUpdatedAtNS != 20 || afterExpression.ExpressionUpdatedAtNS != 40 || afterExpression.LipUpdatedAtNS != 0 {
+		t.Fatalf("freshness after Expression = (%d, %d, %d), want (20, 40, 0)", afterExpression.EyeUpdatedAtNS, afterExpression.ExpressionUpdatedAtNS, afterExpression.LipUpdatedAtNS)
+	}
+
+	mustSubmit(t, s, "vendor.lip", 1, lipFrame(1))
+	afterLip := latestMerged(t, s)
+	if afterLip.EyeUpdatedAtNS != 20 || afterLip.ExpressionUpdatedAtNS != 40 || afterLip.LipUpdatedAtNS != 60 {
+		t.Fatalf("freshness after Lip = (%d, %d, %d), want (20, 40, 60)", afterLip.EyeUpdatedAtNS, afterLip.ExpressionUpdatedAtNS, afterLip.LipUpdatedAtNS)
+	}
+	if afterLip.LipSourceID != "vendor.lip" || !afterLip.Capabilities.Has(trackingmodel.CapabilityLip) {
+		t.Fatalf("Lip merged metadata = %#v, want selected and available", afterLip)
+	}
+
+	mustSubmit(t, s, "vendor.eye", 1, eyeFrame(2, 0.25))
+	afterSameEye := latestMerged(t, s)
+	if afterSameEye.EyeUpdatedAtNS != 80 || afterSameEye.ExpressionUpdatedAtNS != 40 || afterSameEye.LipUpdatedAtNS != 60 {
+		t.Fatalf("freshness after same Eye = (%d, %d, %d), want (80, 40, 60)", afterSameEye.EyeUpdatedAtNS, afterSameEye.ExpressionUpdatedAtNS, afterSameEye.LipUpdatedAtNS)
+	}
+	if afterSameEye.Sequence != afterLip.Sequence+1 || afterSameEye.Eye != afterLip.Eye {
+		t.Fatalf("same Eye update = %#v, want unchanged payload and one revision after %#v", afterSameEye, afterLip)
+	}
+
+	mustSubmit(t, s, "vendor.expression", 1, expressionFrame(2, trackingmodel.ExpressionJawOpen, 0.5))
+	afterSameExpression := latestMerged(t, s)
+	if afterSameExpression.EyeUpdatedAtNS != 80 || afterSameExpression.ExpressionUpdatedAtNS != 100 || afterSameExpression.LipUpdatedAtNS != 60 {
+		t.Fatalf("freshness after same Expression = (%d, %d, %d), want (80, 100, 60)", afterSameExpression.EyeUpdatedAtNS, afterSameExpression.ExpressionUpdatedAtNS, afterSameExpression.LipUpdatedAtNS)
+	}
+	if afterSameExpression.Sequence != afterSameEye.Sequence+1 ||
+		afterSameExpression.Eye != afterSameEye.Eye || afterSameExpression.Expressions != afterSameEye.Expressions ||
+		afterSameExpression.EyeSourceID != afterSameEye.EyeSourceID || afterSameExpression.ExpressionSourceID != afterSameEye.ExpressionSourceID || afterSameExpression.LipSourceID != afterSameEye.LipSourceID ||
+		afterSameExpression.Capabilities != afterSameEye.Capabilities {
+		t.Fatalf("same Expression update = %#v, want only Expression freshness and ordering changed from %#v", afterSameExpression, afterSameEye)
+	}
+
+	mustSubmit(t, s, "vendor.lip", 1, lipFrame(2))
+	afterSameLip := latestMerged(t, s)
+	if afterSameLip.EyeUpdatedAtNS != 80 || afterSameLip.ExpressionUpdatedAtNS != 100 || afterSameLip.LipUpdatedAtNS != 120 {
+		t.Fatalf("freshness after same Lip = (%d, %d, %d), want (80, 100, 120)", afterSameLip.EyeUpdatedAtNS, afterSameLip.ExpressionUpdatedAtNS, afterSameLip.LipUpdatedAtNS)
+	}
+	if afterSameLip.Sequence != afterSameExpression.Sequence+1 {
+		t.Fatalf("same Lip Sequence = %d, want %d", afterSameLip.Sequence, afterSameExpression.Sequence+1)
+	}
+
+	mustSetGeneration(t, s, 2)
+	afterGeneration := latestMerged(t, s)
+	if afterGeneration.EyeSourceID != "" || afterGeneration.ExpressionSourceID != "" || afterGeneration.LipSourceID != "" ||
+		afterGeneration.EyeUpdatedAtNS != 0 || afterGeneration.ExpressionUpdatedAtNS != 0 || afterGeneration.LipUpdatedAtNS != 0 {
+		t.Fatalf("generation reset retained selections or freshness: %#v", afterGeneration)
 	}
 }
 

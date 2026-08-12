@@ -48,6 +48,8 @@ type Summary struct {
 	EyeAvailable        bool
 	ExpressionSourceID  string
 	ExpressionAvailable bool
+	LipSourceID         string
+	LipAvailable        bool
 
 	AcceptedFrames uint64
 	RejectedFrames uint64
@@ -102,6 +104,8 @@ func (s *service) currentSummaryLocked() Summary {
 		EyeAvailable:        s.sourceHasCapabilityLocked(s.eyeSourceID, trackingmodel.CapabilityEye),
 		ExpressionSourceID:  s.expressionSourceID,
 		ExpressionAvailable: s.sourceHasCapabilityLocked(s.expressionSourceID, trackingmodel.CapabilityExpression),
+		LipSourceID:         s.lipSourceID,
+		LipAvailable:        s.sourceHasCapabilityLocked(s.lipSourceID, trackingmodel.CapabilityLip),
 		AcceptedFrames:      s.acceptedFrames,
 		RejectedFrames:      s.rejectedFrames,
 		Rejected:            s.rejected,

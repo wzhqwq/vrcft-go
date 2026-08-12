@@ -10,12 +10,14 @@ type SourceSelection struct {
 type RoutingConfig struct {
 	Eye        SourceSelection `json:"eye"`
 	Expression SourceSelection `json:"expression"`
+	Lip        SourceSelection `json:"lip"`
 }
 
 func defaultRouting() RoutingConfig {
 	return RoutingConfig{
 		Eye:        SourceSelection{Auto: true},
 		Expression: SourceSelection{Auto: true},
+		Lip:        SourceSelection{Auto: true},
 	}
 }
 
@@ -32,7 +34,11 @@ func (routing RoutingConfig) validate() error {
 		return err
 	}
 
-	return routing.Expression.validate()
+	if err := routing.Expression.validate(); err != nil {
+		return err
+	}
+
+	return routing.Lip.validate()
 }
 
 func chooseAutoSource(current string, sources map[string]sourceState, capability trackingmodel.Capability) string {

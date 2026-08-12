@@ -25,7 +25,7 @@ func TestGenerationStartsUnset(t *testing.T) {
 	if s.sources == nil {
 		t.Fatal("newServiceWithClock() sources map is nil, want initialized map")
 	}
-	if got := s.routing; got != (RoutingConfig{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{Auto: true}}) {
+	if got := s.routing; got != (RoutingConfig{Eye: SourceSelection{Auto: true}, Expression: SourceSelection{Auto: true}, Lip: SourceSelection{Auto: true}}) {
 		t.Fatalf("newServiceWithClock() routing = %#v, want both groups automatic", got)
 	}
 }
