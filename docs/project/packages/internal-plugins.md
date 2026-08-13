@@ -84,13 +84,13 @@ blockers:
 Discover configured builtin and development plugins, retain their user preferences, and supervise each plugin process as an authenticated Host session.
 
 ## Responsibilities
-Validate manifests and catalog roots; maintain persistent enable/configuration preferences; construct fresh IPC credentials and process environments; perform the Host handshake; serialize session writes and controls; publish direct tracking frames; emit bounded lifecycle, status, and log events; and apply finite restart policy.
+Validate manifests and catalog roots; maintain persistent enable/configuration preferences; construct fresh IPC credentials and process environments; perform the Host handshake, including metadata-only Lip capability negotiation; serialize session writes and controls; publish direct tracking frames; emit bounded lifecycle, status, and log events; and apply finite restart policy.
 
 ## Non-responsibilities
-Vendor device implementation runs in plugin processes. Frame ordering, generation rejection, routing, and merging belong to `internal/tracking`. Package installation, updates, signing, marketplace/catalog distribution, and third-party SDK delivery are deliberately deferred.
+Vendor device implementation runs in plugin processes. Frame ordering, generation rejection, routing, and merging belong to `internal/tracking`. Numeric Lip payload, Expression-to-Lip mapping, package installation, updates, signing, marketplace/catalog distribution, and third-party SDK delivery are deliberately deferred.
 
 ## Current implementation
-Directory discovery scans the required builtin root and optional development roots, labels their source, rejects duplicate IDs, links, unsafe entrypoints, and malformed or oversized manifests, and returns deterministic results. The manager loads preferences, creates independent supervisors, and preserves preferences for temporarily unavailable plugins. Each launch owns a fresh named-pipe endpoint and token, completes the Host Hello/Initialize/Ready handshake, and manages process lifecycle through graceful shutdown and kill fallback.
+Directory discovery scans the required builtin root and optional development roots, labels their source, rejects duplicate IDs, links, unsafe entrypoints, and malformed or oversized manifests, and returns deterministic results. Manifest validation and Hello/Initialize/Ready negotiation accept Lip-only capability value 4 without introducing a numeric payload. The manager loads preferences, creates independent supervisors, and preserves preferences for temporarily unavailable plugins. Each launch owns a fresh named-pipe endpoint and token and manages process lifecycle through graceful shutdown and kill fallback.
 
 ## Public/internal interfaces
 `Manager`, `FrameSink`, `Catalog`, `Store`, `Manifest`, `InstalledPlugin`, runtime snapshots, events, process abstractions, and restart policy are internal Host contracts. `FrameSink.Submit(pluginID, generation, frame)` is the generation-bearing handoff to tracking.
@@ -114,10 +114,10 @@ Catalog scanning is deterministic. Control and event queues are bounded, a slow 
 Catalog entries and executable paths must remain within validated roots. Manifests and settings use strict, size-bounded decoding; settings are written with secure temporary permissions and atomic replacement. Each launch injects a fresh local endpoint and session token, validates authentication and descriptor/protocol compatibility before readiness, and keeps token and configuration contents out of public error text.
 
 ## Required tests
-Executable package and race tests cover manifest and builtin/dev catalog validation, Host handshake phases and secret redaction, direct FrameSink delivery with identity and generation, absence of frame events, bounded event behavior, finite supervisor restart, and process/session shutdown. `integration_test.go` is Windows-only real-process evidence for named pipes, handshake, controls, telemetry, cleanup, crashes, and bounded restart.
+Executable package and race tests cover manifest and builtin/dev catalog validation, Lip-only manifest and Host negotiation, Host handshake phases and secret redaction, direct FrameSink delivery with identity and generation, absence of frame events, bounded event behavior, finite supervisor restart, and process/session shutdown. `integration_test.go` is Windows-only real-process evidence for named pipes, handshake, controls, telemetry, cleanup, crashes, and bounded restart.
 
 ## Known gaps
-No `internal/plugins` runtime implementation gap remains. The distribution ecosystem—installer APIs, package acquisition, updates, signing, and marketplace policy—is deferred until product requirements define it.
+No `internal/plugins` runtime implementation gap remains. M6 Application wiring is still deferred. The distribution ecosystem—installer APIs, package acquisition, updates, signing, and marketplace policy—and any numeric Lip/Expression-to-Lip contract remain deferred until product requirements define them.
 
 ## Completion definition
 Builtin and development plugins can be discovered and independently supervised as authenticated, bounded Host sessions; persistent preferences survive restart, session state does not, direct generation-bearing frames reach tracking, and crashes stop after the configured finite restart budget.

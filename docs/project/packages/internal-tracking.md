@@ -31,15 +31,15 @@ checks:
 
 ## Purpose
 
-Provide the Host-owned, generation-aware boundary for ingesting plugin tracking frames, selecting stable Eye and Expression sources, and publishing deterministic merged tracking snapshots.
+Provide the Host-owned, generation-aware boundary for ingesting plugin tracking frames, selecting stable Eye, Expression, and metadata-only Lip sources, and publishing deterministic merged tracking snapshots with per-group Host freshness.
 
 ## Responsibilities
 
 - Require every submission to include a non-empty plugin ID and the current positive Host generation.
 - Canonicalize each `trackingmodel.TrackingFrame`, then validate its capability/validity/value contract, strict per-plugin Sequence ordering, non-negative timestamps, and non-regressing non-zero time fields before committing it.
 - Retain one latest valid canonical frame per plugin for the current generation and reject unset, zero, stale, or future generations.
-- Select Eye and Expression independently. Automatic selection is sticky and deterministically reselects the lexicographically smallest capable plugin only when the current source becomes unavailable; manual selection has no implicit fallback.
-- Merge the selected groups into one immutable value snapshot with Host-owned generation, revision, timestamp, capability, and source metadata. An accepted non-selected source update does not publish an unchanged merged snapshot.
+- Select Eye, Expression, and Lip independently. Automatic selection is sticky and deterministically reselects the lexicographically smallest capable plugin only when the current source becomes unavailable; manual selection has no implicit fallback.
+- Merge the selected groups into one immutable value snapshot with Host-owned generation, revision, overall update time, capability/source metadata, and independent `EyeUpdatedAtNS`, `ExpressionUpdatedAtNS`, and `LipUpdatedAtNS` Host receipt freshness. An accepted non-selected source update does not publish an unchanged merged snapshot.
 - Publish the latest merged frame and payload-free `Summary` diagnostics through bounded latest-value subscriptions.
 - Maintain service-lifetime saturating accepted/rejected counters, fixed rejection-reason counts, and the last rejection.
 
@@ -49,14 +49,15 @@ Provide the Host-owned, generation-aware boundary for ingesting plugin tracking 
 - Calibration, deadzone/gain, filtering, mutual exclusion, dropout hold/decay, or parameter evaluation.
 - Avatar discovery, avatar-plan generation, parameter binding, or OSC/OSCQuery output.
 - Application construction and lifecycle wiring.
+- Numeric Lip payloads or Expression-to-Lip mapping; Lip is capability/source/freshness metadata only.
 - Head tracking data or routing.
 - Shared-memory slot layout, synchronization, consistency checks, or notification/transport protocol.
 
 ## Current implementation
 
-`NewService` returns a ready-to-use concurrent `Service` with generation unset and both supported groups in automatic mode. `SetGeneration` establishes or advances the positive Host generation. An advance atomically clears current sources and sticky selections and publishes a valid empty snapshot for the new generation; an equal generation is idempotent, while zero and regression are rejected.
+`NewService` returns a ready-to-use concurrent `Service` with generation unset and Eye, Expression, and Lip routing in automatic mode. `SetGeneration` establishes or advances the positive Host generation. An advance atomically clears current sources and all sticky selections and publishes a valid empty snapshot for the new generation; an equal generation is idempotent, while zero and regression are rejected.
 
-`Submit` validates and canonicalizes the complete frame before changing source or merged state. Ordering baselines are independent per plugin and reset on generation advance. Zero time fields mean absent and do not change their baselines. Eye and Expression may be sourced from different plugins, and advertised capability—not a non-empty validity mask—controls source availability.
+`Submit` validates and canonicalizes the complete frame before changing source or merged state. Ordering baselines are independent per plugin and reset on generation advance. Zero time fields mean absent and do not change their baselines. Eye, Expression, and Lip may each be sourced from different plugins, and advertised capability—not a non-empty validity mask—controls source availability. The service records its own receipt time on every accepted source frame and projects that time independently into each selected group's freshness field; plugin timestamps do not define group freshness.
 
 `PluginFrameSink` is the implemented transport-neutral adapter for the no-result plugin sink boundary. It forwards the authenticated plugin ID, generation, and frame value to a `FrameSubmitter`; submission failures remain observable through the Service diagnostics. Production code depends only on the standard library and `pkg/trackingmodel`, not `internal/plugins`.
 
@@ -64,8 +65,8 @@ Provide the Host-owned, generation-aware boundary for ingesting plugin tracking 
 
 - `Service` owns submission, generation and routing controls, source removal, latest merged reads, and merged/Summary subscriptions.
 - `FrameSubmitter`, `PluginFrameSink`, and `NewPluginFrameSink` provide the generation-bearing plugin-ingest adapter boundary.
-- `RoutingConfig` and `SourceSelection` configure independent Eye and Expression routing. There is no Head field.
-- `MergedFrame` is the Host-owned value snapshot containing generation, revision, Host update time, capabilities, Eye/Expression values, and selected source IDs.
+- `RoutingConfig` and `SourceSelection` configure independent Eye, Expression, and Lip routing. There is no Head field.
+- `MergedFrame` is the Host-owned value snapshot containing generation, revision, Host update time, capabilities, Eye/Expression values, selected source IDs, and per-group Host freshness timestamps. Lip has source/activity metadata but no numeric field.
 - `Summary`, `Rejection`, `RejectionCounts`, and `RejectionReason` expose payload-free current state and lifetime ingest diagnostics.
 - Stable error sentinels are `ErrGenerationUnset`, `ErrGenerationZero`, `ErrGenerationRegression`, `ErrStaleGeneration`, `ErrFutureGeneration`, `ErrInvalidPluginID`, `ErrInvalidFrame`, `ErrSequenceNotIncreasing`, `ErrTimestampRegression`, `ErrSourceClockRegression`, and `ErrInvalidRouting`.
 
@@ -73,7 +74,7 @@ Provide the Host-owned, generation-aware boundary for ingesting plugin tracking 
 
 - One current positive generation, or the initial unset state.
 - One latest valid canonical frame and ordering baseline per plugin in that generation.
-- Routing configuration and sticky automatic Eye/Expression selections.
+- Routing configuration and sticky automatic Eye/Expression/Lip selections.
 - The latest immutable merged value snapshot and Host-owned service-lifetime revision/time state.
 - Service-lifetime accepted/rejected counters, rejection-reason counts, and last rejection.
 - Merged-frame and Summary subscriber registries.
@@ -104,13 +105,13 @@ The upstream authenticated session supplies the plugin ID; this package validate
 
 ## Required tests
 
-The package tests prove generation unset/advance/regression/idempotence and atomic clearing; frame canonicalization, ownership, per-plugin Sequence and time ordering; stale/future rejection; split Eye/Expression merging; sticky deterministic automatic routing; manual no-fallback behavior; capability-based dropout behavior; source removal and revision rules; saturating diagnostics; immediate capacity-one latest-value subscriptions; nonblocking producers; cancellation closure; exact sink forwarding and structural plugin-sink compatibility. Concurrent control, submission, read, and subscription activity is exercised under the race detector.
+The package tests prove generation unset/advance/regression/idempotence and atomic clearing; frame canonicalization, ownership, per-plugin Sequence and time ordering; stale/future rejection; split Eye/Expression/Lip merging and independent Host freshness; sticky deterministic automatic routing; manual no-fallback behavior; metadata-only Lip behavior; capability-based dropout behavior; source removal and revision rules; saturating diagnostics; immediate capacity-one latest-value subscriptions; nonblocking producers; cancellation closure; exact sink forwarding and structural plugin-sink compatibility. Concurrent control, submission, read, and subscription activity is exercised under the race detector.
 
 ## Known gaps
 
 - M6 must wire the Service and `PluginFrameSink` into Application construction and connect plugin lifecycle loss to `RemoveSource`.
 - A future optional shared-memory transport must define its own slot, commit-sequence, synchronization, torn-read protection, and notification protocol before copying a stable frame value into this boundary.
-- Downstream processing/filtering, avatar planning/binding, and OSC output remain owned by their respective later pipeline stages.
+- Avatar planning/binding, OSC networking, persistence/UI, numeric Lip payload, and Expression-to-Lip mapping remain deferred to later milestones or product decisions.
 
 ## Completion definition
 

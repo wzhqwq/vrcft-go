@@ -3,7 +3,7 @@ id: internal-application
 kind: go-package
 path: internal/application
 milestone: M6
-depends_on: [internal-plugins, internal-tracking, internal-processing, internal-osc]
+depends_on: [internal-plugins, internal-tracking, internal-processing, internal-evaluator, internal-osc]
 checks:
   - id: package-builds
     description: Application package builds
@@ -32,13 +32,13 @@ Construct, start, connect, and stop plugin, tracking, processing, evaluation, an
 ## Non-responsibilities
 It does not implement subsystem algorithms.
 ## Current implementation
-Only the OSC service is constructed and started.
+Only the OSC service is constructed and started. Although the struct currently has zero-valued plugin and tracking fields, there is no production construction or data-path wiring for plugins, tracking, processing, evaluator, or avatar plans.
 ## Public/internal interfaces
 `Application`, `NewApp`, `Start`, and `Close`.
 ## Owned data
 References to process-wide services and Wails context.
 ## Dependencies
-Depends on plugin, tracking, processing, and OSC packages.
+The planned composition depends on plugin, tracking, processing, evaluator, and OSC packages. Listing `internal-evaluator` here records the intended M6 dependency; `app.go` does not yet import, construct, or call it.
 ## Concurrency and lifecycle
 Starts in dependency order and closes in reverse order.
 ## Error handling
@@ -50,6 +50,6 @@ Only application APIs intended for Wails may cross into the frontend.
 ## Required tests
 Lifecycle ordering, partial-start rollback, and end-to-end wiring.
 ## Known gaps
-Tracking and plugin services are not instantiated or connected.
+M6 still must instantiate and connect plugin, tracking, processing, evaluator, avatar-plan/binding, and OSC data paths with rollback and reverse-order shutdown. Persistence/UI, numeric Lip payload, and Expression-to-Lip mapping remain deferred; frontend and release completion remain separate later work.
 ## Completion definition
 The full data and control paths run under one cancellable lifecycle.

@@ -25,13 +25,13 @@ checks:
 Define the versioned JSON wire contract between plugin runtime and host.
 
 ## Responsibilities
-Define typed JSON protocol v1 messages, strict message-type and payload correspondence, payload limits, handshake values, controls, frames, heartbeat, status, logs, errors, and the context-aware abstract Conn contract.
+Define typed JSON protocol v1 messages, strict message-type and payload correspondence, payload limits, handshake values, controls, frames, heartbeat, status, logs, errors, stable capability metadata, and the context-aware abstract Conn contract.
 
 ## Non-responsibilities
 Concrete connection framing, socket implementation, and process policy belong to internal IPC and host packages.
 
 ## Current implementation
-Typed JSON protocol v1 messages, strict decoding with exact tracking-array widths, typed-construction payload limits, and context-aware Conn methods are implemented.
+Typed JSON protocol v1 messages, strict decoding with exact tracking-array widths, typed-construction payload limits, and context-aware Conn methods are implemented. Lip-only descriptors, subscriptions, and tracking frames round-trip with the stable numeric capability value 4 while the v1 frame schema remains only Eye and Expression numeric data.
 
 ## Public/internal interfaces
 Conn, message types, and serializable payloads are shared across processes.
@@ -46,7 +46,7 @@ References public plugin API and tracking-model payloads.
 The abstract Conn contract accepts contexts; concrete framing and write serialization are internal IPC responsibilities.
 
 ## Error handling
-Unknown versions or types, payload-type mismatches, oversized concrete or decoded payloads, malformed JSON, incorrect fixed-array widths, and invalid fields return explicit protocol errors.
+Unknown versions or types, payload-type mismatches, oversized concrete or decoded payloads, malformed JSON, incorrect fixed-array widths, unknown capability bits, and invalid fields return explicit protocol errors.
 
 ## Performance constraints
 Payload size is bounded by MaxPayloadSize and encoding avoids unnecessary copies where practical.
@@ -58,7 +58,7 @@ Strict JSON correspondence, version checks, and payload limits protect the proto
 Executable package tests cover typed JSON messages, strict payload correspondence, validation, limits, and context-aware connection behavior; the named message test file is integration evidence only.
 
 ## Known gaps
-No incomplete subscription or binary-header protocol gap remains; concrete framing is intentionally outside this package.
+No M4 subscription or binary-header protocol gap remains; concrete framing is intentionally outside this package. Numeric Lip payload and Expression-to-Lip mapping remain deferred and are not present in protocol v1.
 
 ## Completion definition
-Host and plugin runtime share a stable, bounded, fully tested typed JSON protocol v1 contract.
+Host and plugin runtime share a stable, bounded, fully tested typed JSON protocol v1 contract that preserves existing Eye/Expression layouts and metadata-only Lip value 4.
