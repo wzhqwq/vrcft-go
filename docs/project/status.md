@@ -1,11 +1,11 @@
 # Project Status
 
-- Generated: 2026-08-02T16:30:01Z
-- Commit: `0b7e3fe22870a1012cc47954f6ce3da1e6f29e3b`
-- Source fingerprint: `d384a6bc9f946824e81d9a078540d1112e50ed2fe6824dab32f65886d87c5b7c`
+- Generated: 2026-08-15T17:50:36Z
+- Commit: `8ce07a9e17ac2d6c77f2a09c20c39ad9f7f7252d`
+- Source fingerprint: `a9b92338dbf6706fd2f62fc34be8f1a6f99f6639ad5614ef4cf91e6fdc178e32`
 - Dirty: `false`
 - State: `blocked`
-- Progress: 84.9% (124/146 weight)
+- Progress: 88.1% (133/151 weight)
 
 ## Milestones
 
@@ -15,7 +15,7 @@
 | M1 | complete | 100.0% (47/47) |
 | M2 | complete | 100.0% (42/42) |
 | M3 | complete | 100.0% (7/7) |
-| M4 | in_progress | 20.0% (1/5) |
+| M4 | complete | 100.0% (10/10) |
 | M5 | not_started | 0.0% (0/0) |
 | M6 | blocked | 45.0% (9/20) |
 | M7 | in_progress | 53.3% (8/15) |
@@ -39,7 +39,8 @@
 | M2 | internal-plugins | internal/plugins | complete | 100.0% (18/18) |
 | M2 | pkg-pluginruntime | pkg/pluginruntime | complete | 100.0% (8/8) |
 | M3 | internal-tracking | internal/tracking | complete | 100.0% (7/7) |
-| M4 | internal-processing | internal/processing | in_progress | 20.0% (1/5) |
+| M4 | internal-evaluator | internal/evaluator | complete | 100.0% (5/5) |
+| M4 | internal-processing | internal/processing | complete | 100.0% (5/5) |
 | M6 | end-to-end | docs/project | blocked | 0.0% (0/8) |
 | M6 | internal-application | internal/application | in_progress | 40.0% (2/5) |
 | M6 | internal-osc | internal/osc | complete | 100.0% (7/7) |
@@ -49,14 +50,13 @@
 
 ## Failed Required Checks
 
-- `internal-processing/pipeline-implemented` (failed): required symbol not found
-- `end-to-end/integration-test` (failed): open F:\dev\vrcft-go\internal\application\app_test.go: The system cannot find the file specified.
+- `end-to-end/integration-test` (failed): open C:\Users\wzhqwq\Documents\vrcft-go\internal\application\app_test.go: The system cannot find the file specified.
 - `end-to-end/pipeline-components` (blocked): aggregate member incomplete: internal-application:tracking-wired
 - `internal-application/tracking-wired` (failed): required symbol not found
-- `frontend/production-build` (failed): node:fs:2787 const stats = binding.lstat(base, true, undefined, true /* throwIfNoEntry */); ^ Error: EPERM: operation not permitted, lstat 'C:\Users\wzhqwq' at Object.realpathSync (node:fs:2787:29) at toRealPath (node:internal/modules/helpe…
+- `frontend/production-build` (failed): node:internal/modules/cjs/loader:1228 throw err; ^ Error: Cannot find module 'C:\Users\wzhqwq\Documents\vrcft-go\frontend\node_modules\vite\bin\vite.js' at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15) at Function._lo…
 - `frontend/project-status-view` (failed): required symbol not found
-- `frontend/type-check` (failed): node:fs:2787 const stats = binding.lstat(base, true, undefined, true /* throwIfNoEntry */); ^ Error: EPERM: operation not permitted, lstat 'C:\Users\wzhqwq' at Object.realpathSync (node:fs:2787:29) at toRealPath (node:internal/modules/helpe…
+- `frontend/type-check` (failed): node:internal/modules/cjs/loader:1228 throw err; ^ Error: Cannot find module 'C:\Users\wzhqwq\Documents\vrcft-go\frontend\node_modules\svelte-check\bin\svelte-check' at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15) at…
 
 ## Next Action
 
-Address `internal-processing/pipeline-implemented`: required symbol not found
+Address `end-to-end/integration-test`: open C:\Users\wzhqwq\Documents\vrcft-go\internal\application\app_test.go: The system cannot find the file specified.
