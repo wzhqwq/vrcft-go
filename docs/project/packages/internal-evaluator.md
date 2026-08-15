@@ -3,7 +3,7 @@ id: internal-evaluator
 kind: go-package
 path: internal/evaluator
 milestone: M4
-depends_on: [internal-processing, internal-parameterdeps, internal-parameters]
+depends_on: [internal-processing, internal-parameterdeps, internal-parameters, pkg-trackingmodel]
 checks:
   - id: package-tests
     description: Evaluator package tests pass
@@ -41,7 +41,7 @@ Tracking ingest/routing and stateful transforms belong upstream. Avatar planning
 A plan owns a fixed requested-ID bitset plus private instruction and operand slices that do not retain the caller request or dependency slices. Each returned `Snapshot` owns dense fixed float/Boolean arrays and fixed validity bitsets; it retains no frame, map, slice, or pointer-backed result data.
 
 ## Dependencies
-Consumes canonical frames from `internal/processing`, generalized dependency/operation metadata from `internal/parameterdeps`, and generated IDs, types, and clamp ranges from `internal/parameters`. It has no dependency on `internal/osc` or Application wiring.
+Consumes canonical frames from `internal/processing`, generalized dependency/operation metadata from `internal/parameterdeps`, generated IDs, types, and clamp ranges from `internal/parameters`, and primitive Eye/Expression value types from `pkg/trackingmodel`. It has no dependency on `internal/osc` or Application wiring.
 
 ## Concurrency and lifecycle
 Compilation is synchronous. A compiled plan is immutable and can be shared by concurrent callers; evaluation allocates all mutable work per call and returns an owned value snapshot. The package starts no goroutine and has no Start/Close lifecycle.

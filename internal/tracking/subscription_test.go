@@ -349,8 +349,10 @@ func TestSubscriberSelectedAndNonSelectedLipUpdatesPublishCorrectStreams(t *test
 	_ = receiveSummary(t, summaryUpdates)
 	wantUpdated := selected
 	wantUpdated.Sequence++
+	wantUpdated.UpdatedAtNS = 203
+	wantUpdated.LipUpdatedAtNS = 203
 	if updated != wantUpdated {
-		t.Fatalf("selected same-value Lip update = %#v, want forced publication with only Sequence changed from %#v", updated, selected)
+		t.Fatalf("selected same-value Lip update = %#v, want forced publication with advanced ordering/freshness from %#v", updated, selected)
 	}
 }
 

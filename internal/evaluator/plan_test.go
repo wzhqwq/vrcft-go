@@ -7,6 +7,7 @@ import (
 
 	"github.com/wzhqwq/vrcft-go/internal/parameterdeps"
 	"github.com/wzhqwq/vrcft-go/internal/parameters"
+	"github.com/wzhqwq/vrcft-go/internal/processing"
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
 
@@ -135,6 +136,63 @@ func TestCompileDoesNotRetainCallerRequestSlice(t *testing.T) {
 	}
 }
 
+func TestCompileOwnsLookupDependsOnBackingSliceAcrossMutationAndReuse(t *testing.T) {
+	dependencies := []parameters.ParameterID{
+		parameters.ParameterEyeLidRight,
+		parameters.ParameterEyeLidLeft,
+	}
+	leafPlans := map[parameters.ParameterID]parameterdeps.DependencyPlan{
+		parameters.ParameterEyeLidRight: {
+			Inputs:    parameterdeps.Inputs{Eye: parameterdeps.EyeFieldsOf(parameterdeps.EyeFieldRightOpenness)},
+			Operation: parameterdeps.OperationDirect,
+		},
+		parameters.ParameterEyeLidLeft: {
+			Inputs:    parameterdeps.Inputs{Eye: parameterdeps.EyeFieldsOf(parameterdeps.EyeFieldLeftOpenness)},
+			Operation: parameterdeps.OperationDirect,
+		},
+		parameters.ParameterEyeLeftX: {
+			Inputs:    parameterdeps.Inputs{Eye: parameterdeps.EyeFieldsOf(parameterdeps.EyeFieldLeftGazeX)},
+			Operation: parameterdeps.OperationDirect,
+		},
+		parameters.ParameterEyeRightX: {
+			Inputs:    parameterdeps.Inputs{Eye: parameterdeps.EyeFieldsOf(parameterdeps.EyeFieldRightGazeX)},
+			Operation: parameterdeps.OperationDirect,
+		},
+	}
+	lookup := func(id parameters.ParameterID) (parameterdeps.DependencyPlan, bool) {
+		if id == parameters.ParameterEyeLid {
+			return parameterdeps.DependencyPlan{DependsOn: dependencies, Operation: parameterdeps.OperationAverage}, true
+		}
+		plan, ok := leafPlans[id]
+		return plan, ok
+	}
+
+	first, err := compileWithPlans([]parameters.ParameterID{parameters.ParameterEyeLid}, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dependencies[0] = parameters.ParameterEyeLeftX
+	dependencies[1] = parameters.ParameterEyeRightX
+	second, err := compileWithPlans([]parameters.ParameterID{parameters.ParameterEyeLid}, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	frame := processing.CanonicalFrame{Eye: trackingmodel.EyeSample{
+		Valid:         trackingmodel.EyeValidLeftGaze | trackingmodel.EyeValidRightGaze | trackingmodel.EyeValidLeftOpenness | trackingmodel.EyeValidRightOpenness,
+		LeftGaze:      trackingmodel.Vec2{X: 0.125},
+		RightGaze:     trackingmodel.Vec2{X: 0.375},
+		LeftOpenness:  0.25,
+		RightOpenness: 0.75,
+	}}
+	if got, ok := first.Evaluate(frame).Float(parameters.ParameterEyeLid); !ok || got != 0.5 {
+		t.Fatalf("first compiled plan after backing-slice reuse = %v,%t, want 0.5,true", got, ok)
+	}
+	if got, ok := second.Evaluate(frame).Float(parameters.ParameterEyeLid); !ok || got != 0.25 {
+		t.Fatalf("second compiled plan from reused backing slice = %v,%t, want 0.25,true", got, ok)
+	}
+}
+
 func TestCompileRejectsUnknownParameter(t *testing.T) {
 	_, err := Compile([]parameters.ParameterID{parameters.ParameterCount})
 	if !errors.Is(err, ErrUnknownParameter) {
@@ -201,6 +259,36 @@ func TestCompileRejectsMalformedPlans(t *testing.T) {
 			requested: parameters.ParameterEyeLeftX,
 			plans: map[parameters.ParameterID]parameterdeps.DependencyPlan{
 				parameters.ParameterEyeLeftX: {Inputs: twoEyes, Operation: parameterdeps.OperationDirect},
+			},
+			want: ErrInvalidOperation,
+		},
+		{
+			name:      "direct float parameter operand",
+			requested: parameters.ParameterEyeLid,
+			plans: map[parameters.ParameterID]parameterdeps.DependencyPlan{
+				parameters.ParameterEyeLid: {
+					DependsOn: []parameters.ParameterID{parameters.ParameterEyeLidLeft},
+					Operation: parameterdeps.OperationDirect,
+				},
+				parameters.ParameterEyeLidLeft: {
+					Inputs:    validEye,
+					Operation: parameterdeps.OperationDirect,
+				},
+			},
+			want: ErrInvalidOperation,
+		},
+		{
+			name:      "direct bool parameter operand",
+			requested: parameters.ParameterExpressionTrackingActive,
+			plans: map[parameters.ParameterID]parameterdeps.DependencyPlan{
+				parameters.ParameterExpressionTrackingActive: {
+					DependsOn: []parameters.ParameterID{parameters.ParameterEyeTrackingActive},
+					Operation: parameterdeps.OperationDirect,
+				},
+				parameters.ParameterEyeTrackingActive: {
+					Inputs:    active,
+					Operation: parameterdeps.OperationDirect,
+				},
 			},
 			want: ErrInvalidOperation,
 		},

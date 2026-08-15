@@ -114,8 +114,8 @@ func TestManualRoutingSelectsAvailableAndNeverFallsBack(t *testing.T) {
 	want := MergedFrame{
 		Generation:     3,
 		Sequence:       4,
-		UpdatedAtNS:    20,
-		EyeUpdatedAtNS: 20,
+		UpdatedAtNS:    22,
+		EyeUpdatedAtNS: 21,
 		Capabilities:   trackingmodel.CapabilityEye,
 		Eye: trackingmodel.EyeSample{
 			Valid:        trackingmodel.EyeValidLeftOpenness,
@@ -138,8 +138,8 @@ func TestManualRoutingSelectsAvailableAndNeverFallsBack(t *testing.T) {
 	want = MergedFrame{
 		Generation:            3,
 		Sequence:              5,
-		UpdatedAtNS:           20,
-		ExpressionUpdatedAtNS: 20,
+		UpdatedAtNS:           22,
+		ExpressionUpdatedAtNS: 22,
 		Capabilities:          trackingmodel.CapabilityExpression,
 		Expressions:           expressionFrame(0, trackingmodel.ExpressionJawOpen, 0.75).Expressions,
 		ExpressionSourceID:    "expression.plugin",
@@ -267,8 +267,8 @@ func TestAutoRoutingFirstArrivalRemainsSticky(t *testing.T) {
 	want := MergedFrame{
 		Generation:     1,
 		Sequence:       2,
-		UpdatedAtNS:    30,
-		EyeUpdatedAtNS: 30,
+		UpdatedAtNS:    31,
+		EyeUpdatedAtNS: 31,
 		Capabilities:   trackingmodel.CapabilityEye,
 		Eye: trackingmodel.EyeSample{
 			Valid:        trackingmodel.EyeValidLeftOpenness,
@@ -321,8 +321,8 @@ func TestAutoRoutingValidityDropoutDoesNotSwitchSource(t *testing.T) {
 	want := MergedFrame{
 		Generation:     1,
 		Sequence:       3,
-		UpdatedAtNS:    50,
-		EyeUpdatedAtNS: 50,
+		UpdatedAtNS:    53,
+		EyeUpdatedAtNS: 53,
 		Capabilities:   trackingmodel.CapabilityEye,
 		EyeSourceID:    "vendor.z",
 	}
@@ -387,7 +387,7 @@ func TestRemoveSourceManualSelectionBecomesUnavailableWithoutFallback(t *testing
 	before := latestMerged(t, s)
 
 	s.RemoveSource("manual.eye")
-	want := MergedFrame{Generation: 1, Sequence: before.Sequence + 1, UpdatedAtNS: 70}
+	want := MergedFrame{Generation: 1, Sequence: before.Sequence + 1, UpdatedAtNS: 72}
 	if got := latestMerged(t, s); got != want {
 		t.Fatalf("manual selected removal merged = %#v, want %#v", got, want)
 	}

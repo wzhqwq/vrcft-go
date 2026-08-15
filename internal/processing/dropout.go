@@ -16,7 +16,7 @@ func (state *channelState) recordFresh(value float32, atNS int64, policy Dropout
 }
 
 func (state *channelState) recordUnavailable(atNS int64) {
-	if state.seen {
+	if state.seen && atNS < state.dropoutStartNS {
 		state.dropoutStartNS = atNS
 	}
 }

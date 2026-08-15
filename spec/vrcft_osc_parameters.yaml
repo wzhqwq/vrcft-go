@@ -2162,5 +2162,5 @@ tracking_active_parameters:
   supported_encodings:
   - bool
   semantics:
-    'true': expression/lip tracking is active
-    'false': expression/lip tracking is inactive
+    'true': lip tracking is active
+    'false': lip tracking is inactive

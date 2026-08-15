@@ -217,6 +217,79 @@ func TestRepresentativeDerivedPlans(t *testing.T) {
 	}
 }
 
+func TestSignedPairPlansPreserveExactDependencyOrder(t *testing.T) {
+	tests := []struct {
+		name      string
+		id        parameters.ParameterID
+		dependsOn []parameters.ParameterID
+	}{
+		{
+			name: "brow expression right",
+			id:   parameters.ParameterBrowExpressionRight,
+			dependsOn: []parameters.ParameterID{
+				parameters.ParameterBrowInnerUpRight,
+				parameters.ParameterBrowOuterUpRight,
+				parameters.ParameterBrowDownRight,
+			},
+		},
+		{
+			name: "brow expression left",
+			id:   parameters.ParameterBrowExpressionLeft,
+			dependsOn: []parameters.ParameterID{
+				parameters.ParameterBrowInnerUpLeft,
+				parameters.ParameterBrowOuterUpLeft,
+				parameters.ParameterBrowDownLeft,
+			},
+		},
+		{
+			name: "smile frown right",
+			id:   parameters.ParameterSmileFrownRight,
+			dependsOn: []parameters.ParameterID{
+				parameters.ParameterMouthCornerPullRight,
+				parameters.ParameterMouthCornerSlantRight,
+				parameters.ParameterMouthFrownRight,
+			},
+		},
+		{
+			name: "smile frown left",
+			id:   parameters.ParameterSmileFrownLeft,
+			dependsOn: []parameters.ParameterID{
+				parameters.ParameterMouthCornerPullLeft,
+				parameters.ParameterMouthCornerSlantLeft,
+				parameters.ParameterMouthFrownLeft,
+			},
+		},
+		{
+			name: "smile sad right",
+			id:   parameters.ParameterSmileSadRight,
+			dependsOn: []parameters.ParameterID{
+				parameters.ParameterMouthSmileRight,
+				parameters.ParameterMouthSadRight,
+			},
+		},
+		{
+			name: "smile sad left",
+			id:   parameters.ParameterSmileSadLeft,
+			dependsOn: []parameters.ParameterID{
+				parameters.ParameterMouthSmileLeft,
+				parameters.ParameterMouthSadLeft,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, ok := Plan(tt.id)
+			if !ok {
+				t.Fatal("plan missing")
+			}
+			if plan.Operation != OperationSignedPair || !plan.Inputs.IsZero() || !equalIDs(plan.DependsOn, tt.dependsOn) {
+				t.Fatalf("Plan(%d) = %+v, want SignedPair dependencies %v in exact order", tt.id, plan, tt.dependsOn)
+			}
+		})
+	}
+}
+
 func TestResolveLeavesRepresentativeDerivedPlan(t *testing.T) {
 	got, err := ResolveLeaves(parameters.ParameterSmileFrownRight)
 	if err != nil {

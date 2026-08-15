@@ -170,6 +170,11 @@ func validateInstruction(definition parameters.ParameterDefinition, operation pa
 		if len(operands) != 1 {
 			return fmt.Errorf("%w: direct requires exactly one operand, got %d", ErrInvalidOperation, len(operands))
 		}
+		switch operands[0].kind {
+		case operandEye, operandExpression, operandActive:
+		default:
+			return fmt.Errorf("%w: direct requires a primitive operand", ErrInvalidOperation)
+		}
 	case parameterdeps.OperationAverage, parameterdeps.OperationMax, parameterdeps.OperationSumClamp:
 		if len(operands) == 0 {
 			return fmt.Errorf("%w: operation %d requires at least one operand", ErrInvalidOperation, operation)

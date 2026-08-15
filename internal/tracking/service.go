@@ -3,6 +3,7 @@ package tracking
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -147,10 +148,13 @@ func (s *service) Submit(pluginID string, generation uint64, frame trackingmodel
 	if canonical.SourceClockNS != 0 {
 		lastSourceClockNS = canonical.SourceClockNS
 	}
+	if s.lastHostTimeNS == math.MaxInt64 {
+		return s.rejectLocked(pluginID, generation, RejectionTimestampRegression, ErrTimestampRegression)
+	}
 	selected := pluginID == s.eyeSourceID || pluginID == s.expressionSourceID || pluginID == s.lipSourceID
 	s.sources[pluginID] = sourceState{
 		frame:             canonical,
-		receivedAtNS:      s.nextTimeLocked(),
+		receivedAtNS:      s.nextReceiptTimeLocked(),
 		lastSequence:      canonical.Sequence,
 		lastTimestampNS:   lastTimestampNS,
 		lastSourceClockNS: lastSourceClockNS,
@@ -173,6 +177,18 @@ func (s *service) LatestMerged() (MergedFrame, bool) {
 func (s *service) nextTimeLocked() int64 {
 	now := s.now()
 	if now < s.lastHostTimeNS {
+		return s.lastHostTimeNS
+	}
+	s.lastHostTimeNS = now
+	return now
+}
+
+func (s *service) nextReceiptTimeLocked() int64 {
+	now := s.now()
+	if now <= s.lastHostTimeNS {
+		if s.lastHostTimeNS < math.MaxInt64 {
+			s.lastHostTimeNS++
+		}
 		return s.lastHostTimeNS
 	}
 	s.lastHostTimeNS = now

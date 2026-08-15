@@ -82,6 +82,30 @@ func TestDropoutUnavailableSnapshotTimestampStartsDecayBeforeProcessing(t *testi
 	}
 }
 
+func TestDropoutSourceLossCannotResurrectFinalNeutral(t *testing.T) {
+	pipeline := mustPipeline(t, dropoutTestConfig())
+	stale := eyeFrame(1, 1, 100, "eye", 0.8)
+	if _, err := pipeline.ProcessAt(stale, 100); err != nil {
+		t.Fatal(err)
+	}
+	neutral, err := pipeline.ProcessAt(stale, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if neutral.Eye.Valid&trackingmodel.EyeValidLeftOpenness == 0 || neutral.Eye.LeftOpenness != 0 {
+		t.Fatalf("pre-removal output = %#v; want valid final neutral", neutral)
+	}
+
+	removed := tracking.MergedFrame{Generation: 1, Sequence: 2, UpdatedAtNS: 200}
+	got, err := pipeline.ProcessAt(removed, 201)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Eye.Valid&trackingmodel.EyeValidLeftOpenness == 0 || got.Eye.LeftOpenness != 0 {
+		t.Fatalf("post-removal output = %#v; want final neutral to remain valid and zero", got)
+	}
+}
+
 func TestDropoutFreshRecoveryExitsNeutralState(t *testing.T) {
 	pipeline := mustPipeline(t, dropoutTestConfig())
 	stale := eyeFrame(1, 1, 100, "eye", 0.8)

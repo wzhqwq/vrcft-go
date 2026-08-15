@@ -139,8 +139,6 @@ func (p *Pipeline) classifyInput(frame tracking.MergedFrame, nowNS int64) (newIn
 		if !saturatedFreshnessNonregressing(previous, frame) {
 			return false, false, fmt.Errorf("saturated revision freshness regressed: %w", ErrRevisionConflict)
 		}
-	} else if previous.Sequence == math.MaxUint64 {
-		return false, false, fmt.Errorf("revision advanced beyond saturation: %w", ErrRevisionConflict)
 	}
 
 	if nowNS <= p.lastNowNS {

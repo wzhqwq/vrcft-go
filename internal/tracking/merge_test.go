@@ -1,6 +1,7 @@
 package tracking
 
 import (
+	"errors"
 	"math"
 	"testing"
 
@@ -18,9 +19,9 @@ func TestServiceMergesGroupsFromDifferentSources(t *testing.T) {
 	want := MergedFrame{
 		Generation:            2,
 		Sequence:              3,
-		UpdatedAtNS:           10,
-		EyeUpdatedAtNS:        10,
-		ExpressionUpdatedAtNS: 10,
+		UpdatedAtNS:           12,
+		EyeUpdatedAtNS:        11,
+		ExpressionUpdatedAtNS: 12,
 		Capabilities:          trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression,
 		Eye: trackingmodel.EyeSample{
 			Valid:        trackingmodel.EyeValidLeftOpenness,
@@ -157,11 +158,90 @@ func TestMergedSequenceClampsRegressingHostClock(t *testing.T) {
 	}
 	third := latestMerged(t, s)
 
-	if first.UpdatedAtNS != 100 || second.UpdatedAtNS != 100 || third.UpdatedAtNS != 100 {
-		t.Fatalf("UpdatedAtNS values = (%d, %d, %d), want (100, 100, 100)", first.UpdatedAtNS, second.UpdatedAtNS, third.UpdatedAtNS)
+	if first.UpdatedAtNS != 100 || second.UpdatedAtNS != 101 || third.UpdatedAtNS != 101 {
+		t.Fatalf("UpdatedAtNS values = (%d, %d, %d), want (100, 101, 101)", first.UpdatedAtNS, second.UpdatedAtNS, third.UpdatedAtNS)
 	}
 	if first.Sequence != 1 || second.Sequence != 2 || third.Sequence != 3 {
 		t.Fatalf("Sequence values = (%d, %d, %d), want (1, 2, 3)", first.Sequence, second.Sequence, third.Sequence)
+	}
+}
+
+func TestSelectedGroupFreshnessAdvancesSafelyToHostTimeSaturation(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float32
+	}{
+		{name: "changed value", value: 0.75},
+		{name: "same value", value: 0.5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const start = math.MaxInt64 - 3
+			s := newServiceWithClock(func() int64 { return start })
+			mustSetGeneration(t, s, 1)
+
+			wantFreshness := []int64{math.MaxInt64 - 2, math.MaxInt64 - 1, math.MaxInt64}
+			for index, want := range wantFreshness {
+				mustSubmit(t, s, "eye.plugin", 1, eyeFrame(uint64(index+1), 0.5))
+				got := latestMerged(t, s)
+				if got.EyeUpdatedAtNS != want || got.UpdatedAtNS != want {
+					t.Fatalf("update %d timestamps = (%d group, %d merged), want (%d, %d)", index+1, got.EyeUpdatedAtNS, got.UpdatedAtNS, want, want)
+				}
+			}
+
+			beforeSource := s.sources["eye.plugin"]
+			beforeMerged := latestMerged(t, s)
+			beforeSequence := s.mergedSequence
+			beforeHostTime := s.lastHostTimeNS
+			beforeAccepted := s.acceptedFrames
+			beforeRejected := s.rejectedFrames
+			beforeRejections := s.rejected
+			beforeLastRejection := s.lastRejection
+			err := s.Submit("eye.plugin", 1, eyeFrame(4, tt.value))
+			if !errors.Is(err, ErrTimestampRegression) {
+				t.Fatalf("saturated Submit() error = %v, want ErrTimestampRegression", err)
+			}
+
+			if got := s.sources["eye.plugin"]; got != beforeSource {
+				t.Fatalf("source after saturated rejection = %#v, want unchanged %#v", got, beforeSource)
+			}
+			if got := latestMerged(t, s); got != beforeMerged || s.mergedSequence != beforeSequence || s.lastHostTimeNS != beforeHostTime {
+				t.Fatalf("merged state after saturated rejection = %#v sequence %d host time %d, want unchanged %#v sequence %d host time %d", got, s.mergedSequence, s.lastHostTimeNS, beforeMerged, beforeSequence, beforeHostTime)
+			}
+			if s.acceptedFrames != beforeAccepted {
+				t.Fatalf("AcceptedFrames = %d, want unchanged %d", s.acceptedFrames, beforeAccepted)
+			}
+			wantRejections := beforeRejections
+			wantRejections.TimestampRegression++
+			if s.rejectedFrames != beforeRejected+1 || s.rejected != wantRejections {
+				t.Fatalf("rejection diagnostics = (%d, %+v), want one TimestampRegression after (%d, %+v)", s.rejectedFrames, s.rejected, beforeRejected, beforeRejections)
+			}
+			wantLast := Rejection{PluginID: "eye.plugin", Generation: 1, Reason: RejectionTimestampRegression}
+			if s.lastRejection != wantLast || s.lastRejection == beforeLastRejection {
+				t.Fatalf("LastRejection = %+v, want %+v", s.lastRejection, wantLast)
+			}
+		})
+	}
+}
+
+func TestReceiptTimeSaturationRejectsBeforeInitialSelection(t *testing.T) {
+	s := newServiceWithClock(func() int64 { return math.MaxInt64 })
+	mustSetGeneration(t, s, 1)
+	before := latestMerged(t, s)
+
+	err := s.Submit("eye.plugin", 1, eyeFrame(1, 0.5))
+	if !errors.Is(err, ErrTimestampRegression) {
+		t.Fatalf("saturated initial Submit() error = %v, want ErrTimestampRegression", err)
+	}
+	if len(s.sources) != 0 || s.eyeSourceID != "" {
+		t.Fatalf("saturated initial rejection retained source state: sources=%#v EyeSourceID=%q", s.sources, s.eyeSourceID)
+	}
+	if got := latestMerged(t, s); got != before || s.mergedSequence != before.Sequence || s.lastHostTimeNS != math.MaxInt64 {
+		t.Fatalf("state after saturated initial rejection = %#v sequence=%d host=%d, want unchanged %#v", got, s.mergedSequence, s.lastHostTimeNS, before)
+	}
+	if s.acceptedFrames != 0 || s.rejectedFrames != 1 || s.rejected != (RejectionCounts{TimestampRegression: 1}) {
+		t.Fatalf("diagnostics after saturated initial rejection = accepted %d rejected %d counts %+v", s.acceptedFrames, s.rejectedFrames, s.rejected)
 	}
 }
 
