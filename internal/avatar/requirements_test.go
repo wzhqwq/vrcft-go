@@ -167,6 +167,27 @@ func TestPlanSubscriptionForUsesWholeGroupForActiveOnlyRequirements(t *testing.T
 	}
 }
 
+func TestPlanSubscriptionForIsolatesLipActiveRequirement(t *testing.T) {
+	inputs := parameterdeps.Inputs{Active: parameterdeps.ActiveStatesOf(parameterdeps.ActiveStateLipTracking)}
+	required := requirementsFromInputs(inputs)
+	if required.capabilities != trackingmodel.CapabilityLip || required.eye != 0 || !required.expressions.IsZero() {
+		t.Fatalf("requirementsFromInputs(lip active) = %#v, want only CapabilityLip with zero detail", required)
+	}
+
+	plan := &Plan{generation: 11, status: StatusReady, inputs: inputs, required: required}
+	subscription, ok := plan.SubscriptionFor(trackingmodel.CapabilityLip)
+	if !ok || subscription.Generation != 11 || subscription.Capabilities != trackingmodel.CapabilityLip || subscription.Eye != 0 || !subscription.Expressions.IsZero() {
+		t.Fatalf("lip active SubscriptionFor() = %#v, %t", subscription, ok)
+	}
+	if err := subscription.Validate(true); err != nil {
+		t.Fatalf("lip active subscription invalid: %v", err)
+	}
+
+	if subscription, ok := plan.SubscriptionFor(trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression); ok || subscription != (pluginapi.Subscription{}) {
+		t.Fatalf("unrelated capability subscription = %#v, %t; want zero, false", subscription, ok)
+	}
+}
+
 func TestPlanOwnsConstructorInputsAndAccessorResults(t *testing.T) {
 	ids := []parameters.ParameterID{parameters.ParameterEyeLeftX}
 	catalog := &osc.Catalog{
