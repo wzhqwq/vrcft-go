@@ -68,29 +68,72 @@ type Catalog struct {
 	Outputs    []outputBinding
 }
 
+func (catalog *Catalog) Clone() *Catalog {
+	if catalog == nil {
+		return nil
+	}
+	clone := *catalog
+	if catalog.Bindings != nil {
+		clone.Bindings = make(map[parameters.ParameterID]ParameterBinding, len(catalog.Bindings))
+		for id, binding := range catalog.Bindings {
+			clonedBinding := binding
+			clonedBinding.Direct = append([]Endpoint(nil), binding.Direct...)
+			if binding.Binary != nil {
+				clonedBinding.Binary = make([]BinaryBinding, len(binding.Binary))
+				for index, binaryBinding := range binding.Binary {
+					clonedBinary := binaryBinding
+					clonedBinary.Bits = append([]BinaryBit(nil), binaryBinding.Bits...)
+					if binaryBinding.Negative != nil {
+						negative := *binaryBinding.Negative
+						clonedBinary.Negative = &negative
+					}
+					clonedBinding.Binary[index] = clonedBinary
+				}
+			}
+			clone.Bindings[id] = clonedBinding
+		}
+	}
+	clone.RawMethods = append([]Endpoint(nil), catalog.RawMethods...)
+	clone.Outputs = append([]outputBinding(nil), catalog.Outputs...)
+	return &clone
+}
+
 func BuildCatalog(root *QueryNode, specs *ParameterCatalog, generation uint64) (*Catalog, error) {
 	if root == nil {
 		return nil, fmt.Errorf("nil OSCQuery root")
 	}
+	endpoints := make([]Endpoint, 0)
+	for _, method := range root.FlattenMethods() {
+		if isWritable(method) && supportedParameterType(method.Type) {
+			endpoints = append(endpoints, Endpoint{Address: method.FullPath, Type: method.Type})
+		}
+	}
+	return BuildCatalogFromEndpoints(endpoints, specs, generation)
+}
+
+func BuildCatalogFromEndpoints(endpoints []Endpoint, specs *ParameterCatalog, generation uint64) (*Catalog, error) {
 	if specs == nil {
 		return nil, fmt.Errorf("nil parameter catalog")
+	}
+	endpoints = append([]Endpoint(nil), endpoints...)
+	for _, endpoint := range endpoints {
+		if !validAddress(endpoint.Address) {
+			return nil, fmt.Errorf("invalid OSC endpoint address %q", endpoint.Address)
+		}
+		if !supportedParameterType(endpoint.Type) {
+			return nil, fmt.Errorf("%w: endpoint type %q", ErrUnsupportedType, endpoint.Type)
+		}
 	}
 
 	catalog := &Catalog{
 		Generation: generation,
-		UpdatedAt:  time.Now(),
 		Bindings:   make(map[parameters.ParameterID]ParameterBinding),
+		RawMethods: append([]Endpoint(nil), endpoints...),
 	}
 	groups := make(map[parameters.ParameterID]map[string]*binaryGroup)
 
-	for _, method := range root.FlattenMethods() {
-		if !isWritable(method) || !supportedParameterType(method.Type) {
-			continue
-		}
-		endpoint := Endpoint{Address: method.FullPath, Type: method.Type}
-		catalog.RawMethods = append(catalog.RawMethods, endpoint)
-
-		if match, ok := specs.ResolveAddress(method.FullPath); ok {
+	for _, endpoint := range endpoints {
+		if match, ok := specs.ResolveAddress(endpoint.Address); ok {
 			spec, exists := specs.Spec(match.ID)
 			if exists && spec.SupportsDirect() {
 				binding := catalog.Bindings[match.ID]
@@ -101,7 +144,7 @@ func BuildCatalog(root *QueryNode, specs *ParameterCatalog, generation uint64) (
 			continue
 		}
 
-		match, ok := specs.ResolveBinaryAddress(method.FullPath)
+		match, ok := specs.ResolveBinaryAddress(endpoint.Address)
 		if !ok {
 			continue
 		}

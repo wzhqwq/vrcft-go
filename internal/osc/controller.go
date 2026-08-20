@@ -10,8 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/wzhqwq/vrcft-go/internal/parameters"
 )
 
 type ControllerConfig struct {
@@ -256,18 +254,7 @@ func (c *Controller) Close(ctx context.Context) error {
 func (c *Controller) Events() <-chan ControllerEvent { return c.events }
 
 func (c *Controller) Catalog() *Catalog {
-	catalog := c.catalog.Load()
-	if catalog == nil {
-		return nil
-	}
-	copyCatalog := *catalog
-	copyCatalog.Bindings = make(map[parameters.ParameterID]ParameterBinding, len(catalog.Bindings))
-	for key, binding := range catalog.Bindings {
-		copyCatalog.Bindings[key] = binding
-	}
-	copyCatalog.RawMethods = append([]Endpoint(nil), catalog.RawMethods...)
-	copyCatalog.Outputs = append([]outputBinding(nil), catalog.Outputs...)
-	return &copyCatalog
+	return c.catalog.Load().Clone()
 }
 
 func (c *Controller) AvatarID() string {
