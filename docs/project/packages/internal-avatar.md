@@ -91,11 +91,11 @@ Activation is a low-frequency synchronous control path. File and decoded-field l
 
 ## Security boundaries
 
-Avatar IDs reject traversal and Windows-reserved path characters. Candidate paths are absolute/clean, contained beneath the OSC root, and every component is inspected to reject links/reparse points, irregular files, and non-regular targets. Fallback is an explicit regular non-link file and may be outside the root. Endpoint validation requires bounded absolute addresses and supported scalar types; unrecognized but valid non-VRCFT endpoints do not become bindings.
+Avatar IDs reject traversal and Windows-reserved path characters. Candidate paths are absolute/clean and contained beneath the OSC root; for each candidate, components beginning with that candidate's relative path under `OSCRoot` are inspected to reject links/reparse points, irregular files, and non-regular targets. The OSC root itself is not inspected as a candidate component. Fallback is an explicit regular non-link file and may be outside the root. Endpoint validation requires bounded absolute addresses and supported scalar types; unrecognized but valid non-VRCFT endpoints do not become bindings.
 
 ## Required tests
 
-Package and race checks cover bounded JSON decoding, input-only endpoint handling, deterministic discovery, traversal/link rejection, missing-only fallback, endpoint/OSCQuery compiler parity, catalog deep-clone ownership, ready and fail-closed generation transitions, generation exhaustion, concurrent activation, requirement masks, capability projection, immutable accessors, and an external evaluator-to-`osc.ValueSource` compatibility fixture. The named fallback and subscription tests are catalog evidence for this package.
+Avatar package and race checks cover bounded JSON decoding, input-only endpoint handling, deterministic discovery, traversal/link rejection, missing-only fallback, ready and fail-closed generation transitions, generation exhaustion, concurrent activation, requirement masks, capability projection, plan-accessor ownership, and an external evaluator-to-`osc.ValueSource` compatibility fixture. `internal/osc` catalog and race checks cover endpoint/OSCQuery compiler parity and catalog deep-clone ownership. The named fallback and subscription tests are catalog evidence for this package.
 
 ## Known gaps
 
