@@ -79,6 +79,32 @@ func TestReadConfigRejectsInvalidInputs(t *testing.T) {
 	}
 }
 
+func TestReadConfigRejectsNullKnownFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "root name", content: `{"id":"avtr_demo","name":null,"parameters":[]}`},
+		{name: "parameter entry", content: `{"id":"avtr_demo","parameters":[null]}`},
+		{name: "parameter name", content: `{"id":"avtr_demo","parameters":[{"name":null}]}`},
+		{name: "input object", content: `{"id":"avtr_demo","parameters":[{"input":null}]}`},
+		{name: "output object", content: `{"id":"avtr_demo","parameters":[{"output":null}]}`},
+		{name: "input address", content: `{"id":"avtr_demo","parameters":[{"input":{"address":null,"type":"Float"}}]}`},
+		{name: "input type", content: `{"id":"avtr_demo","parameters":[{"input":{"address":"/value","type":null}}]}`},
+		{name: "output address", content: `{"id":"avtr_demo","parameters":[{"output":{"address":null,"type":"Float"}}]}`},
+		{name: "output type", content: `{"id":"avtr_demo","parameters":[{"output":{"address":"/value","type":null}}]}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := readConfig(writeConfig(t, test.content))
+			if !errors.Is(err, ErrInvalidJSON) {
+				t.Fatalf("error = %v, want ErrInvalidJSON", err)
+			}
+		})
+	}
+}
+
 func TestReadConfigEnforcesBounds(t *testing.T) {
 	t.Run("exact avatar ID limit", func(t *testing.T) {
 		id := strings.Repeat("a", maxAvatarIDBytes)
