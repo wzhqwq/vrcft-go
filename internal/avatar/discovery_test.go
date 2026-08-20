@@ -76,6 +76,20 @@ func TestValidateAvatarIDRejectsUnsafeValues(t *testing.T) {
 	}
 }
 
+func TestValidateAvatarIDRejectsWindowsReservedCharacters(t *testing.T) {
+	for _, avatarID := range []string{"<", ">", ":", "\"", "/", "\\", "|", "?", "*"} {
+		t.Run(avatarID, func(t *testing.T) {
+			if err := validateAvatarID(avatarID); !errors.Is(err, ErrInvalidAvatarID) {
+				t.Fatalf("validateAvatarID(%q) error = %v, want ErrInvalidAvatarID", avatarID, err)
+			}
+		})
+	}
+
+	if err := validateAvatarID("local_test_avatar"); err != nil {
+		t.Fatalf("validateAvatarID(local test ID) error = %v", err)
+	}
+}
+
 func TestResolveConfigUsesFallbackOnlyWhenAvatarMissing(t *testing.T) {
 	avatarID := "avtr_demo"
 	cases := []struct {
@@ -174,6 +188,84 @@ func TestResolveConfigUsesFallbackOnlyWhenAvatarMissing(t *testing.T) {
 				t.Fatalf("resolved path = %q, want %q", resolved.path, mustAbsoluteCleanPath(t, fallback))
 			}
 		})
+	}
+}
+
+func TestResolveConfigRejectsLinkedDirectoryComponents(t *testing.T) {
+	const avatarID = "avtr_demo"
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, root string)
+	}{
+		{
+			name: "linked user directory",
+			setup: func(t *testing.T, root string) {
+				target := filepath.Join(t.TempDir(), "external-user")
+				writeFile(t, filepath.Join(target, "Avatars", avatarID+".json"))
+				if err := os.MkdirAll(root, 0o755); err != nil {
+					t.Fatalf("MkdirAll(%q): %v", root, err)
+				}
+				if err := os.Symlink(target, filepath.Join(root, "usr_a")); err != nil {
+					if isSymlinkPrivilegeError(err) {
+						t.Skipf("symlink creation needs unavailable OS privilege: %v", err)
+					}
+					t.Fatalf("Symlink(%q, user directory): %v", target, err)
+				}
+			},
+		},
+		{
+			name: "linked Avatars directory",
+			setup: func(t *testing.T, root string) {
+				target := filepath.Join(t.TempDir(), "external-avatars")
+				writeFile(t, filepath.Join(target, avatarID+".json"))
+				userDir := filepath.Join(root, "usr_a")
+				if err := os.MkdirAll(userDir, 0o755); err != nil {
+					t.Fatalf("MkdirAll(%q): %v", userDir, err)
+				}
+				if err := os.Symlink(target, filepath.Join(userDir, "Avatars")); err != nil {
+					if isSymlinkPrivilegeError(err) {
+						t.Skipf("symlink creation needs unavailable OS privilege: %v", err)
+					}
+					t.Fatalf("Symlink(%q, Avatars directory): %v", target, err)
+				}
+			},
+		},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "OSC")
+			test.setup(t, root)
+			fallback := writeFile(t, filepath.Join(t.TempDir(), "fallback.json"))
+
+			_, err := resolveConfig(root, fallback, avatarID)
+			if !errors.Is(err, ErrInvalidConfigPath) {
+				t.Fatalf("resolveConfig() error = %v, want ErrInvalidConfigPath without fallback", err)
+			}
+		})
+	}
+}
+
+func TestConfigCandidateOrderingPreservesTimeRange(t *testing.T) {
+	latest := configCandidate{
+		path:    "z.json",
+		modTime: time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC),
+	}
+	earliest := configCandidate{
+		path:    "a.json",
+		modTime: time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC),
+	}
+	if !configCandidateComesBefore(latest, earliest) {
+		t.Fatal("latest representable time must sort before earliest representable time")
+	}
+	if configCandidateComesBefore(earliest, latest) {
+		t.Fatal("earliest representable time must not sort before latest representable time")
+	}
+
+	tie := latest
+	tie.path = "a.json"
+	if !configCandidateComesBefore(tie, latest) {
+		t.Fatal("equal timestamps must sort by ascending path")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 type Source uint8
@@ -24,14 +25,14 @@ type resolvedConfig struct {
 
 type configCandidate struct {
 	path    string
-	modTime int64
+	modTime time.Time
 }
 
 func validateAvatarID(avatarID string) error {
 	if avatarID == "" || len(avatarID) > maxAvatarIDBytes || avatarID == "." || avatarID == ".." {
 		return fmt.Errorf("%w: %q", ErrInvalidAvatarID, avatarID)
 	}
-	if strings.ContainsAny(avatarID, "/\\:\x00*?[]") {
+	if strings.ContainsAny(avatarID, "<>:\"/\\|?*[]\x00") {
 		return fmt.Errorf("%w: unsafe character in %q", ErrInvalidAvatarID, avatarID)
 	}
 	return nil
@@ -64,22 +65,14 @@ func resolveConfig(oscRoot, fallbackPath, avatarID string) (resolvedConfig, erro
 		if !isWithinRoot(root, candidate) {
 			return resolvedConfig{}, fmt.Errorf("%w: candidate %q escapes OSC root %q", ErrInvalidConfigPath, candidate, root)
 		}
-		info, err := os.Lstat(candidate)
+		info, err := inspectCandidate(root, candidate)
 		if err != nil {
 			return resolvedConfig{}, fmt.Errorf("%w: inspect candidate %q: %v", ErrInvalidConfigPath, candidate, err)
 		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return resolvedConfig{}, fmt.Errorf("%w: candidate %q is not a regular non-link file", ErrInvalidConfigPath, candidate)
-		}
-		candidates = append(candidates, configCandidate{path: candidate, modTime: info.ModTime().UnixNano()})
+		candidates = append(candidates, configCandidate{path: candidate, modTime: info.ModTime()})
 	}
 
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].modTime != candidates[j].modTime {
-			return candidates[i].modTime > candidates[j].modTime
-		}
-		return candidates[i].path < candidates[j].path
-	})
+	sort.Slice(candidates, func(i, j int) bool { return configCandidateComesBefore(candidates[i], candidates[j]) })
 	return resolvedConfig{
 		path:           candidates[0].path,
 		source:         SourceAvatarConfig,
@@ -122,4 +115,40 @@ func isWithinRoot(root, path string) bool {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func inspectCandidate(root, candidate string) (os.FileInfo, error) {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	current := root
+	for index, part := range parts {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			return nil, fmt.Errorf("path component %q is a link or reparse point", current)
+		}
+		if index == len(parts)-1 {
+			if !info.Mode().IsRegular() {
+				return nil, fmt.Errorf("path component %q is not a regular file", current)
+			}
+			return info, nil
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("path component %q is not a directory", current)
+		}
+	}
+	return nil, fmt.Errorf("candidate has no path components")
+}
+
+func configCandidateComesBefore(first, second configCandidate) bool {
+	if !first.modTime.Equal(second.modTime) {
+		return first.modTime.After(second.modTime)
+	}
+	return first.path < second.path
 }
