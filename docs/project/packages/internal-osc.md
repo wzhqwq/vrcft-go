@@ -32,15 +32,15 @@ checks:
 ## Purpose
 Integrate VRChat OSC and OSCQuery with compiled VRCFT output bindings.
 ## Responsibilities
-Discover VRChat, receive `/avatar/change`, query paths, compile bindings, suppress changes, encode bundles, and send UDP.
+Discover VRChat, receive `/avatar/change`, query paths, compile bindings from OSCQuery or validated endpoints, suppress changes, encode bundles, and send UDP.
 ## Non-responsibilities
-Avatar JSON loading, tracking merge, and parameter evaluation belong upstream.
+Avatar JSON discovery/decoding and avatar-plan construction belong to `internal/avatar`; tracking merge and parameter evaluation belong upstream.
 ## Current implementation
-Discovery, OSCQuery, packet parsing, compiled scalar sending, retries, and benchmarks are implemented.
+Discovery, OSCQuery, packet parsing, compiled scalar sending, retries, and benchmarks are implemented. `BuildCatalog` flattens writable supported OSCQuery methods and delegates to `BuildCatalogFromEndpoints`, so OSCQuery and avatar JSON inputs use one deterministic binding compiler. Catalogs deep-clone bindings, raw endpoints, and output plans for ownership-safe consumers.
 ## Public/internal interfaces
 `OSCService`, `Controller`, `ParameterSender`, `ValueSource`, and packet APIs.
 ## Owned data
-VRChat connection state, query catalog, send plan, change cache, and packet buffers.
+VRChat connection state, query catalog, send plan, change cache, packet buffers, and compiled output-binding semantics.
 ## Dependencies
 Depends on generated parameter definitions.
 ## Concurrency and lifecycle
@@ -54,6 +54,6 @@ OSC addresses, packet sizes, discovered targets, and query responses are validat
 ## Required tests
 Wire parity, catalog compilation, race tests, retries, boundaries, and benchmarks.
 ## Known gaps
-The service is not fed by the final evaluator and does not load avatar JSON.
+The service is not fed by the final evaluator. Avatar discovery is intentionally outside this package; M6 must install an `internal/avatar` plan's catalog atomically with the rest of the control transition.
 ## Completion definition
 It participates in an atomic avatar-aware end-to-end pipeline.

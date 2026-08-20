@@ -22,7 +22,7 @@ func TestRepositoryCatalogCoversEveryPackage(t *testing.T) {
 	if err := ValidateCatalog(catalog, packages); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(catalog.Specs), 23; got != want {
+	if got, want := len(catalog.Specs), 24; got != want {
 		t.Fatalf("specs = %d, want %d", got, want)
 	}
 }
