@@ -618,6 +618,7 @@ func (c *Controller) enqueueRefresh(request refreshRequest) {
 
 func (c *Controller) emit(event ControllerEvent) {
 	event.Time = time.Now()
+	event.Catalog = event.Catalog.Clone()
 	select {
 	case c.events <- event:
 	default:

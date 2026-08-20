@@ -83,7 +83,7 @@ func (sender *ParameterSender) SetCatalog(catalog *Catalog) {
 }
 
 func (sender *ParameterSender) Catalog() *Catalog {
-	return sender.catalog.Load()
+	return sender.catalog.Load().Clone()
 }
 
 func (sender *ParameterSender) ResetChangeDetection() {

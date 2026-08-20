@@ -165,6 +165,47 @@ func TestParameterSenderCatalogChangeInvalidatesCache(t *testing.T) {
 	}
 }
 
+func TestParameterSenderCatalogReturnsClone(t *testing.T) {
+	catalog := buildSenderTestCatalog(t, false)
+	transport := &recordingPacketSender{}
+	sender := newParameterSender(transport, SenderConfig{})
+	sender.SetCatalog(catalog)
+
+	published := sender.Catalog()
+	if published == nil || len(published.Outputs) == 0 || len(published.RawMethods) == 0 {
+		t.Fatalf("sender catalog = %#v, want compiled outputs", published)
+	}
+	published.Outputs = nil
+	published.RawMethods[0].Address = "/mutated/accessor"
+
+	fresh := sender.Catalog()
+	if got, want := len(fresh.Outputs), 3; got != want {
+		t.Errorf("fresh sender catalog outputs = %d, want %d", got, want)
+	}
+	if got, want := fresh.RawMethods[0].Address, "/a/Float"; got != want {
+		t.Errorf("fresh sender raw endpoint = %q, want %q", got, want)
+	}
+	source := &testValueSource{
+		floats: map[parameters.ParameterID]float32{0: 0.25},
+		bools:  map[parameters.ParameterID]bool{1: true},
+	}
+	if err := sender.Send(source); err != nil {
+		t.Fatal(err)
+	}
+	values := decodedValuesByAddress(t, transport.packets)
+	if _, ok := values["/a/Float"]; !ok {
+		t.Error("sender did not retain installed /a/Float output")
+	}
+	if got, want := len(values), 3; got != want {
+		t.Errorf("sender outputs after accessor mutation = %d, want %d", got, want)
+	}
+
+	empty := newParameterSender(transport, SenderConfig{})
+	if empty.Catalog() != nil {
+		t.Fatal("sender without a catalog returned a non-nil clone")
+	}
+}
+
 func buildSenderTestCatalog(t testing.TB, includeBinary bool) *Catalog {
 	t.Helper()
 	definitions := []parameters.ParameterDefinition{
