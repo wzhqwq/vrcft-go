@@ -47,17 +47,29 @@ func resolveConfig(oscRoot, fallbackPath, avatarID string) (resolvedConfig, erro
 	if err != nil {
 		return resolvedConfig{}, fmt.Errorf("%w: OSC root %q: %v", ErrInvalidConfigPath, oscRoot, err)
 	}
-	pattern := filepath.Join(root, "*", "Avatars", avatarID+".json")
-	matches, err := filepath.Glob(pattern)
+	entries, err := os.ReadDir(root)
 	if err != nil {
-		return resolvedConfig{}, fmt.Errorf("%w: glob %q: %v", ErrInvalidConfigPath, pattern, err)
-	}
-	if len(matches) == 0 {
-		return resolveFallback(fallbackPath)
+		if os.IsNotExist(err) {
+			if _, rootErr := os.Lstat(root); os.IsNotExist(rootErr) {
+				return resolveFallback(fallbackPath)
+			}
+		}
+		return resolvedConfig{}, fmt.Errorf("%w: enumerate OSC root %q: %v", ErrInvalidConfigPath, root, err)
 	}
 
-	candidates := make([]configCandidate, 0, len(matches))
-	for _, match := range matches {
+	candidates := make([]configCandidate, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && entry.Type()&(os.ModeSymlink|os.ModeIrregular) == 0 {
+			info, err := entry.Info()
+			if err != nil {
+				return resolvedConfig{}, fmt.Errorf("%w: inspect OSC root entry %q: %v", ErrInvalidConfigPath, filepath.Join(root, entry.Name()), err)
+			}
+			if !info.IsDir() {
+				continue
+			}
+		}
+
+		match := filepath.Join(root, entry.Name(), "Avatars", avatarID+".json")
 		candidate, err := absoluteCleanPath(match)
 		if err != nil {
 			return resolvedConfig{}, fmt.Errorf("%w: candidate %q: %v", ErrInvalidConfigPath, match, err)
@@ -65,11 +77,20 @@ func resolveConfig(oscRoot, fallbackPath, avatarID string) (resolvedConfig, erro
 		if !isWithinRoot(root, candidate) {
 			return resolvedConfig{}, fmt.Errorf("%w: candidate %q escapes OSC root %q", ErrInvalidConfigPath, candidate, root)
 		}
+		if _, err := os.Lstat(candidate); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return resolvedConfig{}, fmt.Errorf("%w: inspect candidate %q: %v", ErrInvalidConfigPath, candidate, err)
+		}
 		info, err := inspectCandidate(root, candidate)
 		if err != nil {
 			return resolvedConfig{}, fmt.Errorf("%w: inspect candidate %q: %v", ErrInvalidConfigPath, candidate, err)
 		}
 		candidates = append(candidates, configCandidate{path: candidate, modTime: info.ModTime()})
+	}
+	if len(candidates) == 0 {
+		return resolveFallback(fallbackPath)
 	}
 
 	sort.Slice(candidates, func(i, j int) bool { return configCandidateComesBefore(candidates[i], candidates[j]) })

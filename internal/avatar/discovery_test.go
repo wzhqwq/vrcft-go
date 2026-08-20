@@ -52,6 +52,34 @@ func TestResolveConfigSelectsNewestOneLevelCandidate(t *testing.T) {
 	}
 }
 
+func TestResolveConfigTreatsOSCRootLiterally(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "[OSC]")
+	avatarID := "avtr_demo"
+	current := writeAvatarConfig(t, root, "usr_a", avatarID)
+	fallback := writeFile(t, filepath.Join(t.TempDir(), "fallback.json"))
+
+	resolved, err := resolveConfig(root, fallback, avatarID)
+	if err != nil {
+		t.Fatalf("resolveConfig() error = %v", err)
+	}
+	if got, want := resolved.path, mustAbsoluteCleanPath(t, current); got != want {
+		t.Fatalf("resolved path = %q, want literal-root candidate %q", got, want)
+	}
+	if resolved.source != SourceAvatarConfig || !resolved.requireIDMatch {
+		t.Fatalf("resolved metadata = %#v, want avatar config with ID match required", resolved)
+	}
+}
+
+func TestResolveConfigRejectsRegularFileRootWithoutFallback(t *testing.T) {
+	root := writeFile(t, filepath.Join(t.TempDir(), "OSC"))
+	fallback := writeFile(t, filepath.Join(t.TempDir(), "fallback.json"))
+
+	_, err := resolveConfig(root, fallback, "avtr_demo")
+	if !errors.Is(err, ErrInvalidConfigPath) {
+		t.Fatalf("resolveConfig() error = %v, want ErrInvalidConfigPath without fallback", err)
+	}
+}
+
 func TestValidateAvatarIDRejectsUnsafeValues(t *testing.T) {
 	invalidIDs := []string{
 		"",
