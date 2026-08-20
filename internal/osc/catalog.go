@@ -127,6 +127,7 @@ func BuildCatalogFromEndpoints(endpoints []Endpoint, specs *ParameterCatalog, ge
 
 	catalog := &Catalog{
 		Generation: generation,
+		UpdatedAt:  time.Now(),
 		Bindings:   make(map[parameters.ParameterID]ParameterBinding),
 		RawMethods: append([]Endpoint(nil), endpoints...),
 	}

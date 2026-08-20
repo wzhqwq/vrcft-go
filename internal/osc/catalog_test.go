@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/wzhqwq/vrcft-go/internal/parameters"
 )
@@ -35,7 +36,14 @@ func TestBuildCatalogFromEndpointsMatchesQueryTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(fromEndpoints, fromQuery) {
+	if fromEndpoints.UpdatedAt.IsZero() || fromQuery.UpdatedAt.IsZero() {
+		t.Fatalf("catalog timestamps = %v, %v; want non-zero", fromEndpoints.UpdatedAt, fromQuery.UpdatedAt)
+	}
+	comparableEndpoints := *fromEndpoints
+	comparableQuery := *fromQuery
+	comparableEndpoints.UpdatedAt = time.Time{}
+	comparableQuery.UpdatedAt = time.Time{}
+	if !reflect.DeepEqual(&comparableEndpoints, &comparableQuery) {
 		t.Fatalf("endpoint catalog = %#v, query catalog = %#v", fromEndpoints, fromQuery)
 	}
 
