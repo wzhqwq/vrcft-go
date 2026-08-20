@@ -1,11 +1,11 @@
 # Project Status
 
-- Generated: 2026-08-15T17:50:36Z
-- Commit: `8ce07a9e17ac2d6c77f2a09c20c39ad9f7f7252d`
-- Source fingerprint: `a9b92338dbf6706fd2f62fc34be8f1a6f99f6639ad5614ef4cf91e6fdc178e32`
+- Generated: 2026-08-20T13:01:21Z
+- Commit: `71fe8dfcfd43b2769075c7e04e9fdbab201bf691`
+- Source fingerprint: `b97e71ce39211195063b3baefdbd6f84e63b9ec975e7339a1cdd85cfce682a39`
 - Dirty: `false`
 - State: `blocked`
-- Progress: 88.1% (133/151 weight)
+- Progress: 88.8% (143/161 weight)
 
 ## Milestones
 
@@ -16,7 +16,7 @@
 | M2 | complete | 100.0% (42/42) |
 | M3 | complete | 100.0% (7/7) |
 | M4 | complete | 100.0% (10/10) |
-| M5 | not_started | 0.0% (0/0) |
+| M5 | complete | 100.0% (10/10) |
 | M6 | blocked | 45.0% (9/20) |
 | M7 | in_progress | 53.3% (8/15) |
 
@@ -41,6 +41,7 @@
 | M3 | internal-tracking | internal/tracking | complete | 100.0% (7/7) |
 | M4 | internal-evaluator | internal/evaluator | complete | 100.0% (5/5) |
 | M4 | internal-processing | internal/processing | complete | 100.0% (5/5) |
+| M5 | internal-avatar | internal/avatar | complete | 100.0% (10/10) |
 | M6 | end-to-end | docs/project | blocked | 0.0% (0/8) |
 | M6 | internal-application | internal/application | in_progress | 40.0% (2/5) |
 | M6 | internal-osc | internal/osc | complete | 100.0% (7/7) |
