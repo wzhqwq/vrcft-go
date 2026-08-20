@@ -59,7 +59,7 @@ Only generated parameter definitions and catalog-owned dependency metadata can b
 Executable package and race tests cover empty/selective/deduplicated compilation, stable dependency topology, caller-slice ownership, missing/cyclic/invalid plans, all five operation formulas, primitive PupilDilation averaging, strict validity and non-finite containment, generated clamping, independent active flags, hidden dependency suppression, typed snapshot ownership/access, zero-allocation evaluation, and concurrent use of one plan. External integration proves merged tracking can flow through processing and a snapshot can satisfy `osc.ValueSource` without reversing the production dependency direction.
 
 ## Known gaps
-M5 avatar planning/binding and M6 Application/evaluator-to-OSC wiring are not implemented. OSC networking/lifecycle, persistence/UI, frontend/release work, numeric Lip payload, and Expression-to-Lip mapping remain deferred.
+M5 avatar planning/binding is implemented by `internal/avatar`. M6 Application installation and evaluator-to-OSC composition remain unimplemented, and M7 persistence/UI remains incomplete. OSC networking/lifecycle stays outside this package; numeric Lip payload and Expression-to-Lip mapping remain deferred.
 
 ## Completion definition
 All generated parameters compile through deterministic typed dependency plans; requested valid outputs evaluate with the documented formulas and clamps; invalid data cannot leak as valid output; hidden dependencies stay hidden; and immutable plans plus owned snapshots remain race-free and bounded.

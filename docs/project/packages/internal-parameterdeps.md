@@ -59,7 +59,7 @@ Only catalog-defined parameter IDs and primitive tracking inputs participate in 
 Executable package and race tests cover every YAML float and tracking-active Boolean, concrete eye-field mapping, independent active-state mapping, generalized primitive/dependency operands, PupilDilation average metadata, leaf closure, required input union, defensive plan copies, cycle detection, missing dependencies, and orphan coverage.
 
 ## Known gaps
-No M4 dependency-metadata implementation gap is known. M5 avatar planning/binding and later OSC/Application integration remain deferred, as do numeric Lip payload and Expression-to-Lip mapping decisions.
+No M4 dependency-metadata implementation gap is known. M5 avatar planning/binding is implemented by `internal/avatar`; M6 Application installation and evaluator-to-OSC composition plus M7 persistence/UI remain incomplete and outside this package. Numeric Lip payload and Expression-to-Lip mapping decisions remain deferred.
 
 ## Completion definition
 Every YAML detailed or simplified float and all three independent tracking-active Booleans have typed operation/operand metadata and resolve acyclically with no missing or orphan primitive input.

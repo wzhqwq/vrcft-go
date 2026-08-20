@@ -47,6 +47,6 @@ All caller-supplied configuration and merged metadata are range/shape/finite val
 ## Required tests
 Executable package tests cover channel mapping, configuration ownership, calibration/tuning/filter formulas, validate-before-mutate behavior, generation and per-group source reset boundaries, independent freshness/activity, repeated-frame dropout, hold/decay/final neutral behavior, transform order, deterministic post-dropout mutual exclusion, and Lip/Expression independence.
 ## Known gaps
-M5 avatar planning/binding and M6 Application/evaluator-to-OSC composition remain deferred. Numeric Lip payload, Expression-to-Lip mapping, persistence/UI, and release integration are not implemented here.
+M5 avatar planning/binding is implemented by `internal/avatar`. M6 Application installation and evaluator-to-OSC composition plus M7 persistence/UI remain incomplete and outside this package. Numeric Lip payload, Expression-to-Lip mapping, and release integration are not implemented here.
 ## Completion definition
 The caller-serialized deterministic chain validates before mutation, owns bounded history, applies transforms and dropout in the documented order, resets at exact boundaries, projects mutual exclusion without corrupting history, and emits tested canonical value snapshots.
