@@ -83,6 +83,9 @@ func readConfig(path string) (decodedConfig, error) {
 	if err := json.Unmarshal(root, &document); err != nil {
 		return decodedConfig{}, fmt.Errorf("%w: %v", ErrInvalidJSON, err)
 	}
+	if len(document.ID) > maxAvatarIDBytes {
+		return decodedConfig{}, fmt.Errorf("%w: configuration ID is %d bytes, maximum %d", ErrInvalidAvatarID, len(document.ID), maxAvatarIDBytes)
+	}
 	if len(document.Parameters) > maxParameters {
 		return decodedConfig{}, fmt.Errorf("%w: %d parameters exceeds %d", ErrTooManyParameters, len(document.Parameters), maxParameters)
 	}

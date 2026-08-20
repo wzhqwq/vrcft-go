@@ -80,6 +80,27 @@ func TestReadConfigRejectsInvalidInputs(t *testing.T) {
 }
 
 func TestReadConfigEnforcesBounds(t *testing.T) {
+	t.Run("exact avatar ID limit", func(t *testing.T) {
+		id := strings.Repeat("a", maxAvatarIDBytes)
+		content := fmt.Sprintf(`{"id":%q,"parameters":[]}`, id)
+		got, err := readConfig(writeConfig(t, content))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.id != id {
+			t.Fatalf("ID = %q, want %q", got.id, id)
+		}
+	})
+
+	t.Run("avatar ID exceeds limit", func(t *testing.T) {
+		id := strings.Repeat("a", maxAvatarIDBytes+1)
+		content := fmt.Sprintf(`{"id":%q,"parameters":[]}`, id)
+		_, err := readConfig(writeConfig(t, content))
+		if !errors.Is(err, ErrInvalidAvatarID) {
+			t.Fatalf("error = %v, want category %v", err, ErrInvalidAvatarID)
+		}
+	})
+
 	t.Run("too many parameters", func(t *testing.T) {
 		content := `{"id":"avtr_demo","parameters":[` + strings.Repeat(`{},`, maxParameters) + `{}` + `]}`
 		_, err := readConfig(writeConfig(t, content))
