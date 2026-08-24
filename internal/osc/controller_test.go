@@ -1,7 +1,12 @@
 package osc
 
 import (
+	"context"
+	"errors"
+	"net"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/wzhqwq/vrcft-go/internal/parameters"
 )
@@ -9,13 +14,10 @@ import (
 func TestControllerEventCatalogIsolatedFromInstalledCatalog(t *testing.T) {
 	catalog := buildSenderTestCatalog(t, false)
 	transport := &recordingPacketSender{}
-	sender := newParameterSender(transport, SenderConfig{})
-	sender.SetCatalog(catalog)
-	controller := &Controller{
-		events: make(chan ControllerEvent, 1),
-		sender: sender,
+	controller := newRuntimeController(t, CatalogOSCQuery, transport)
+	if err := controller.runtime.installQuery(catalog); err != nil {
+		t.Fatal(err)
 	}
-	controller.catalog.Store(catalog)
 
 	controller.emit(ControllerEvent{Kind: EventCatalogUpdated, Catalog: catalog})
 	event := <-controller.events
@@ -36,7 +38,7 @@ func TestControllerEventCatalogIsolatedFromInstalledCatalog(t *testing.T) {
 		floats: map[parameters.ParameterID]float32{0: 0.25},
 		bools:  map[parameters.ParameterID]bool{1: true},
 	}
-	if err := sender.Send(source); err != nil {
+	if err := controller.sender.Send(source); err != nil {
 		t.Fatal(err)
 	}
 	values := decodedValuesByAddress(t, transport.packets)
@@ -46,4 +48,165 @@ func TestControllerEventCatalogIsolatedFromInstalledCatalog(t *testing.T) {
 	if got, want := len(values), 3; got != want {
 		t.Errorf("sender outputs after event mutation = %d, want %d", got, want)
 	}
+}
+
+func TestControllerExternalCatalogDefaultQueryModeRefreshesCatalog(t *testing.T) {
+	root := NewQueryRoot()
+	if err := root.Add(NewMethod("/avatar/parameters/v2/JawOpen", "f", AccessWriteOnly)); err != nil {
+		t.Fatal(err)
+	}
+	controller := newRuntimeController(t, CatalogOSCQuery, &recordingPacketSender{})
+	query := &fakeControllerQueryClient{nodes: map[string]*QueryNode{"/avatar/parameters": root}}
+	controller.queryClient = query
+
+	if err := controller.refreshCatalog(context.Background(), &activeVRChat{baseURL: "http://vrchat.test"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := controller.Catalog(); got == nil || got.Generation != 1 || len(got.Outputs) != 1 {
+		t.Fatalf("catalog = %#v, want compiled generation 1 catalog", got)
+	}
+}
+
+func TestControllerExternalCatalogModeDoesNotRefreshCatalog(t *testing.T) {
+	controller := newRuntimeController(t, CatalogExternal, &recordingPacketSender{})
+	installed := runtimeTestCatalog(t, 7)
+	if err := controller.InstallCatalog(installed); err != nil {
+		t.Fatal(err)
+	}
+	query := &fakeControllerQueryClient{nodes: map[string]*QueryNode{"/": NewQueryRoot()}}
+	controller.queryClient = query
+
+	if err := controller.refreshCatalog(context.Background(), &activeVRChat{baseURL: "http://vrchat.test"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := controller.Catalog(); !reflect.DeepEqual(got, installed) {
+		t.Fatalf("catalog = %#v, want retained external catalog", got)
+	}
+	if !reflect.DeepEqual(query.paths, []string{"/"}) {
+		t.Fatalf("queried paths = %v, want health probe only", query.paths)
+	}
+}
+
+func TestControllerExternalCatalogOwnsInstallAndFencesPublish(t *testing.T) {
+	controller := newRuntimeController(t, CatalogExternal, &recordingPacketSender{})
+	catalog := runtimeTestCatalog(t, 7)
+	want := catalog.Clone()
+	if err := controller.InstallCatalog(catalog); err != nil {
+		t.Fatal(err)
+	}
+	mutateEveryCatalogLayer(catalog)
+	if got := controller.Catalog(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("catalog = %#v, want owned clone %#v", got, want)
+	}
+	if err := controller.Publish(6, &testValueSource{}); !errors.Is(err, ErrRuntimeGeneration) {
+		t.Fatalf("Publish stale error = %v, want %v", err, ErrRuntimeGeneration)
+	}
+}
+
+func TestControllerExternalCatalogQueryModeRejectsRuntimeMutation(t *testing.T) {
+	controller := newRuntimeController(t, CatalogOSCQuery, &recordingPacketSender{})
+	if err := controller.InstallCatalog(runtimeTestCatalog(t, 7)); !errors.Is(err, ErrRuntimeMode) {
+		t.Fatalf("InstallCatalog error = %v, want %v", err, ErrRuntimeMode)
+	}
+	if err := controller.Publish(7, &testValueSource{}); !errors.Is(err, ErrRuntimeMode) {
+		t.Fatalf("Publish error = %v, want %v", err, ErrRuntimeMode)
+	}
+}
+
+func TestControllerExternalCatalogDisconnectRetainsRuntimeAndClearsTarget(t *testing.T) {
+	controller := newRuntimeController(t, CatalogExternal, &recordingPacketSender{})
+	catalog := runtimeTestCatalog(t, 7)
+	if err := controller.InstallCatalog(catalog); err != nil {
+		t.Fatal(err)
+	}
+	controller.udp = &UDPTransport{}
+	controller.udp.SetTarget(&net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 9000})
+	controller.active = &activeVRChat{service: DiscoveredService{Instance: "VRChat"}, cancel: func() {}}
+
+	controller.clearActive(errors.New("lost"))
+
+	if target := controller.udp.Target(); target != nil {
+		t.Fatalf("target = %v, want nil", target)
+	}
+	if got := controller.Catalog(); !reflect.DeepEqual(got, catalog) {
+		t.Fatalf("catalog = %#v, want retained external runtime", got)
+	}
+}
+
+func TestControllerExternalCatalogReconnectRetainsRuntimeAndResetsChanges(t *testing.T) {
+	transport := &recordingPacketSender{}
+	controller := newRuntimeController(t, CatalogExternal, transport)
+	catalog := runtimeTestCatalog(t, 7)
+	if err := controller.InstallCatalog(catalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Publish(7, &testValueSource{floats: map[parameters.ParameterID]float32{0: 0.25}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.runtime.send(); err != nil {
+		t.Fatal(err)
+	}
+	firstPackets := len(transport.packets)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	controller.ctx = ctx
+	controller.udp = &UDPTransport{}
+	controller.queryClient = &fakeControllerQueryClient{}
+	controller.config.QueryPollInterval = time.Hour
+	controller.setActive(&activeVRChat{service: DiscoveredService{Instance: "VRChat"}})
+	controller.wg.Wait()
+	if err := controller.runtime.send(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := len(transport.packets); got <= firstPackets {
+		t.Fatalf("packet count after reconnect = %d, want greater than %d", got, firstPackets)
+	}
+	if got := controller.Catalog(); !reflect.DeepEqual(got, catalog) {
+		t.Fatalf("catalog = %#v, want retained external runtime", got)
+	}
+}
+
+func newUnstartedController(t testing.TB, mode CatalogMode) *Controller {
+	t.Helper()
+	controller, err := NewController(ControllerConfig{CatalogMode: mode}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return controller
+}
+
+func newRuntimeController(t testing.TB, mode CatalogMode, transport packetSender) *Controller {
+	t.Helper()
+	controller := newUnstartedController(t, mode)
+	controller.sender = newParameterSender(transport, SenderConfig{})
+	controller.runtime = newSendRuntime(controller.sender, mode, controller.source)
+	return controller
+}
+
+type fakeControllerQueryClient struct {
+	nodes map[string]*QueryNode
+	paths []string
+	err   error
+}
+
+func (client *fakeControllerQueryClient) HostInfo(context.Context, string) (HostInfo, error) {
+	return HostInfo{Name: "VRChat", OSCIP: "127.0.0.1", OSCPort: 9000, OSCTransport: "UDP"}, client.err
+}
+
+func (client *fakeControllerQueryClient) Node(_ context.Context, _ string, path string) (*QueryNode, error) {
+	client.paths = append(client.paths, path)
+	if client.err != nil {
+		return nil, client.err
+	}
+	if node := client.nodes[path]; node != nil {
+		return node.Clone(), nil
+	}
+	return nil, ErrNodeNotFound
+}
+
+func (client *fakeControllerQueryClient) WatchChanges(ctx context.Context, _ string, _ HostInfo, _ func(QueryCommand)) error {
+	<-ctx.Done()
+	return ctx.Err()
 }

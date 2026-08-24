@@ -18,8 +18,12 @@ type Application struct {
 }
 
 func NewApp() *Application {
+	oscService, err := osc.NewOSCService(osc.ControllerConfig{})
+	if err != nil {
+		panic(fmt.Errorf("construct OSC service: %w", err))
+	}
 	a := &Application{
-		osc: osc.NewOSCService(),
+		osc: oscService,
 	}
 
 	return a

@@ -17,6 +17,7 @@ type ControllerConfig struct {
 	HTTPBind    string
 	OSCBind     string
 	Interfaces  []net.Interface
+	CatalogMode CatalogMode
 
 	PreferredVRChatService string
 	QueryTimeout           time.Duration
@@ -60,6 +61,12 @@ type refreshRequest struct {
 	force  bool
 }
 
+type controllerQueryClient interface {
+	HostInfo(context.Context, string) (HostInfo, error)
+	Node(context.Context, string, string) (*QueryNode, error)
+	WatchChanges(context.Context, string, HostInfo, func(QueryCommand)) error
+}
+
 type Controller struct {
 	config ControllerConfig
 	specs  *ParameterCatalog
@@ -75,7 +82,8 @@ type Controller struct {
 	advertiser    *Advertiser
 	browser       *Browser
 	sender        *ParameterSender
-	queryClient   *QueryClient
+	runtime       *sendRuntime
+	queryClient   controllerQueryClient
 
 	servicesMu sync.Mutex
 	services   map[string]DiscoveredService
@@ -83,13 +91,18 @@ type Controller struct {
 	activeMu sync.Mutex
 	active   *activeVRChat
 
-	catalog    atomic.Pointer[Catalog]
-	generation atomic.Uint64
-	avatarID   atomic.Value // string
+	generation    atomic.Uint64
+	avatarID      atomic.Value // string
+	avatarChanges avatarChangeMailbox
 
 	refreshCh chan refreshRequest
 	failedCh  chan error
 	events    chan ControllerEvent
+	closeOnce sync.Once
+
+	statusMu  sync.Mutex
+	running   bool
+	lastError string
 
 	onIncoming func(Message, *net.UDPAddr)
 }
@@ -115,6 +128,9 @@ func NewControllerWithCatalog(
 	if specs == nil {
 		return nil, errors.New("OSC parameter catalog is nil")
 	}
+	if config.CatalogMode != CatalogOSCQuery && config.CatalogMode != CatalogExternal {
+		return nil, fmt.Errorf("invalid OSC catalog mode %d", config.CatalogMode)
+	}
 	if config.ServiceName == "" {
 		config.ServiceName = "VRCFaceTracking-Go"
 	}
@@ -136,15 +152,19 @@ func NewControllerWithCatalog(
 	if config.SendInterval <= 0 {
 		config.SendInterval = 10 * time.Millisecond
 	}
+	sender := newParameterSender(nil, config.Sender)
 	controller := &Controller{
-		config:     config,
-		specs:      specs,
-		source:     source,
-		services:   make(map[string]DiscoveredService),
-		refreshCh:  make(chan refreshRequest, 8),
-		failedCh:   make(chan error, 4),
-		events:     make(chan ControllerEvent, 64),
-		onIncoming: onIncoming,
+		config:        config,
+		specs:         specs,
+		source:        source,
+		sender:        sender,
+		runtime:       newSendRuntime(sender, config.CatalogMode, source),
+		services:      make(map[string]DiscoveredService),
+		avatarChanges: newAvatarChangeMailbox(),
+		refreshCh:     make(chan refreshRequest, 8),
+		failedCh:      make(chan error, 4),
+		events:        make(chan ControllerEvent, 64),
+		onIncoming:    onIncoming,
 	}
 	controller.avatarID.Store("")
 	return controller, nil
@@ -173,7 +193,7 @@ func (c *Controller) Start(parent context.Context) error {
 		return err
 	}
 	c.udp = udp
-	c.sender = NewParameterSender(udp, c.config.Sender)
+	c.sender.transport = udp
 	c.queryClient = NewQueryClient(c.config.QueryTimeout)
 
 	queryPort := queryListener.Addr().(*net.TCPAddr).Port
@@ -223,6 +243,7 @@ func (c *Controller) Start(parent context.Context) error {
 	go c.runUDPReceiver()
 	go c.runDiscovery()
 	go c.runSendLoop()
+	c.setRunning(true)
 	return nil
 }
 
@@ -247,14 +268,54 @@ func (c *Controller) Close(ctx context.Context) error {
 		_ = c.queryServer.Close(ctx)
 	}
 	c.wg.Wait()
-	close(c.events)
+	c.setRunning(false)
+	c.closeOnce.Do(func() {
+		c.avatarChanges.close()
+		close(c.events)
+	})
 	return nil
 }
 
 func (c *Controller) Events() <-chan ControllerEvent { return c.events }
 
+func (c *Controller) AvatarChanges(ctx context.Context) <-chan AvatarChange {
+	return c.avatarChanges.subscribe(ctx)
+}
+
+func (c *Controller) ClearRuntime() {
+	c.runtime.clear()
+}
+
+func (c *Controller) InstallCatalog(catalog *Catalog) error {
+	return c.runtime.installExternal(catalog)
+}
+
+func (c *Controller) Publish(generation uint64, source ValueSource) error {
+	return c.runtime.publish(generation, source)
+}
+
 func (c *Controller) Catalog() *Catalog {
-	return c.catalog.Load().Clone()
+	return c.runtime.catalog()
+}
+
+func (c *Controller) Status() OSCStatus {
+	c.statusMu.Lock()
+	running := c.running
+	lastError := c.lastError
+	c.statusMu.Unlock()
+
+	c.activeMu.Lock()
+	connected := c.active != nil
+	c.activeMu.Unlock()
+
+	status := OSCStatus{Running: running, Connected: connected, LastError: lastError}
+	if c.udp != nil {
+		if target := c.udp.Target(); target != nil {
+			status.HasTarget = true
+			status.Target = OSCTarget{Host: target.IP.String(), Port: target.Port}
+		}
+	}
+	return status
 }
 
 func (c *Controller) AvatarID() string {
@@ -278,8 +339,11 @@ func (c *Controller) runUDPReceiver() {
 		if message.Address == "/avatar/change" && len(message.Args) > 0 && message.Args[0].Kind == ValueString {
 			avatarID := message.Args[0].Str
 			c.avatarID.Store(avatarID)
+			c.publishAvatarChange(avatarID)
 			c.emit(ControllerEvent{Kind: EventAvatarChanged, AvatarID: avatarID})
-			c.enqueueAvatarRefreshes()
+			if c.config.CatalogMode == CatalogOSCQuery {
+				c.enqueueAvatarRefreshes()
+			}
 		}
 		if c.onIncoming != nil {
 			c.onIncoming(message, remote)
@@ -425,6 +489,9 @@ func (c *Controller) setActive(active *activeVRChat) {
 	active.cancel = cancel
 	c.active = active
 	c.activeMu.Unlock()
+	if c.config.CatalogMode == CatalogExternal {
+		c.runtime.resetChangeDetection()
+	}
 
 	c.emit(ControllerEvent{
 		Kind:      EventVRChatConnected,
@@ -447,10 +514,10 @@ func (c *Controller) clearActive(reason error) {
 	if c.udp != nil {
 		c.udp.SetTarget(nil)
 	}
-	c.catalog.Store(nil)
-	if c.sender != nil {
-		c.sender.SetCatalog(nil)
+	if c.config.CatalogMode == CatalogOSCQuery {
+		c.runtime.clear()
 	}
+	c.recordError(reason)
 	if active != nil {
 		c.emit(ControllerEvent{
 			Kind:    EventVRChatDisconnected,
@@ -531,6 +598,10 @@ func (c *Controller) runActiveVRChat(ctx context.Context, active *activeVRChat) 
 func (c *Controller) refreshCatalog(ctx context.Context, active *activeVRChat, force bool) error {
 	queryCtx, cancel := context.WithTimeout(ctx, c.config.QueryTimeout)
 	defer cancel()
+	if c.config.CatalogMode == CatalogExternal {
+		_, err := c.queryClient.Node(queryCtx, active.baseURL, "/")
+		return err
+	}
 	root, err := c.queryClient.Node(queryCtx, active.baseURL, "/avatar/parameters")
 	if err != nil {
 		if !errors.Is(err, ErrNodeNotFound) {
@@ -547,14 +618,15 @@ func (c *Controller) refreshCatalog(ctx context.Context, active *activeVRChat, f
 	if err != nil {
 		return err
 	}
-	previous := c.catalog.Load()
+	previous := c.runtime.catalog()
 	changed := previous == nil || previous.Hash != catalog.Hash
 	if changed {
-		c.catalog.Store(catalog)
-		c.sender.SetCatalog(catalog)
+		if err := c.runtime.installQuery(catalog); err != nil {
+			return err
+		}
 	} else if force {
 		// A different avatar can expose the same set of addresses. Re-send all values.
-		c.sender.ResetChangeDetection()
+		c.runtime.resetChangeDetection()
 	}
 	if changed || force {
 		c.emit(ControllerEvent{
@@ -568,10 +640,6 @@ func (c *Controller) refreshCatalog(ctx context.Context, active *activeVRChat, f
 
 func (c *Controller) runSendLoop() {
 	defer c.wg.Done()
-	if c.source == nil {
-		<-c.ctx.Done()
-		return
-	}
 	ticker := time.NewTicker(c.config.SendInterval)
 	defer ticker.Stop()
 	for {
@@ -579,10 +647,10 @@ func (c *Controller) runSendLoop() {
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
-			if c.udp.Target() == nil || c.catalog.Load() == nil {
+			if c.udp.Target() == nil || c.runtime.catalog() == nil {
 				continue
 			}
-			if err := c.sender.Send(c.source); err != nil {
+			if err := c.runtime.send(); err != nil {
 				c.emit(ControllerEvent{Kind: EventError, Message: "send OSC parameters", Err: err})
 			}
 		}
@@ -617,12 +685,37 @@ func (c *Controller) enqueueRefresh(request refreshRequest) {
 }
 
 func (c *Controller) emit(event ControllerEvent) {
+	c.recordError(event.Err)
 	event.Time = time.Now()
 	event.Catalog = event.Catalog.Clone()
 	select {
 	case c.events <- event:
 	default:
 	}
+}
+
+func (c *Controller) publishAvatarChange(avatarID string) {
+	c.avatarChanges.publish(avatarID)
+}
+
+func (c *Controller) setRunning(running bool) {
+	c.statusMu.Lock()
+	c.running = running
+	c.statusMu.Unlock()
+}
+
+func (c *Controller) recordError(err error) {
+	if err == nil {
+		return
+	}
+	message := strings.Join(strings.Fields(err.Error()), " ")
+	const maxErrorBytes = 512
+	if len(message) > maxErrorBytes {
+		message = message[:maxErrorBytes]
+	}
+	c.statusMu.Lock()
+	c.lastError = message
+	c.statusMu.Unlock()
 }
 
 func defaultReceiverTree() *QueryNode {
