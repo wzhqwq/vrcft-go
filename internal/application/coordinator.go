@@ -106,7 +106,7 @@ func (c *coordinator) run(ctx context.Context, inputs coordinatorInputs, ready c
 				continue
 			}
 			if c.hasLatest {
-				c.process(ctx, c.latest, c.clock.observe(tick))
+				c.process(ctx, c.latest, c.clock.advance(tick))
 			}
 		}
 	}

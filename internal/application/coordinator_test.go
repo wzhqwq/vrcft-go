@@ -52,6 +52,32 @@ func TestCoordinatorProcessesNewFrameImmediatelyAndLatestFrameOnTick(t *testing.
 	}
 }
 
+func TestCoordinatorTicksStrictlyAdvanceHostTimeAfterEqualAndRegressedWallTimes(t *testing.T) {
+	harness := newCoordinatorHarness(t)
+	harness.coordinator.current = coordinatorReadyPlan(t, 7)
+	harness.runtime.seedCatalog(harness.coordinator.current.Catalog())
+	harness.pipeline.result = processing.CanonicalFrame{Generation: 7, EyeActive: true}
+	harness.start()
+
+	harness.merged <- tracking.MergedFrame{Generation: 7, Sequence: 1, UpdatedAtNS: 50}
+	harness.runtime.awaitPublishes(t, 1)
+	harness.ticks <- time.Unix(0, 100)
+	harness.runtime.awaitPublishes(t, 2)
+	harness.ticks <- time.Unix(0, 90)
+	harness.runtime.awaitPublishes(t, 3)
+
+	calls := harness.pipeline.snapshotCalls()
+	if len(calls) != 3 {
+		t.Fatalf("pipeline call count = %d, want 3", len(calls))
+	}
+	want := []int64{100, 101, 102}
+	for index, call := range calls {
+		if call.nowNS != want[index] {
+			t.Fatalf("pipeline call %d Host time = %d, want %d; all calls = %#v", index, call.nowNS, want[index], calls)
+		}
+	}
+}
+
 func TestCoordinatorSkipsFramesWithoutUsableExactGenerationPlan(t *testing.T) {
 	tests := []struct {
 		name  string
