@@ -503,11 +503,17 @@ func newApplicationHarness(t *testing.T, failFactory string, factoryErr error) *
 
 func (h *applicationHarness) newApp(t *testing.T) *Application {
 	t.Helper()
-	app, err := newApplication(validApplicationConfig(t), h.dependencies())
+	app := newApplicationForTest(t, validApplicationConfig(t), h.dependencies())
+	h.trace.reset()
+	return app
+}
+
+func newApplicationForTest(t testing.TB, config Config, dependencies applicationDependencies) *Application {
+	t.Helper()
+	app, err := newApplication(config, dependencies)
 	if err != nil {
 		t.Fatalf("newApplication() error = %v", err)
 	}
-	h.trace.reset()
 	return app
 }
 
