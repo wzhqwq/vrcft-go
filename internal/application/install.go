@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wzhqwq/vrcft-go/internal/avatar"
 	"github.com/wzhqwq/vrcft-go/internal/osc"
@@ -42,6 +44,10 @@ type installOutcome struct {
 	exhausted      bool
 	catalogReady   bool
 }
+
+// maxPluginControlFailureMessageBytes bounds each status diagnostic while
+// leaving enough room for actionable plugin and operation context.
+const maxPluginControlFailureMessageBytes = 512
 
 func (installer *planInstaller) install(ctx context.Context, current activation) installOutcome {
 	outcome := installOutcome{
@@ -96,6 +102,11 @@ func (installer *planInstaller) install(ctx context.Context, current activation)
 			return installer.plugins.SetActive(controlCtx, plugin.ID, true)
 		}); err != nil {
 			outcome.addPluginFailure(plugin.ID, "activate", err)
+			if compensationErr := installer.control(ctx, func(controlCtx context.Context) error {
+				return installer.plugins.SetActive(controlCtx, plugin.ID, false)
+			}); compensationErr != nil {
+				outcome.addPluginFailure(plugin.ID, "deactivate", compensationErr)
+			}
 		}
 	}
 
@@ -149,6 +160,19 @@ func (outcome *installOutcome) addPluginFailure(pluginID, operation string, err 
 	outcome.pluginFailures = append(outcome.pluginFailures, PluginControlFailure{
 		PluginID:  pluginID,
 		Operation: operation,
-		Message:   err.Error(),
+		Message:   sanitizedPluginControlFailure(err),
 	})
+}
+
+func sanitizedPluginControlFailure(err error) string {
+	message := strings.ToValidUTF8(err.Error(), "\uFFFD")
+	message = strings.Join(strings.Fields(message), " ")
+	if len(message) <= maxPluginControlFailureMessageBytes {
+		return message
+	}
+	message = message[:maxPluginControlFailureMessageBytes]
+	for !utf8.ValidString(message) {
+		message = message[:len(message)-1]
+	}
+	return message
 }

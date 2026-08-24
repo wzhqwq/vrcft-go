@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wzhqwq/vrcft-go/internal/avatar"
 	"github.com/wzhqwq/vrcft-go/internal/evaluator"
@@ -180,6 +182,7 @@ func TestPlanInstallerPluginFailureLeavesThatPluginInactiveAndContinues(t *testi
 				"plugin.active:vendor.expression:true",
 				"plugin.subscription:vendor.eye:9",
 				"plugin.active:vendor.eye:true",
+				"plugin.active:vendor.eye:false",
 				"osc.install:9",
 			},
 		},
@@ -232,6 +235,117 @@ func TestPlanInstallerPluginFailureLeavesThatPluginInactiveAndContinues(t *testi
 			}
 			pluginControls.assertIndependentBoundedContexts(t, wantTimeout)
 		})
+	}
+}
+
+func TestPlanInstallerActivationTimeoutCompensatesBeforeContinuing(t *testing.T) {
+	recorder := &installRecorder{}
+	pluginControls := newFakePlanPluginControls(recorder)
+	pluginControls.blockActive[activeControlKey("vendor.expression", true)] = true
+	pluginControls.commitActiveOnError["vendor.expression"] = true
+	installer := newTestPlanInstaller(recorder, pluginControls)
+	installer.pluginControlTimeout = 2 * time.Millisecond
+
+	outcome := installer.install(context.Background(), activation{plan: readyInstallPlan(9)})
+
+	assertInstallTrace(t, recorder, []string{
+		"osc.clear",
+		"tracking.generation:9",
+		"plugin.active:vendor.expression:false",
+		"plugin.active:vendor.eye:false",
+		"plugin.active:vendor.none:false",
+		"plugin.subscription:vendor.expression:9",
+		"plugin.active:vendor.expression:true",
+		"plugin.active:vendor.expression:false",
+		"plugin.subscription:vendor.eye:9",
+		"plugin.active:vendor.eye:true",
+		"osc.install:9",
+	})
+	if pluginControls.activeState["vendor.expression"] {
+		t.Fatal("vendor.expression remained active after successful compensating deactivation")
+	}
+	if !pluginControls.activeState["vendor.eye"] {
+		t.Fatal("later vendor.eye plugin was not activated")
+	}
+	wantFailures := []PluginControlFailure{{
+		PluginID:  "vendor.expression",
+		Operation: "activate",
+		Message:   context.DeadlineExceeded.Error(),
+	}}
+	if !reflect.DeepEqual(outcome.pluginFailures, wantFailures) {
+		t.Fatalf("install outcome plugin failures = %#v, want %#v", outcome.pluginFailures, wantFailures)
+	}
+	if !outcome.catalogReady {
+		t.Fatal("catalog was not installed after compensating and continuing")
+	}
+	pluginControls.assertIndependentBoundedContexts(t, installer.pluginControlTimeout)
+}
+
+func TestPlanInstallerFailedActivationCompensationIsRecordedAndLaterPluginsContinue(t *testing.T) {
+	recorder := &installRecorder{}
+	pluginControls := newFakePlanPluginControls(recorder)
+	pluginControls.activeErrors[activeControlKey("vendor.expression", true)] = errors.New("activation result lost")
+	pluginControls.commitActiveOnError["vendor.expression"] = true
+	pluginControls.compensationErrors["vendor.expression"] = errors.New("compensation rejected")
+	installer := newTestPlanInstaller(recorder, pluginControls)
+
+	outcome := installer.install(context.Background(), activation{plan: readyInstallPlan(9)})
+
+	assertInstallTrace(t, recorder, []string{
+		"osc.clear",
+		"tracking.generation:9",
+		"plugin.active:vendor.expression:false",
+		"plugin.active:vendor.eye:false",
+		"plugin.active:vendor.none:false",
+		"plugin.subscription:vendor.expression:9",
+		"plugin.active:vendor.expression:true",
+		"plugin.active:vendor.expression:false",
+		"plugin.subscription:vendor.eye:9",
+		"plugin.active:vendor.eye:true",
+		"osc.install:9",
+	})
+	wantFailures := []PluginControlFailure{
+		{PluginID: "vendor.expression", Operation: "activate", Message: "activation result lost"},
+		{PluginID: "vendor.expression", Operation: "deactivate", Message: "compensation rejected"},
+	}
+	if !reflect.DeepEqual(outcome.pluginFailures, wantFailures) {
+		t.Fatalf("install outcome plugin failures = %#v, want %#v", outcome.pluginFailures, wantFailures)
+	}
+	if !pluginControls.activeState["vendor.expression"] {
+		t.Fatal("fake did not preserve uncertain active state after failed compensation")
+	}
+	if !pluginControls.activeState["vendor.eye"] || !outcome.catalogReady {
+		t.Fatal("later plugin controls or catalog installation did not continue")
+	}
+	pluginControls.assertIndependentBoundedContexts(t, installer.pluginControlTimeout)
+}
+
+func TestPlanInstallerPluginFailureMessageIsSingleLineBoundedUTF8(t *testing.T) {
+	recorder := &installRecorder{}
+	pluginControls := newFakePlanPluginControls(recorder)
+	pluginControls.subscriptionErrors["vendor.eye"] = errors.New(
+		"  first\r\n second\t" + string([]byte{0xff}) + "  " + strings.Repeat("x", 600),
+	)
+	installer := newTestPlanInstaller(recorder, pluginControls)
+
+	outcome := installer.install(context.Background(), activation{plan: readyInstallPlan(9)})
+
+	if len(outcome.pluginFailures) != 1 {
+		t.Fatalf("plugin failures = %#v, want one", outcome.pluginFailures)
+	}
+	message := outcome.pluginFailures[0].Message
+	want := "first second � " + strings.Repeat("x", 495)
+	if message != want {
+		t.Fatalf("sanitized message = %q, want %q", message, want)
+	}
+	if len(message) != 512 {
+		t.Fatalf("sanitized message byte length = %d, want 512", len(message))
+	}
+	if !utf8.ValidString(message) {
+		t.Fatalf("sanitized message is not valid UTF-8: %q", message)
+	}
+	if strings.ContainsAny(message, "\r\n\t") {
+		t.Fatalf("sanitized message contains line/control whitespace: %q", message)
 	}
 }
 
@@ -440,13 +554,16 @@ func (f *fakeCatalogControl) InstallCatalog(catalog *osc.Catalog) error {
 }
 
 type fakePlanPluginControls struct {
-	recorder           *installRecorder
-	snapshots          []plugins.RuntimeSnapshot
-	activeErrors       map[string]error
-	subscriptionErrors map[string]error
-	blockActive        map[string]bool
-	preferenceCalls    int
-	contexts           []context.Context
+	recorder            *installRecorder
+	snapshots           []plugins.RuntimeSnapshot
+	activeErrors        map[string]error
+	subscriptionErrors  map[string]error
+	blockActive         map[string]bool
+	commitActiveOnError map[string]bool
+	compensationErrors  map[string]error
+	activeState         map[string]bool
+	preferenceCalls     int
+	contexts            []context.Context
 }
 
 func newFakePlanPluginControls(recorder *installRecorder) *fakePlanPluginControls {
@@ -457,9 +574,12 @@ func newFakePlanPluginControls(recorder *installRecorder) *fakePlanPluginControl
 			{ID: "vendor.expression", Capabilities: trackingmodel.CapabilityExpression},
 			{ID: "vendor.eye", Capabilities: trackingmodel.CapabilityEye},
 		},
-		activeErrors:       make(map[string]error),
-		subscriptionErrors: make(map[string]error),
-		blockActive:        make(map[string]bool),
+		activeErrors:        make(map[string]error),
+		subscriptionErrors:  make(map[string]error),
+		blockActive:         make(map[string]bool),
+		commitActiveOnError: make(map[string]bool),
+		compensationErrors:  make(map[string]error),
+		activeState:         make(map[string]bool),
 	}
 }
 
@@ -471,11 +591,26 @@ func (f *fakePlanPluginControls) SetActive(ctx context.Context, id string, activ
 	f.captureContext(ctx)
 	f.recorder.add(fmt.Sprintf("plugin.active:%s:%t", id, active))
 	key := activeControlKey(id, active)
+	var err error
 	if f.blockActive[key] {
 		<-ctx.Done()
-		return ctx.Err()
+		err = ctx.Err()
+	} else {
+		err = f.activeErrors[key]
 	}
-	return f.activeErrors[key]
+	if err != nil {
+		if active && f.commitActiveOnError[id] {
+			f.activeState[id] = true
+		}
+		return err
+	}
+	if !active && f.activeState[id] {
+		if err := f.compensationErrors[id]; err != nil {
+			return err
+		}
+	}
+	f.activeState[id] = active
+	return nil
 }
 
 func (f *fakePlanPluginControls) UpdateSubscription(ctx context.Context, id string, subscription pluginapi.Subscription) error {
