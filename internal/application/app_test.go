@@ -29,3 +29,17 @@ func TestNewAppStoresOSCConstructionErrorForStart(t *testing.T) {
 		t.Fatalf("Start() error = %q, want construction context", err)
 	}
 }
+
+func TestNewAppCloseAfterOSCConstructionFailureIsNoOp(t *testing.T) {
+	want := errors.New("OSC construction failed")
+	previous := newOSCService
+	newOSCService = func(osc.ControllerConfig) (osc.OSCService, error) {
+		return nil, want
+	}
+	t.Cleanup(func() { newOSCService = previous })
+
+	app := NewApp()
+	if err := app.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+}
