@@ -12,24 +12,26 @@ import (
 type Application struct {
 	wailsCtx context.Context
 
-	plugins  plugins.Manager
-	tracking tracking.Service
-	osc      osc.OSCService
+	plugins         plugins.Manager
+	tracking        tracking.Service
+	osc             osc.OSCService
+	constructionErr error
 }
 
-func NewApp() *Application {
-	oscService, err := osc.NewOSCService(osc.ControllerConfig{})
-	if err != nil {
-		panic(fmt.Errorf("construct OSC service: %w", err))
-	}
-	a := &Application{
-		osc: oscService,
-	}
+var newOSCService = osc.NewOSCService
 
-	return a
+func NewApp() *Application {
+	oscService, err := newOSCService(osc.ControllerConfig{})
+	return &Application{
+		osc:             oscService,
+		constructionErr: err,
+	}
 }
 
 func (a *Application) Start(ctx context.Context) error {
+	if a.constructionErr != nil {
+		return fmt.Errorf("construct OSC service: %w", a.constructionErr)
+	}
 	if err := a.osc.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start osc service: %w", err)
 	}
