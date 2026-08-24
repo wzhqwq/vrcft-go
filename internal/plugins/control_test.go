@@ -132,6 +132,29 @@ func TestSessionWriterBuildsExactTypedMessagesAndSkipsIdempotentUpdates(t *testi
 	}
 }
 
+func TestSessionWriterForcedInactiveControlSendsEqualState(t *testing.T) {
+	conn := newRecordingControlConn()
+	writer := newSessionWriter(conn, controlState{Active: false}, 1)
+	defer stopSessionWriter(t, writer)
+
+	if err := writer.Control(context.Background(), controlRequest{
+		kind:        controlActive,
+		state:       controlState{Active: false},
+		forceActive: true,
+	}); err != nil {
+		t.Fatalf("forced inactive Control() error = %v", err)
+	}
+
+	messages := conn.messages()
+	if len(messages) != 1 || messages[0].Type != protocol.MessageActiveChanged {
+		t.Fatalf("forced inactive messages = %#v, want one ActiveChanged", messages)
+	}
+	payload, ok := messages[0].Payload.(protocol.ActiveChanged)
+	if !ok || payload.Active {
+		t.Fatalf("forced inactive payload = %#v, want ActiveChanged(false)", messages[0].Payload)
+	}
+}
+
 func TestSessionWriterOwnsQueuedConfigAtAdmission(t *testing.T) {
 	conn := newRecordingControlConn()
 	conn.block = make(chan struct{})

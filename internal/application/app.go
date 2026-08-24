@@ -303,6 +303,7 @@ func (a *Application) Start(ctx context.Context) error {
 		startupErr := fmt.Errorf("start OSC service: %w", err)
 		return a.finishStartFailure(startupErr, true)
 	}
+	oscStatus := a.osc.Status()
 
 	a.mu.Lock()
 	if a.lifecycle != applicationStarting {
@@ -312,6 +313,7 @@ func (a *Application) Start(ctx context.Context) error {
 	a.lifecycle = applicationRunning
 	a.status.update(func(status *Status) {
 		status.Lifecycle = LifecycleRunning
+		status.OSC = oscStatus
 		status.RuntimeError = ""
 	})
 	a.mu.Unlock()
@@ -359,11 +361,13 @@ func (a *Application) rollback(startupErr error, coordinatorStarted bool) error 
 }
 
 func (a *Application) failStart(err error) error {
+	oscStatus := a.osc.Status()
 	a.mu.Lock()
 	if a.lifecycle == applicationStarting {
 		a.lifecycle = applicationFailed
 		a.status.update(func(status *Status) {
 			status.Lifecycle = LifecycleDegraded
+			status.OSC = oscStatus
 			status.RuntimeError = coordinatorErrorMessage(err)
 		})
 	}
@@ -446,10 +450,12 @@ func (a *Application) finishClose(ctx context.Context) error {
 			result = errors.Join(result, fmt.Errorf("close plugin manager: %w", err))
 		}
 	}
+	oscStatus := a.osc.Status()
 
 	a.mu.Lock()
 	a.status.update(func(status *Status) {
 		status.Lifecycle = LifecycleClosed
+		status.OSC = oscStatus
 		if result != nil {
 			status.RuntimeError = coordinatorErrorMessage(result)
 		}

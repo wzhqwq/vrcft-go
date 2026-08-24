@@ -136,6 +136,70 @@ func TestApplicationStartSubscribesBeforeProducersAndStartsOSCLast(t *testing.T)
 	}
 }
 
+func TestApplicationStartSnapshotsOSCStatusBeforeFirstCoordinatorEvent(t *testing.T) {
+	harness := newApplicationHarness(t, "", nil)
+	wantOSC := osc.OSCStatus{
+		Running:   true,
+		Connected: true,
+		HasTarget: true,
+		Target:    osc.OSCTarget{Host: "127.0.0.1", Port: 9000},
+	}
+	harness.osc.startedStatus = wantOSC
+	app := harness.newApp(t)
+	harness.osc.onStatus = func() {
+		if !app.mu.TryLock() {
+			t.Error("OSC Status called while Application lifecycle lock was held")
+			return
+		}
+		app.mu.Unlock()
+	}
+
+	if err := app.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close(context.Background()) })
+
+	status := app.Status()
+	if status.Lifecycle != LifecycleRunning || status.OSC != wantOSC {
+		t.Fatalf("post-Start status = %+v, want running with OSC %+v", status, wantOSC)
+	}
+}
+
+func TestApplicationStartRollbackSnapshotsLatestOSCStatus(t *testing.T) {
+	harness := newApplicationHarness(t, "", nil)
+	harness.osc.startErr = errors.New("OSC start failed")
+	wantOSC := osc.OSCStatus{Running: false, LastError: "partial OSC startup failed"}
+	harness.osc.startedStatus = wantOSC
+	app := harness.newApp(t)
+
+	if err := app.Start(context.Background()); !errors.Is(err, harness.osc.startErr) {
+		t.Fatalf("Start() error = %v, want OSC start failure", err)
+	}
+	status := app.Status()
+	if status.Lifecycle != LifecycleDegraded || status.OSC != wantOSC {
+		t.Fatalf("rollback status = %+v, want degraded with OSC %+v", status, wantOSC)
+	}
+}
+
+func TestApplicationCloseSnapshotsOSCStatusAfterShutdown(t *testing.T) {
+	harness := newApplicationHarness(t, "", nil)
+	harness.osc.startedStatus = osc.OSCStatus{Running: true, Connected: true}
+	wantClosedOSC := osc.OSCStatus{Running: false, Connected: false, LastError: "OSC closed"}
+	harness.osc.closedStatus = wantClosedOSC
+	app := harness.newApp(t)
+	if err := app.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	if err := app.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	status := app.Status()
+	if status.Lifecycle != LifecycleClosed || status.OSC != wantClosedOSC {
+		t.Fatalf("post-Close status = %+v, want closed with OSC %+v", status, wantClosedOSC)
+	}
+}
+
 func TestApplicationCloseWaitsForStartLifecycleOwnershipBeforeTeardown(t *testing.T) {
 	harness := newApplicationHarness(t, "", nil)
 	harness.osc.startEntered = make(chan struct{})
@@ -678,6 +742,7 @@ func (m *fakeApplicationManager) Subscribe(context.Context) <-chan plugins.Event
 }
 
 type fakeApplicationOSC struct {
+	mu            sync.Mutex
 	trace         *applicationTrace
 	avatarChanges chan osc.AvatarChange
 	events        chan osc.ControllerEvent
@@ -687,6 +752,10 @@ type fakeApplicationOSC struct {
 	startEntered  chan struct{}
 	releaseStart  chan struct{}
 	closeCalled   chan struct{}
+	status        osc.OSCStatus
+	startedStatus osc.OSCStatus
+	closedStatus  osc.OSCStatus
+	onStatus      func()
 }
 
 func (o *fakeApplicationOSC) Start(context.Context) error {
@@ -700,6 +769,9 @@ func (o *fakeApplicationOSC) Start(context.Context) error {
 	if o.releaseStart != nil {
 		<-o.releaseStart
 	}
+	o.mu.Lock()
+	o.status = o.startedStatus
+	o.mu.Unlock()
 	return o.startErr
 }
 
@@ -711,6 +783,9 @@ func (o *fakeApplicationOSC) Close(context.Context) error {
 		default:
 		}
 	}
+	o.mu.Lock()
+	o.status = o.closedStatus
+	o.mu.Unlock()
 	return o.closeErr
 }
 
@@ -727,7 +802,16 @@ func (o *fakeApplicationOSC) AvatarChanges(context.Context) <-chan osc.AvatarCha
 func (*fakeApplicationOSC) ClearRuntime()                         {}
 func (*fakeApplicationOSC) InstallCatalog(*osc.Catalog) error     { return nil }
 func (*fakeApplicationOSC) Publish(uint64, osc.ValueSource) error { return nil }
-func (*fakeApplicationOSC) Status() osc.OSCStatus                 { return osc.OSCStatus{} }
+func (o *fakeApplicationOSC) Status() osc.OSCStatus {
+	o.mu.Lock()
+	status := o.status
+	onStatus := o.onStatus
+	o.mu.Unlock()
+	if onStatus != nil {
+		onStatus()
+	}
+	return status
+}
 
 type fakeApplicationCoordinator struct {
 	trace      *applicationTrace

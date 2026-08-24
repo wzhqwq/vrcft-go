@@ -281,7 +281,7 @@ func TestPlanInstallerActivationTimeoutCompensatesBeforeContinuing(t *testing.T)
 	pluginControls.assertIndependentBoundedContexts(t, installer.pluginControlTimeout)
 }
 
-func TestPlanInstallerFailedActivationCompensationIsRecordedAndLaterPluginsContinue(t *testing.T) {
+func TestPlanInstallerFailedActivationCompensationBlocksCatalogAndLaterControlsContinue(t *testing.T) {
 	recorder := &installRecorder{}
 	pluginControls := newFakePlanPluginControls(recorder)
 	pluginControls.activeErrors[activeControlKey("vendor.expression", true)] = errors.New("activation result lost")
@@ -302,7 +302,6 @@ func TestPlanInstallerFailedActivationCompensationIsRecordedAndLaterPluginsConti
 		"plugin.active:vendor.expression:false",
 		"plugin.subscription:vendor.eye:9",
 		"plugin.active:vendor.eye:true",
-		"osc.install:9",
 	})
 	wantFailures := []PluginControlFailure{
 		{PluginID: "vendor.expression", Operation: "activate", Message: "activation result lost"},
@@ -314,8 +313,11 @@ func TestPlanInstallerFailedActivationCompensationIsRecordedAndLaterPluginsConti
 	if !pluginControls.activeState["vendor.expression"] {
 		t.Fatal("fake did not preserve uncertain active state after failed compensation")
 	}
-	if !pluginControls.activeState["vendor.eye"] || !outcome.catalogReady {
-		t.Fatal("later plugin controls or catalog installation did not continue")
+	if !pluginControls.activeState["vendor.eye"] {
+		t.Fatal("later safe plugin controls did not continue")
+	}
+	if outcome.catalogReady {
+		t.Fatal("catalog became ready when compensating inactivity was not confirmed")
 	}
 	pluginControls.assertIndependentBoundedContexts(t, installer.pluginControlTimeout)
 }

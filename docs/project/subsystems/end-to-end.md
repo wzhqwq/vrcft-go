@@ -51,7 +51,7 @@ Tests assert bounded queues and selective IPC; benchmarks remain component-owned
 ## Security boundaries
 Fixtures use isolated files and loopback transports without real user data.
 ## Required tests
-Plugin handshake through OSC output, avatar switching, stale generation rejection, and failure recovery.
+Component-owned plugin handshake and process evidence, combined with deterministic in-memory avatar-aware OSC output evidence, plus avatar switching, stale generation rejection, and failure recovery.
 ## Known gaps
 M6 backend composition is complete. Real root Wails construction and lifecycle integration, persisted configuration/path selection, frontend diagnostics and configuration UX, and release work remain M7 concerns. Numeric Lip payload and Expression-to-Lip mapping are not claimed by M6.
 ## Completion definition

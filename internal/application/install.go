@@ -43,6 +43,7 @@ type installOutcome struct {
 	pluginFailures []PluginControlFailure
 	exhausted      bool
 	catalogReady   bool
+	outputBlocked  bool
 }
 
 // maxPluginControlFailureMessageBytes bounds each status diagnostic while
@@ -106,10 +107,14 @@ func (installer *planInstaller) install(ctx context.Context, current activation)
 				return installer.plugins.SetActive(controlCtx, plugin.ID, false)
 			}); compensationErr != nil {
 				outcome.addPluginFailure(plugin.ID, "deactivate", compensationErr)
+				outcome.outputBlocked = true
 			}
 		}
 	}
 
+	if outcome.outputBlocked {
+		return outcome
+	}
 	if err := installer.osc.InstallCatalog(catalog); err != nil {
 		outcome.runtimeErr = fmt.Errorf("install OSC catalog generation %d: %w", generation, err)
 		return outcome

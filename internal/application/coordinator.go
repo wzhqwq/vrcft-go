@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -37,17 +38,20 @@ type runtimePublisher interface {
 }
 
 type coordinator struct {
-	planner   activationPlanner
-	installer *planInstaller
-	pipeline  framePipeline
-	tracking  sourceRemover
-	runtime   runtimePublisher
-	status    *statusStore
-	clock     *monotonicClock
-	current   planView
-	latest    tracking.MergedFrame
-	hasLatest bool
-	suspended bool
+	planner          activationPlanner
+	installer        *planInstaller
+	pipeline         framePipeline
+	tracking         sourceRemover
+	runtime          runtimePublisher
+	status           *statusStore
+	clock            *monotonicClock
+	current          planView
+	latest           tracking.MergedFrame
+	hasLatest        bool
+	suspended        bool
+	outputBlocked    bool
+	pluginSessionsMu sync.Mutex
+	pluginSessions   map[string]uint64
 }
 
 func (c *coordinator) run(ctx context.Context, inputs coordinatorInputs, ready chan<- struct{}) {
@@ -122,7 +126,8 @@ func (c *coordinator) activate(ctx context.Context, change osc.AvatarChange) {
 	}
 	outcome := c.installer.install(ctx, current)
 	c.current = outcome.plan
-	c.suspended = outcome.runtimeErr != nil && usablePlan(outcome.plan)
+	c.outputBlocked = outcome.outputBlocked
+	c.suspended = !c.outputBlocked && outcome.runtimeErr != nil && usablePlan(outcome.plan)
 	c.publishInstallStatus(change.AvatarID, outcome)
 }
 
@@ -167,7 +172,7 @@ func (c *coordinator) process(ctx context.Context, frame tracking.MergedFrame, n
 }
 
 func (c *coordinator) hasUsablePlan(generation uint64) bool {
-	return usablePlan(c.current) && generation == c.current.Generation()
+	return !c.outputBlocked && usablePlan(c.current) && generation == c.current.Generation()
 }
 
 func usablePlan(plan planView) bool {
@@ -218,8 +223,38 @@ func (c *coordinator) observePlugin(event plugins.Event) {
 	if pluginID == "" && event.Snapshot != nil {
 		pluginID = event.Snapshot.ID
 	}
-	if event.Type == plugins.EventPluginRemoved ||
-		event.Snapshot != nil && (event.Snapshot.State != plugins.StateRunning || !event.Snapshot.Active) {
+	if event.Type == plugins.EventPluginRemoved {
+		c.pluginSessionsMu.Lock()
+		delete(c.pluginSessions, pluginID)
+		c.pluginSessionsMu.Unlock()
+		c.tracking.RemoveSource(pluginID)
+		return
+	}
+
+	sessionChanged := false
+	staleSession := false
+	if event.Snapshot != nil && event.Snapshot.SessionID != 0 {
+		c.pluginSessionsMu.Lock()
+		if c.pluginSessions == nil {
+			c.pluginSessions = make(map[string]uint64)
+		}
+		previous, observed := c.pluginSessions[pluginID]
+		switch {
+		case observed && event.Snapshot.SessionID < previous:
+			staleSession = true
+		case observed && event.Snapshot.SessionID > previous:
+			sessionChanged = true
+			c.pluginSessions[pluginID] = event.Snapshot.SessionID
+		case !observed:
+			c.pluginSessions[pluginID] = event.Snapshot.SessionID
+		}
+		c.pluginSessionsMu.Unlock()
+	}
+	if staleSession {
+		return
+	}
+	if sessionChanged || event.Snapshot != nil &&
+		(event.Snapshot.State != plugins.StateRunning || !event.Snapshot.Active) {
 		c.tracking.RemoveSource(pluginID)
 	}
 }

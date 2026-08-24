@@ -12,6 +12,60 @@ import (
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
 
+func TestManagerConstructionDefersEventHubUntilFirstSubscription(t *testing.T) {
+	managerAPI, err := newManager(
+		&managerTestCatalog{},
+		newManagerTestStore(emptyPluginSettings()),
+		managerTestLauncher{},
+		managerTestFrameSink{},
+		DefaultOptions(),
+		managerDependencies{},
+	)
+	if err != nil {
+		t.Fatalf("newManager() error = %v", err)
+	}
+	manager := managerAPI.(*pluginManager)
+	select {
+	case <-manager.events.started:
+		t.Fatal("event hub started during Manager construction")
+	default:
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	events := manager.Subscribe(ctx)
+	select {
+	case <-manager.events.started:
+	case <-time.After(time.Second):
+		t.Fatal("event hub did not start for first subscription")
+	}
+	cancel()
+	waitClosed(t, events)
+	if err := manager.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestManagerSubscriberBeforeStartReceivesStartupSnapshot(t *testing.T) {
+	factory := newManagerTestSupervisorFactory()
+	manager := newManagerForTest(t, &managerTestCatalog{plugins: []InstalledPlugin{
+		managerTestPlugin("vendor.alpha"),
+	}}, newManagerTestStore(emptyPluginSettings()), factory)
+	eventCtx, cancelEvents := context.WithCancel(context.Background())
+	t.Cleanup(cancelEvents)
+	events := manager.Subscribe(eventCtx)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	event := receiveManagerEventMatching(t, events, func(event Event) bool {
+		return event.Type == EventPluginDiscovered && event.PluginID == "vendor.alpha"
+	})
+	if event.Snapshot == nil || event.Snapshot.ID != "vendor.alpha" {
+		t.Fatalf("startup discovery snapshot = %+v, want vendor.alpha", event.Snapshot)
+	}
+}
+
 func TestManagerStartupBuildsFixedSortedRegistryAndPreservesUnavailablePreferences(t *testing.T) {
 	catalog := &managerTestCatalog{plugins: []InstalledPlugin{
 		managerTestPlugin("vendor.beta"),
@@ -218,6 +272,51 @@ func TestManagerStartupRollsBackAndCanRetry(t *testing.T) {
 	}
 }
 
+func TestManagerSameIDSupervisorRecreationUsesNewSessionIdentity(t *testing.T) {
+	sessions := newManagerScriptedSessionFactory()
+	failBeta := true
+	manager, err := newManager(
+		&managerTestCatalog{plugins: []InstalledPlugin{
+			managerTestPlugin("vendor.alpha"),
+			managerTestPlugin("vendor.beta"),
+		}},
+		newManagerTestStore(PluginSettings{Plugins: map[string]PluginPreference{
+			"vendor.alpha": {Enabled: true},
+		}}),
+		managerTestLauncher{},
+		&managerRecordingFrameSink{},
+		DefaultOptions(),
+		managerDependencies{
+			newSession: sessions.create,
+			newSupervisor: func(config pluginSupervisorConfig) (pluginSupervisor, error) {
+				if config.Plugin.Manifest.ID == "vendor.beta" && failBeta {
+					failBeta = false
+					return nil, errors.New("construct beta once")
+				}
+				return newPluginSupervisor(config)
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("newManager() error = %v", err)
+	}
+
+	if err := manager.Start(context.Background()); err == nil {
+		t.Fatal("first Start() error = nil, want beta construction failure")
+	}
+	first := sessions.await(t, "vendor.alpha", 1)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("retry Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	second := sessions.await(t, "vendor.alpha", 2)
+
+	if first.instanceID == 0 || second.instanceID <= first.instanceID {
+		t.Fatalf("same-ID recreated session identities = %d then %d, want positive increase", first.instanceID, second.instanceID)
+	}
+}
+
 func TestManagerStartupRollsBackWhenCallerCancelsDuringFinalSupervisorConstruction(t *testing.T) {
 	catalog := &managerTestCatalog{plugins: []InstalledPlugin{
 		managerTestPlugin("vendor.alpha"),
@@ -363,7 +462,12 @@ func TestManagerCloseDuringFinalStartupCancellationKeepsClosingLifecycle(t *test
 	}
 	implementation := manager.(*pluginManager)
 	implementation.events.Close()
-	blockingEvents := &eventHub{done: make(chan struct{}), stopped: make(chan struct{})}
+	blockingEvents := &eventHub{
+		done:    make(chan struct{}),
+		stopped: make(chan struct{}),
+		started: make(chan struct{}),
+	}
+	blockingEvents.startOnce.Do(func() { close(blockingEvents.started) })
 	implementation.events = blockingEvents
 	var releaseEventsOnce sync.Once
 	releaseEvents := func() { releaseEventsOnce.Do(func() { close(blockingEvents.stopped) }) }
@@ -570,6 +674,51 @@ func TestManagerRoutesRuntimeControlsAndHonorsCancellationAndBackpressure(t *tes
 	supervisor.commandHook = func(supervisorCommand) error { return ErrControlBackpressure }
 	if err := manager.SetActive(context.Background(), "vendor.alpha", true); !errors.Is(err, ErrControlBackpressure) {
 		t.Fatalf("SetActive backpressure error = %v, want ErrControlBackpressure", err)
+	}
+}
+
+func TestManagerFailedActivationCompensationReachesCurrentSession(t *testing.T) {
+	sessions := newManagerScriptedSessionFactory()
+	manager, err := newManager(
+		&managerTestCatalog{plugins: []InstalledPlugin{managerTestPlugin("vendor.alpha")}},
+		newManagerTestStore(PluginSettings{Plugins: map[string]PluginPreference{
+			"vendor.alpha": {Enabled: true},
+		}}),
+		managerTestLauncher{},
+		&managerRecordingFrameSink{},
+		DefaultOptions(),
+		managerDependencies{newSession: sessions.create},
+	)
+	if err != nil {
+		t.Fatalf("newManager() error = %v", err)
+	}
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+
+	session := sessions.await(t, "vendor.alpha", 1)
+	session.ready()
+	awaitManagerState(t, manager, "vendor.alpha", StateRunning)
+
+	activationErr := errors.New("activation acknowledgement lost")
+	session.setControlError(activationErr)
+	if err := manager.SetActive(context.Background(), "vendor.alpha", true); !errors.Is(err, activationErr) {
+		t.Fatalf("SetActive(true) error = %v, want activation failure", err)
+	}
+	if request := session.awaitControl(t); request.kind != controlActive || !request.state.Active {
+		t.Fatalf("activation request = %+v, want ActiveChanged(true)", request)
+	}
+	if snapshot, _ := manager.Get("vendor.alpha"); snapshot.Active {
+		t.Fatalf("snapshot Active = true after failed activation: %+v", snapshot)
+	}
+
+	session.setControlError(nil)
+	if err := manager.SetActive(context.Background(), "vendor.alpha", false); err != nil {
+		t.Fatalf("compensating SetActive(false) error = %v", err)
+	}
+	if request := session.awaitControl(t); request.kind != controlActive || request.state.Active || !request.forceActive {
+		t.Fatalf("compensating request = %+v, want forced ActiveChanged(false)", request)
 	}
 }
 
@@ -1451,6 +1600,7 @@ func (f *managerScriptedSessionFactory) count(id string) int {
 }
 
 type managerScriptedSession struct {
+	mu           sync.Mutex
 	instanceID   uint64
 	dependencies sessionDependencies
 	descriptor   pluginapi.Descriptor
@@ -1458,15 +1608,25 @@ type managerScriptedSession struct {
 	done         chan sessionResult
 	controls     chan controlRequest
 	finishOnce   sync.Once
+	controlErr   error
 }
 
 func (s *managerScriptedSession) Control(ctx context.Context, request controlRequest) error {
 	select {
 	case s.controls <- request:
-		return nil
+		s.mu.Lock()
+		err := s.controlErr
+		s.mu.Unlock()
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (s *managerScriptedSession) setControlError(err error) {
+	s.mu.Lock()
+	s.controlErr = err
+	s.mu.Unlock()
 }
 
 func (s *managerScriptedSession) Stop(context.Context) error {

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
@@ -71,6 +73,7 @@ type pluginManager struct {
 	closeOnce    sync.Once
 	closeDone    chan struct{}
 	closeErr     error
+	sessionID    atomic.Uint64
 }
 
 func NewManager(
@@ -238,6 +241,7 @@ func (m *pluginManager) Start(ctx context.Context) error {
 	close(startDone)
 	m.mu.Unlock()
 
+	m.events.start()
 	for _, id := range ids {
 		snapshot := supervisors[id].Snapshot()
 		m.events.Publish(Event{
@@ -331,7 +335,20 @@ func (m *pluginManager) supervisorConfig(
 				droppedLog = saturatingAddUint64(log.Dropped, 1)
 			}
 		},
+		NextSessionID:      m.nextSessionID,
 		SupervisorCapacity: m.options.ControlCapacity,
+	}
+}
+
+func (m *pluginManager) nextSessionID() uint64 {
+	for {
+		current := m.sessionID.Load()
+		if current == math.MaxUint64 {
+			return 0
+		}
+		if m.sessionID.CompareAndSwap(current, current+1) {
+			return current + 1
+		}
 	}
 }
 
@@ -514,7 +531,11 @@ func (m *pluginManager) Restart(ctx context.Context, id string) error {
 }
 
 func (m *pluginManager) SetActive(ctx context.Context, id string, active bool) error {
-	return m.command(ctx, id, supervisorCommand{kind: supervisorActive, active: active})
+	return m.command(ctx, id, supervisorCommand{
+		kind:        supervisorActive,
+		active:      active,
+		forceActive: !active,
+	})
 }
 
 func (m *pluginManager) UpdateSubscription(

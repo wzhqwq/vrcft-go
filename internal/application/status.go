@@ -84,6 +84,9 @@ func (store *statusStore) update(update func(*Status)) Status {
 	}
 	next.Revision = nextRevision(store.current.Revision)
 	next.UpdatedAt = store.now()
+	if next.UpdatedAt.Before(store.current.UpdatedAt) {
+		next.UpdatedAt = store.current.UpdatedAt
+	}
 	store.current = cloneStatus(next)
 	store.publishLocked()
 	return cloneStatus(store.current)

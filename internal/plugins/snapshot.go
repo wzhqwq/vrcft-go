@@ -32,6 +32,9 @@ type RuntimeSnapshot struct {
 	Active  bool
 	State   State
 	PID     int
+	// SessionID is positive and manager-wide for a launched session. It stays
+	// on loss snapshots and changes before a replacement session is published.
+	SessionID uint64
 
 	ConfigRevision         uint64
 	SubscriptionGeneration uint64

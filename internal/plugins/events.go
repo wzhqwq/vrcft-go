@@ -54,6 +54,8 @@ type eventHub struct {
 	remove    chan *eventSubscriber
 	done      chan struct{}
 	stopped   chan struct{}
+	started   chan struct{}
+	startOnce sync.Once
 	closed    sync.Once
 }
 
@@ -82,9 +84,16 @@ func newEventHub(capacity int) *eventHub {
 		remove:    make(chan *eventSubscriber, capacity),
 		done:      make(chan struct{}),
 		stopped:   make(chan struct{}),
+		started:   make(chan struct{}),
 	}
-	go hub.run()
 	return hub
+}
+
+func (h *eventHub) start() {
+	h.startOnce.Do(func() {
+		close(h.started)
+		go h.run()
+	})
 }
 
 func maxEventCommands(capacity int) int {
@@ -115,6 +124,7 @@ func (h *eventHub) Publish(event Event) bool {
 }
 
 func (h *eventHub) Subscribe(ctx context.Context) <-chan Event {
+	h.start()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -138,6 +148,7 @@ func (h *eventHub) Subscribe(ctx context.Context) <-chan Event {
 }
 
 func (h *eventHub) Close() {
+	h.start()
 	h.closed.Do(func() { close(h.done) })
 	<-h.stopped
 }

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net"
 	"reflect"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestOSCServiceConstructorReturnsErrors(t *testing.T) {
@@ -65,5 +67,25 @@ func TestOSCServiceStatusSanitizesLastError(t *testing.T) {
 
 	if got, want := service.Status().LastError, "connection failed safely"; got != want {
 		t.Fatalf("LastError = %q, want %q", got, want)
+	}
+}
+
+func TestOSCServiceStatusRepairsInvalidUTF8AndBoundsLastError(t *testing.T) {
+	controller := newRuntimeController(t, CatalogExternal, &recordingPacketSender{})
+	controller.recordError(errors.New(
+		"  xy\r\n" + string([]byte{0xff}) + "\t" + strings.Repeat("é", 300),
+	))
+	service := &baseOSCService{controller: controller}
+
+	got := service.Status().LastError
+	want := "xy � " + strings.Repeat("é", 252)
+	if got != want {
+		t.Fatalf("LastError = %q, want %q", got, want)
+	}
+	if len(got) > 512 || !utf8.ValidString(got) {
+		t.Fatalf("LastError length/UTF-8 = (%d, %t), want at most 512 valid bytes", len(got), utf8.ValidString(got))
+	}
+	if strings.ContainsAny(got, "\r\n\t") {
+		t.Fatalf("LastError contains control whitespace: %q", got)
 	}
 }

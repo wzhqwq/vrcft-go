@@ -72,6 +72,7 @@ const (
 type controlRequest struct {
 	kind          controlKind
 	state         controlState
+	forceActive   bool
 	reply         chan error
 	onSendAttempt func()
 }
@@ -209,6 +210,7 @@ func applyControl(state *controlState, request controlRequest) (protocol.Message
 		payload = protocol.SubscriptionChanged{Subscription: state.Subscription}
 	case controlActive:
 		changed = state.applyActive(request.state.Active)
+		changed = changed || request.forceActive
 		payload = protocol.ActiveChanged{Active: state.Active}
 	case controlShutdown:
 		changed = true

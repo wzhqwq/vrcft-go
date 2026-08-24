@@ -94,6 +94,26 @@ func TestStatusStoreRevisionSaturatesAtMaximumPositiveValue(t *testing.T) {
 	}
 }
 
+func TestStatusStoreUpdatedAtDoesNotRegressWhenClockMovesBackward(t *testing.T) {
+	createdAt := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	times := []time.Time{createdAt, createdAt.Add(-time.Minute)}
+	store := newStatusStore(func() time.Time {
+		now := times[0]
+		times = times[1:]
+		return now
+	})
+
+	updated := store.update(func(status *Status) {
+		status.Lifecycle = LifecycleStarting
+	})
+	if updated.Revision != 2 {
+		t.Fatalf("updated Revision = %d, want 2", updated.Revision)
+	}
+	if !updated.UpdatedAt.Equal(createdAt) {
+		t.Fatalf("updated UpdatedAt = %v, want clamped %v", updated.UpdatedAt, createdAt)
+	}
+}
+
 func receiveStatus(t *testing.T, values <-chan Status) Status {
 	t.Helper()
 	select {

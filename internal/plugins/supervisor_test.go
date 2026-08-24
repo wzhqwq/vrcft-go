@@ -126,6 +126,41 @@ func TestPluginSupervisorControlsStateAndOwnsStartup(t *testing.T) {
 	}
 }
 
+func TestPluginSupervisorSnapshotIdentifiesRestartedSession(t *testing.T) {
+	factory := newSupervisorTestFactory()
+	supervisor, err := newPluginSupervisor(pluginSupervisorConfig{
+		Plugin:     supervisorTestPlugin(),
+		Preference: PluginPreference{Enabled: true},
+		Restart:    DefaultRestartPolicy(),
+		NewSession: factory.newSession,
+	})
+	if err != nil {
+		t.Fatalf("newPluginSupervisor() error = %v", err)
+	}
+	defer closeSupervisor(t, supervisor)
+
+	first := factory.awaitLaunch(t)
+	first.callbacks.ProcessStarted(first.instanceID, 101)
+	first.callbacks.Ready(first.instanceID, validHandshakeDescriptor())
+	awaitSupervisorState(t, supervisor, StateRunning)
+	firstSnapshot := supervisor.Snapshot()
+	if firstSnapshot.SessionID == 0 || firstSnapshot.SessionID != first.instanceID {
+		t.Fatalf("first snapshot SessionID = %d, want launch identity %d", firstSnapshot.SessionID, first.instanceID)
+	}
+
+	if err := supervisor.Command(context.Background(), supervisorCommand{kind: supervisorRestart}); err != nil {
+		t.Fatalf("Restart() error = %v", err)
+	}
+	second := factory.awaitLaunch(t)
+	second.callbacks.ProcessStarted(second.instanceID, 202)
+	second.callbacks.Ready(second.instanceID, validHandshakeDescriptor())
+	awaitSupervisorState(t, supervisor, StateRunning)
+	secondSnapshot := supervisor.Snapshot()
+	if secondSnapshot.SessionID != second.instanceID || secondSnapshot.SessionID <= firstSnapshot.SessionID {
+		t.Fatalf("restart snapshot SessionIDs = %d then %d, want launch identities %d then %d", firstSnapshot.SessionID, secondSnapshot.SessionID, first.instanceID, second.instanceID)
+	}
+}
+
 func TestPluginSupervisorUsesRuntimeDisplayMetadataOnlyForCurrentReadySession(t *testing.T) {
 	factory := newSupervisorTestFactory()
 	clock := newSupervisorTestClock(time.Unix(125, 0))

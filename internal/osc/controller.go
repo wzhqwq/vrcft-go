@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 type ControllerConfig struct {
@@ -708,10 +709,14 @@ func (c *Controller) recordError(err error) {
 	if err == nil {
 		return
 	}
-	message := strings.Join(strings.Fields(err.Error()), " ")
+	message := strings.ToValidUTF8(err.Error(), "\uFFFD")
+	message = strings.Join(strings.Fields(message), " ")
 	const maxErrorBytes = 512
 	if len(message) > maxErrorBytes {
 		message = message[:maxErrorBytes]
+		for !utf8.ValidString(message) {
+			message = message[:len(message)-1]
+		}
 	}
 	c.statusMu.Lock()
 	c.lastError = message

@@ -66,6 +66,7 @@ type supervisorCommand struct {
 	config       pluginapi.Config
 	subscription pluginapi.Subscription
 	active       bool
+	forceActive  bool
 	reply        chan error
 	admission    *supervisorAdmission
 }
@@ -137,6 +138,7 @@ type pluginSupervisorConfig struct {
 	Publish            func(RuntimeSnapshot)
 	PublishStatus      func(pluginapi.DeviceStatus)
 	PublishLog         func(observedPluginLog)
+	NextSessionID      func() uint64
 	SupervisorCapacity int
 }
 
@@ -265,6 +267,16 @@ func newPluginSupervisor(config pluginSupervisorConfig) (pluginSupervisor, error
 	if config.NewTimer == nil {
 		config.NewTimer = func(delay time.Duration) supervisorTimer {
 			return realSupervisorTimer{Timer: time.NewTimer(delay)}
+		}
+	}
+	if config.NextSessionID == nil {
+		var sessionID uint64
+		config.NextSessionID = func() uint64 {
+			if sessionID == ^uint64(0) {
+				return 0
+			}
+			sessionID++
+			return sessionID
 		}
 	}
 	capacity := config.SupervisorCapacity
@@ -612,6 +624,8 @@ func prepareSupervisorControl(
 		request.kind = controlActive
 		changed = next.applyActive(command.active)
 		request.state.Active = next.Active
+		request.forceActive = command.forceActive
+		changed = changed || command.forceActive
 	default:
 		err = ErrInvalidState
 	}
@@ -803,8 +817,15 @@ func (s *serializedPluginSupervisor) startSession(state *supervisorLoopState) {
 		state.snapshot.RestartCount++
 	}
 	state.launches++
-	state.instanceID++
-	instanceID := state.instanceID
+	instanceID := s.config.NextSessionID()
+	if instanceID == 0 {
+		state.snapshot.State = StateIncompatible
+		state.snapshot.LastError = sanitizedSupervisorError(ErrInvalidState)
+		s.publish(state)
+		return
+	}
+	state.instanceID = instanceID
+	state.snapshot.SessionID = instanceID
 	s.publish(state)
 
 	callbacks := s.sessionCallbacks(instanceID)

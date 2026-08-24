@@ -193,6 +193,63 @@ func TestCoordinatorRecoveryInstallFailureRemainsClosedAndDegraded(t *testing.T)
 	}
 }
 
+func TestCoordinatorUnconfirmedActivationCompensationBlocksFrameRecoveryUntilNextPlan(t *testing.T) {
+	recorder := &installRecorder{}
+	pluginControls := newFakePlanPluginControls(recorder)
+	pluginControls.activeErrors[activeControlKey("vendor.expression", true)] = errors.New("activation result lost")
+	pluginControls.commitActiveOnError["vendor.expression"] = true
+	pluginControls.compensationErrors["vendor.expression"] = errors.New("compensation rejected")
+	runtime := newFakeRuntimePublisher()
+	trackingControl := newFakeCoordinatorTracking()
+	pipeline := &fakeFramePipeline{
+		result: processing.CanonicalFrame{Generation: 7, EyeActive: true},
+		notify: make(chan struct{}, 4),
+	}
+	status := newStatusStore(func() time.Time { return time.Unix(0, 1) })
+	plan := readyInstallPlan(7)
+	coordinator := &coordinator{
+		planner: &fixedActivationPlanner{activation: activation{plan: plan}},
+		installer: &planInstaller{
+			plugins:              pluginControls,
+			tracking:             trackingControl,
+			osc:                  runtime,
+			pluginControlTimeout: time.Second,
+		},
+		pipeline: pipeline,
+		tracking: trackingControl,
+		runtime:  runtime,
+		status:   status,
+		clock:    newMonotonicClock(func() time.Time { return time.Unix(0, 100) }),
+	}
+
+	coordinator.activate(context.Background(), osc.AvatarChange{Revision: 1, AvatarID: "avtr_blocked"})
+	frame := tracking.MergedFrame{Generation: 7, Sequence: 1}
+	coordinator.process(context.Background(), frame, 100)
+	coordinator.process(context.Background(), frame, 101)
+
+	if got := runtime.snapshotOperations(); !reflect.DeepEqual(got, []string{"clear"}) {
+		t.Fatalf("blocked-generation runtime operations = %v, want only activation clear", got)
+	}
+	if got := len(pipeline.snapshotCalls()); got != 0 {
+		t.Fatalf("blocked-generation pipeline calls = %d, want zero", got)
+	}
+	if got := status.snapshot(); got.Lifecycle != LifecycleDegraded || len(got.PluginFailures) != 2 {
+		t.Fatalf("blocked-generation status = %+v, want degraded with activation and deactivation failures", got)
+	}
+
+	delete(pluginControls.activeErrors, activeControlKey("vendor.expression", true))
+	delete(pluginControls.compensationErrors, "vendor.expression")
+	coordinator.planner = &fixedActivationPlanner{activation: activation{plan: readyInstallPlan(8)}}
+	pipeline.result = processing.CanonicalFrame{Generation: 8, EyeActive: true}
+	coordinator.activate(context.Background(), osc.AvatarChange{Revision: 2, AvatarID: "avtr_recovered"})
+	coordinator.process(context.Background(), tracking.MergedFrame{Generation: 8, Sequence: 1}, 102)
+
+	wantOperations := []string{"clear", "clear", "install:8", "publish:8"}
+	if got := runtime.snapshotOperations(); !reflect.DeepEqual(got, wantOperations) {
+		t.Fatalf("post-transition runtime operations = %v, want %v", got, wantOperations)
+	}
+}
+
 func TestCoordinatorAvatarMailboxCoalescesLatestWhileActivationRuns(t *testing.T) {
 	planner := newBlockingActivationPlanner()
 	harness := newCoordinatorHarnessWithPlanner(t, planner)
@@ -248,6 +305,138 @@ func TestCoordinatorPluginLifecycleLossRemovesTrackingSource(t *testing.T) {
 	if got := harness.tracking.snapshotRemovals(); !reflect.DeepEqual(got, []string{"stopped", "inactive", "removed"}) {
 		t.Fatalf("source removals = %v, want stopped, inactive, removed", got)
 	}
+}
+
+func TestCoordinatorCoalescedRunningRestartRemovesPriorSessionSource(t *testing.T) {
+	planner := newBlockingActivationPlanner()
+	harness := newCoordinatorHarnessWithPlanner(t, planner)
+	harness.start()
+
+	harness.pluginEvents <- plugins.Event{
+		Type:     plugins.EventPluginStateChanged,
+		PluginID: "vendor.eye",
+		Snapshot: &plugins.RuntimeSnapshot{
+			ID:        "vendor.eye",
+			State:     plugins.StateRunning,
+			Active:    true,
+			SessionID: 41,
+		},
+	}
+	harness.sync(t)
+	if got := harness.tracking.snapshotRemovals(); len(got) != 0 {
+		t.Fatalf("initial running session removals = %v, want none", got)
+	}
+
+	offerAvatarChange(harness.avatarChanges, osc.AvatarChange{Revision: 1, AvatarID: "avtr_block"})
+	planner.awaitStart(t)
+	offerPluginEvent(harness.pluginEvents, plugins.Event{
+		Type:     plugins.EventPluginStateChanged,
+		PluginID: "vendor.eye",
+		Snapshot: &plugins.RuntimeSnapshot{
+			ID:        "vendor.eye",
+			State:     plugins.StateBackoff,
+			Active:    true,
+			SessionID: 41,
+		},
+	})
+	offerPluginEvent(harness.pluginEvents, plugins.Event{
+		Type:     plugins.EventPluginStateChanged,
+		PluginID: "vendor.eye",
+		Snapshot: &plugins.RuntimeSnapshot{
+			ID:        "vendor.eye",
+			State:     plugins.StateRunning,
+			Active:    true,
+			SessionID: 42,
+		},
+	})
+	close(planner.releaseFirst)
+
+	if got := harness.tracking.awaitRemoval(t); got != "vendor.eye" {
+		t.Fatalf("coalesced restart removal = %q, want vendor.eye", got)
+	}
+	harness.pluginEvents <- plugins.Event{
+		Type:     plugins.EventPluginStateChanged,
+		PluginID: "vendor.eye",
+		Snapshot: &plugins.RuntimeSnapshot{
+			ID:        "vendor.eye",
+			State:     plugins.StateRunning,
+			Active:    true,
+			SessionID: 42,
+		},
+	}
+	harness.sync(t)
+	if got := harness.tracking.snapshotRemovals(); !reflect.DeepEqual(got, []string{"vendor.eye"}) {
+		t.Fatalf("session-change removals = %v, want one vendor.eye removal", got)
+	}
+}
+
+func TestCoordinatorIgnoresLifecycleSnapshotOlderThanObservedSession(t *testing.T) {
+	trackingControl := newFakeCoordinatorTracking()
+	coordinator := &coordinator{tracking: trackingControl}
+	coordinator.observePlugin(plugins.Event{
+		Type:     plugins.EventPluginStateChanged,
+		PluginID: "vendor.eye",
+		Snapshot: &plugins.RuntimeSnapshot{
+			ID:        "vendor.eye",
+			State:     plugins.StateRunning,
+			Active:    true,
+			SessionID: 42,
+		},
+	})
+	coordinator.observePlugin(plugins.Event{
+		Type:     plugins.EventPluginStateChanged,
+		PluginID: "vendor.eye",
+		Snapshot: &plugins.RuntimeSnapshot{
+			ID:        "vendor.eye",
+			State:     plugins.StateBackoff,
+			Active:    true,
+			SessionID: 41,
+		},
+	})
+
+	if got := trackingControl.snapshotRemovals(); len(got) != 0 {
+		t.Fatalf("stale session removals = %v, want none", got)
+	}
+}
+
+func TestCoordinatorPluginSessionObservationSerializesWithReconcile(t *testing.T) {
+	coordinator := &coordinator{tracking: tracking.NewService()}
+	runner := &coordinatorRunner{coordinator: coordinator}
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(2)
+
+	go func() {
+		defer workers.Done()
+		<-start
+		for index := range 1000 {
+			coordinator.observePlugin(plugins.Event{
+				Type:     plugins.EventPluginStateChanged,
+				PluginID: "vendor.eye",
+				Snapshot: &plugins.RuntimeSnapshot{
+					ID:        "vendor.eye",
+					State:     plugins.StateRunning,
+					Active:    true,
+					SessionID: uint64(index + 1),
+				},
+			})
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		for index := range 1000 {
+			runner.Reconcile([]plugins.RuntimeSnapshot{{
+				ID:        "vendor.eye",
+				State:     plugins.StateRunning,
+				Active:    true,
+				SessionID: uint64(index + 1001),
+			}})
+		}
+	}()
+
+	close(start)
+	workers.Wait()
 }
 
 func TestCoordinatorOSCDiagnosticsUpdateStatusWithoutOwningCatalog(t *testing.T) {
@@ -385,7 +574,7 @@ func newCoordinatorHarnessWithPlanner(t *testing.T, planner activationPlanner) *
 	ctx, cancel := context.WithCancel(context.Background())
 	avatarChanges := make(chan osc.AvatarChange, 1)
 	oscEvents := make(chan osc.ControllerEvent)
-	pluginEvents := make(chan plugins.Event)
+	pluginEvents := make(chan plugins.Event, 1)
 	merged := make(chan tracking.MergedFrame, 1)
 	ticks := make(chan time.Time, 1)
 	harness := &coordinatorHarness{
@@ -744,9 +933,11 @@ func (*coordinatorPluginControls) UpdateSubscription(context.Context, string, pl
 	return nil
 }
 
-type fixedActivationPlanner struct{}
+type fixedActivationPlanner struct {
+	activation activation
+}
 
-func (*fixedActivationPlanner) Activate(string) activation { return activation{} }
+func (p *fixedActivationPlanner) Activate(string) activation { return p.activation }
 
 type blockingActivationPlanner struct {
 	mu           sync.Mutex
@@ -816,6 +1007,18 @@ func offerAvatarChange(ch chan osc.AvatarChange, change osc.AvatarChange) {
 		default:
 		}
 		ch <- change
+	}
+}
+
+func offerPluginEvent(ch chan plugins.Event, event plugins.Event) {
+	select {
+	case ch <- event:
+	default:
+		select {
+		case <-ch:
+		default:
+		}
+		ch <- event
 	}
 }
 
