@@ -18,17 +18,26 @@ checks:
     path: wails.json
     weight: 1
     required: true
-  - id: backend-lifecycle-wired
-    description: Root constructs and owns the Application lifecycle through Wails callbacks
+  - id: backend-lifecycle-owned
+    description: Root owns and invokes the composed Application lifecycle
     type: symbol
     path: app.go
     pattern: '(?s)type App struct\s*\{.*backend\s+\*application\.Application.*func \(a \*App\) startup\(ctx context\.Context\) \{.*a\.backend, err := application\.NewApp\(.*\).*a\.backend\.Start\(ctx\).*func \(a \*App\) shutdown\(ctx context\.Context\) \{.*a\.backend\.Close\(ctx\)'
-    weight: 3
+    weight: 2
+    required: true
+  - id: wails-lifecycle-callbacks
+    description: Wails registers the owned backend startup and shutdown callbacks
+    type: symbol
+    path: main.go
+    pattern: '(?s)wails\.Run\(&options\.App\{.*OnStartup:\s*app\.startup,.*OnShutdown:\s*app\.shutdown,'
+    weight: 1
     required: true
 blockers:
   - check: package-builds
     blocks: [M7]
-  - check: backend-lifecycle-wired
+  - check: backend-lifecycle-owned
+    blocks: [M7]
+  - check: wails-lifecycle-callbacks
     blocks: [M7]
 ---
 # Package: root
@@ -56,7 +65,7 @@ The bootstrap must not perform frame processing.
 ## Security boundaries
 Only explicitly bound M7 diagnostics/configuration methods may be exposed to the frontend; the backend must not expose tracking payloads, credentials, or raw configuration through the template binding.
 ## Required tests
-The root build proves that the current executable compiles, and the file check proves that the Wails configuration artifact exists. `backend-lifecycle-wired` is required source evidence for the future root bridge: `app.go` must construct `internal/application.Application`, start it in the Wails startup callback, and close it in a Wails shutdown callback.
+The root build proves that the current executable compiles, and the file check proves that the Wails configuration artifact exists. `backend-lifecycle-owned` is required source evidence in `app.go` for owned Application construction plus `Start`/`Close` calls. `wails-lifecycle-callbacks` separately proves that the real `wails.Run` options register those methods as `OnStartup` and `OnShutdown`; lifecycle methods that are merely declared cannot complete the root contract.
 ## Known gaps
 M6 backend composition is complete below root. M7 still needs real root Wails construction and lifecycle wiring, persisted configuration/path selection, frontend diagnostics/configuration UX, and release integration.
 ## Completion definition
