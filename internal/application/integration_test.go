@@ -125,23 +125,55 @@ func TestApplicationAvatarAwareOSCEndToEnd(t *testing.T) {
 		Capabilities: trackingmodel.CapabilityExpression,
 	}
 	lateFrame.Expressions.Set(trackingmodel.ExpressionJawOpen, 1)
+	trackingBeforeStale, ok := fixture.tracking.LatestMerged()
+	if !ok {
+		t.Fatal("generation 2 LatestMerged() unavailable before stale submission")
+	}
 	beforeStale := fixture.runtime.snapshot()
+	publicationMarker := fixture.runtime.publicationCount()
 	if err := fixture.tracking.Submit(pluginID, 1, lateFrame); !errors.Is(err, tracking.ErrStaleGeneration) {
 		t.Fatalf("late generation 1 tracking Submit() error = %v, want ErrStaleGeneration", err)
+	}
+	trackingAfterStale, ok := fixture.tracking.LatestMerged()
+	if !ok || trackingAfterStale != trackingBeforeStale {
+		t.Fatalf("late generation 1 tracking changed merged state from %#v to %#v,%t", trackingBeforeStale, trackingAfterStale, ok)
 	}
 	if err := fixture.runtime.Publish(1, generationOneSource); !errors.Is(err, osc.ErrRuntimeGeneration) {
 		t.Fatalf("late generation 1 OSC Publish() error = %v, want ErrRuntimeGeneration", err)
 	}
-	afterStale := fixture.runtime.snapshot()
-	if afterStale.revision != beforeStale.revision {
-		t.Fatalf("late generation 1 data changed runtime revision from %d to %d", beforeStale.revision, afterStale.revision)
+
+	barrierFrame := trackingmodel.TrackingFrame{
+		Sequence:     2,
+		Capabilities: trackingmodel.CapabilityExpression,
 	}
-	assertEndToEndCatalogIDs(t, afterStale.catalog,
+	barrierFrame.Expressions.Set(trackingmodel.ExpressionMouthClosed, 0.5)
+	fixture.sink.Submit(pluginID, 2, barrierFrame)
+	barrierOutput := awaitEndToEndRuntime(t, fixture.runtime, func(state endToEndRuntimeState) bool {
+		return state.revision > beforeStale.revision &&
+			endToEndFloatEquals(state.source, parameters.ParameterMouthClosed, 0.5) &&
+			endToEndBoolEquals(state.source, parameters.ParameterExpressionTrackingActive, true)
+	})
+	publications := fixture.runtime.publicationsFrom(publicationMarker)
+	if len(publications) != 1 {
+		t.Fatalf("OSC publications after stale submission = %#v, want exactly the current-generation barrier", publications)
+	}
+	barrierPublication := publications[0]
+	if barrierPublication.revision != barrierOutput.revision || barrierPublication.generation != 2 {
+		t.Fatalf("barrier publication = %#v, want runtime revision %d and generation 2", barrierPublication, barrierOutput.revision)
+	}
+	assertEndToEndCatalogIDs(t, barrierPublication.catalog,
 		parameters.ParameterMouthClosed,
 		parameters.ParameterExpressionTrackingActive,
 	)
-	assertEndToEndFloat(t, afterStale.source, parameters.ParameterMouthClosed, 0.25, true)
-	assertEndToEndFloat(t, afterStale.source, parameters.ParameterJawOpen, 0, false)
+	assertEndToEndFloat(t, barrierPublication.source, parameters.ParameterMouthClosed, 0.5, true)
+	assertEndToEndBool(t, barrierPublication.source, parameters.ParameterExpressionTrackingActive, true, true)
+	assertEndToEndFloat(t, barrierPublication.source, parameters.ParameterJawOpen, 0, false)
+
+	trackingAfterBarrier, ok := fixture.tracking.LatestMerged()
+	barrierValue, barrierValueOK := trackingAfterBarrier.Expressions.Get(trackingmodel.ExpressionMouthClosed)
+	if !ok || trackingAfterBarrier.Generation != 2 || trackingAfterBarrier.Sequence <= trackingBeforeStale.Sequence || !barrierValueOK || barrierValue != 0.5 {
+		t.Fatalf("generation 2 tracking barrier = %#v,%t, MouthClosed=%v,%t", trackingAfterBarrier, ok, barrierValue, barrierValueOK)
+	}
 
 	fixture.writeAvatarConfig(t, avatarTwo, `{"id":`)
 	fixture.runtime.offerAvatarChange(osc.AvatarChange{Revision: 3, AvatarID: avatarTwo})
@@ -419,16 +451,57 @@ type endToEndRuntimeState struct {
 	source     osc.ValueSource
 }
 
+type endToEndSourceSnapshot struct {
+	floats     [parameters.ParameterCount]float32
+	floatValid [parameters.ParameterCount]bool
+	bools      [parameters.ParameterCount]bool
+	boolValid  [parameters.ParameterCount]bool
+}
+
+func snapshotEndToEndSource(source osc.ValueSource) endToEndSourceSnapshot {
+	var snapshot endToEndSourceSnapshot
+	if source == nil {
+		return snapshot
+	}
+	for id := parameters.ParameterID(0); id < parameters.ParameterCount; id++ {
+		snapshot.floats[id], snapshot.floatValid[id] = source.Float(id)
+		snapshot.bools[id], snapshot.boolValid[id] = source.Bool(id)
+	}
+	return snapshot
+}
+
+func (snapshot endToEndSourceSnapshot) Float(id parameters.ParameterID) (float32, bool) {
+	if id >= parameters.ParameterCount {
+		return 0, false
+	}
+	return snapshot.floats[id], snapshot.floatValid[id]
+}
+
+func (snapshot endToEndSourceSnapshot) Bool(id parameters.ParameterID) (bool, bool) {
+	if id >= parameters.ParameterCount {
+		return false, false
+	}
+	return snapshot.bools[id], snapshot.boolValid[id]
+}
+
+type endToEndPublication struct {
+	revision   uint64
+	generation uint64
+	catalog    *osc.Catalog
+	source     endToEndSourceSnapshot
+}
+
 type endToEndRuntime struct {
-	mu          sync.Mutex
-	running     bool
-	revision    uint64
-	generation  uint64
-	catalog     *osc.Catalog
-	source      osc.ValueSource
-	changes     chan osc.AvatarChange
-	events      chan osc.ControllerEvent
-	stateChange chan struct{}
+	mu           sync.Mutex
+	running      bool
+	revision     uint64
+	generation   uint64
+	catalog      *osc.Catalog
+	source       osc.ValueSource
+	publications []endToEndPublication
+	changes      chan osc.AvatarChange
+	events       chan osc.ControllerEvent
+	stateChange  chan struct{}
 }
 
 func newEndToEndRuntime() *endToEndRuntime {
@@ -509,8 +582,15 @@ func (runtime *endToEndRuntime) Publish(generation uint64, source osc.ValueSourc
 		runtime.mu.Unlock()
 		return osc.ErrRuntimeGeneration
 	}
+	sourceSnapshot := snapshotEndToEndSource(source)
 	runtime.revision++
-	runtime.source = source
+	runtime.source = sourceSnapshot
+	runtime.publications = append(runtime.publications, endToEndPublication{
+		revision:   runtime.revision,
+		generation: generation,
+		catalog:    runtime.catalog.Clone(),
+		source:     sourceSnapshot,
+	})
 	runtime.mu.Unlock()
 	signalEndToEndChange(runtime.stateChange)
 	return nil
@@ -535,6 +615,29 @@ func (runtime *endToEndRuntime) snapshot() endToEndRuntimeState {
 		catalog:    runtime.catalog.Clone(),
 		source:     runtime.source,
 	}
+}
+
+func (runtime *endToEndRuntime) publicationCount() int {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return len(runtime.publications)
+}
+
+func (runtime *endToEndRuntime) publicationsFrom(marker int) []endToEndPublication {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if marker < 0 {
+		marker = 0
+	}
+	if marker >= len(runtime.publications) {
+		return nil
+	}
+	publications := make([]endToEndPublication, len(runtime.publications)-marker)
+	for index, publication := range runtime.publications[marker:] {
+		publications[index] = publication
+		publications[index].catalog = publication.catalog.Clone()
+	}
+	return publications
 }
 
 type endToEndTicker struct {
