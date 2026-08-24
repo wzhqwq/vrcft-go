@@ -85,18 +85,18 @@ type Application struct {
 	coordinator applicationCoordinator
 	status      *statusStore
 
-	frameInterval time.Duration
-	newTicker     func(time.Duration) applicationTicker
+	frameInterval  time.Duration
+	cleanupTimeout time.Duration
+	newTicker      func(time.Duration) applicationTicker
 
 	mu                 sync.Mutex
 	lifecycle          applicationLifecycle
+	lifecycleOperation chan struct{}
 	runCancel          context.CancelFunc
 	ticker             applicationTicker
-	startDone          chan struct{}
 	managerClosed      bool
 	coordinatorStarted bool
 	oscClosed          bool
-	closeDone          chan struct{}
 	closeErr           error
 }
 
@@ -153,19 +153,19 @@ func newApplication(config Config, dependencies applicationDependencies) (*Appli
 		return nil, fmt.Errorf("construct coordinator: %w", err)
 	}
 
-	startDone := make(chan struct{})
-	close(startDone)
+	lifecycleOperation := make(chan struct{}, 1)
+	lifecycleOperation <- struct{}{}
 	return &Application{
-		plugins:       manager,
-		tracking:      trackingService,
-		osc:           oscService,
-		coordinator:   coordinator,
-		status:        status,
-		frameInterval: normalized.frameInterval,
-		newTicker:     dependencies.newTicker,
-		lifecycle:     applicationCreated,
-		startDone:     startDone,
-		closeDone:     make(chan struct{}),
+		plugins:            manager,
+		tracking:           trackingService,
+		osc:                oscService,
+		coordinator:        coordinator,
+		status:             status,
+		frameInterval:      normalized.frameInterval,
+		cleanupTimeout:     normalized.pluginControlTimeout,
+		newTicker:          dependencies.newTicker,
+		lifecycle:          applicationCreated,
+		lifecycleOperation: lifecycleOperation,
 	}, nil
 }
 
@@ -240,6 +240,10 @@ func (a *Application) Start(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("start application: context is required")
 	}
+	if err := a.acquireLifecycleOperation(ctx); err != nil {
+		return fmt.Errorf("start application lifecycle: %w", err)
+	}
+	defer a.releaseLifecycleOperation()
 
 	a.mu.Lock()
 	if a.lifecycle != applicationCreated {
@@ -249,18 +253,14 @@ func (a *Application) Start(ctx context.Context) error {
 	}
 	a.lifecycle = applicationStarting
 	runCtx, cancel := context.WithCancel(ctx)
-	startDone := make(chan struct{})
 	a.runCancel = cancel
-	a.startDone = startDone
 	ticker := a.newTicker(a.frameInterval)
 	a.ticker = ticker
-	a.mu.Unlock()
-	defer close(startDone)
-
 	a.status.update(func(status *Status) {
 		status.Lifecycle = LifecycleStarting
 		status.RuntimeError = ""
 	})
+	a.mu.Unlock()
 
 	inputs := coordinatorInputs{
 		avatarChanges: a.osc.AvatarChanges(runCtx),
@@ -271,13 +271,16 @@ func (a *Application) Start(ctx context.Context) error {
 	}
 
 	if err := a.plugins.Start(runCtx); err != nil {
-		cancel()
-		ticker.Stop()
-		return a.failStart(fmt.Errorf("start plugin manager: %w", err))
+		startupErr := fmt.Errorf("start plugin manager: %w", err)
+		if !a.closeRequested() {
+			cancel()
+			ticker.Stop()
+		}
+		return a.failStart(startupErr)
 	}
 	if err := a.coordinator.Start(runCtx, inputs); err != nil {
 		startupErr := fmt.Errorf("start coordinator: %w", err)
-		return a.failStart(a.rollback(ctx, startupErr, false))
+		return a.finishStartFailure(startupErr, false)
 	}
 	a.setCoordinatorStarted(true)
 
@@ -285,40 +288,48 @@ func (a *Application) Start(ctx context.Context) error {
 	case <-a.coordinator.Ready():
 	case <-runCtx.Done():
 		startupErr := fmt.Errorf("wait for coordinator readiness: %w", runCtx.Err())
-		return a.failStart(a.rollback(ctx, startupErr, true))
+		return a.finishStartFailure(startupErr, true)
 	}
 	a.coordinator.Reconcile(a.plugins.List())
 
 	if err := runCtx.Err(); err != nil {
 		startupErr := fmt.Errorf("start application: %w", err)
-		return a.failStart(a.rollback(ctx, startupErr, true))
+		return a.finishStartFailure(startupErr, true)
+	}
+	if a.closeRequested() {
+		return a.failStart(fmt.Errorf("%w: application closed during start", ErrInvalidLifecycle))
 	}
 	if err := a.osc.Start(runCtx); err != nil {
 		startupErr := fmt.Errorf("start OSC service: %w", err)
-		return a.failStart(a.rollback(ctx, startupErr, true))
+		return a.finishStartFailure(startupErr, true)
 	}
 
 	a.mu.Lock()
 	if a.lifecycle != applicationStarting {
 		a.mu.Unlock()
-		startupErr := fmt.Errorf("%w: application closed during start", ErrInvalidLifecycle)
-		return a.failStart(a.rollback(ctx, startupErr, true))
+		return a.failStart(fmt.Errorf("%w: application closed during start", ErrInvalidLifecycle))
 	}
 	a.lifecycle = applicationRunning
-	a.mu.Unlock()
 	a.status.update(func(status *Status) {
-		if status.Lifecycle != LifecycleClosing && status.Lifecycle != LifecycleClosed {
-			status.Lifecycle = LifecycleRunning
-			status.RuntimeError = ""
-		}
+		status.Lifecycle = LifecycleRunning
+		status.RuntimeError = ""
 	})
+	a.mu.Unlock()
 	return nil
 }
 
-func (a *Application) rollback(ctx context.Context, startupErr error, coordinatorStarted bool) error {
+func (a *Application) finishStartFailure(startupErr error, coordinatorStarted bool) error {
+	if a.closeRequested() {
+		return a.failStart(startupErr)
+	}
+	return a.failStart(a.rollback(startupErr, coordinatorStarted))
+}
+
+func (a *Application) rollback(startupErr error, coordinatorStarted bool) error {
 	a.mu.Lock()
 	cancel := a.runCancel
 	ticker := a.ticker
+	timeout := a.cleanupTimeout
 	a.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -327,19 +338,23 @@ func (a *Application) rollback(ctx context.Context, startupErr error, coordinato
 		ticker.Stop()
 	}
 
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), timeout)
+	defer cleanupCancel()
 	result := startupErr
 	if coordinatorStarted {
-		if err := a.coordinator.Join(ctx); err != nil {
+		if err := a.coordinator.Join(cleanupCtx); err != nil {
 			result = errors.Join(result, fmt.Errorf("join coordinator during startup rollback: %w", err))
+		} else {
+			a.setCoordinatorStarted(false)
 		}
-		a.setCoordinatorStarted(false)
 	}
-	if err := a.plugins.Close(ctx); err != nil {
+	if err := a.plugins.Close(cleanupCtx); err != nil {
 		result = errors.Join(result, fmt.Errorf("close plugin manager during startup rollback: %w", err))
+	} else {
+		a.mu.Lock()
+		a.managerClosed = true
+		a.mu.Unlock()
 	}
-	a.mu.Lock()
-	a.managerClosed = true
-	a.mu.Unlock()
 	return result
 }
 
@@ -347,15 +362,19 @@ func (a *Application) failStart(err error) error {
 	a.mu.Lock()
 	if a.lifecycle == applicationStarting {
 		a.lifecycle = applicationFailed
-	}
-	a.mu.Unlock()
-	a.status.update(func(status *Status) {
-		if status.Lifecycle != LifecycleClosing && status.Lifecycle != LifecycleClosed {
+		a.status.update(func(status *Status) {
 			status.Lifecycle = LifecycleDegraded
 			status.RuntimeError = coordinatorErrorMessage(err)
-		}
-	})
+		})
+	}
+	a.mu.Unlock()
 	return err
+}
+
+func (a *Application) closeRequested() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lifecycle == applicationClosing || a.lifecycle == applicationClosed
 }
 
 func (a *Application) Close(ctx context.Context) error {
@@ -364,48 +383,42 @@ func (a *Application) Close(ctx context.Context) error {
 	}
 
 	a.mu.Lock()
-	switch a.lifecycle {
-	case applicationClosed:
+	if a.lifecycle == applicationClosed {
 		err := a.closeErr
 		a.mu.Unlock()
 		return err
-	case applicationClosing:
-		done := a.closeDone
-		a.mu.Unlock()
-		return waitForApplicationClose(ctx, done, a.cachedCloseError)
 	}
-	wasStarting := a.lifecycle == applicationStarting
-	a.lifecycle = applicationClosing
-	startDone := a.startDone
-	cancel := a.runCancel
-	done := a.closeDone
-	a.status.update(func(status *Status) {
-		status.Lifecycle = LifecycleClosing
-	})
+	if a.lifecycle != applicationClosing {
+		a.lifecycle = applicationClosing
+		a.status.update(func(status *Status) {
+			status.Lifecycle = LifecycleClosing
+		})
+	}
 	a.mu.Unlock()
 
-	go a.finishClose(ctx, startDone, cancel, wasStarting)
-	return waitForApplicationClose(ctx, done, a.cachedCloseError)
+	if err := a.acquireLifecycleOperation(ctx); err != nil {
+		return err
+	}
+	defer a.releaseLifecycleOperation()
+
+	a.mu.Lock()
+	if a.lifecycle == applicationClosed {
+		err := a.closeErr
+		a.mu.Unlock()
+		return err
+	}
+	a.mu.Unlock()
+	return a.finishClose(ctx)
 }
 
-func (a *Application) finishClose(ctx context.Context, startDone <-chan struct{}, cancel context.CancelFunc, wasStarting bool) {
+func (a *Application) finishClose(ctx context.Context) error {
 	result := error(nil)
-	if wasStarting && cancel != nil {
-		cancel()
-	}
-	if startDone != nil {
-		select {
-		case <-startDone:
-		case <-ctx.Done():
-			result = errors.Join(result, fmt.Errorf("wait for application start: %w", ctx.Err()))
-		}
-	}
-
 	a.mu.Lock()
 	oscClosed := a.oscClosed
 	coordinatorStarted := a.coordinatorStarted
 	managerClosed := a.managerClosed
 	ticker := a.ticker
+	cancel := a.runCancel
 	a.mu.Unlock()
 
 	if !oscClosed {
@@ -434,38 +447,34 @@ func (a *Application) finishClose(ctx context.Context, startDone <-chan struct{}
 		}
 	}
 
+	a.mu.Lock()
 	a.status.update(func(status *Status) {
 		status.Lifecycle = LifecycleClosed
 		if result != nil {
 			status.RuntimeError = coordinatorErrorMessage(result)
 		}
 	})
-	a.mu.Lock()
 	a.managerClosed = true
 	a.closeErr = result
 	a.lifecycle = applicationClosed
-	close(a.closeDone)
 	a.mu.Unlock()
+	return result
 }
 
-func waitForApplicationClose(ctx context.Context, done <-chan struct{}, result func() error) error {
+func (a *Application) acquireLifecycleOperation(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
-	case <-done:
-		return result()
+	case <-a.lifecycleOperation:
+		return nil
 	case <-ctx.Done():
-		select {
-		case <-done:
-			return result()
-		default:
-			return ctx.Err()
-		}
+		return ctx.Err()
 	}
 }
 
-func (a *Application) cachedCloseError() error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.closeErr
+func (a *Application) releaseLifecycleOperation() {
+	a.lifecycleOperation <- struct{}{}
 }
 
 func (a *Application) Status() Status {

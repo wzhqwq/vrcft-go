@@ -101,6 +101,11 @@ func TestApplicationProductionConstructionOwnsCompleteBackend(t *testing.T) {
 
 func TestApplicationStartSubscribesBeforeProducersAndStartsOSCLast(t *testing.T) {
 	harness := newApplicationHarness(t, "", nil)
+	wantSnapshots := []plugins.RuntimeSnapshot{
+		{ID: "eye", Name: "Eye Tracker", Capabilities: trackingmodel.CapabilityEye, Enabled: true, Active: true, State: plugins.StateRunning, PID: 101},
+		{ID: "face", Name: "Face Tracker", Capabilities: trackingmodel.CapabilityExpression, Enabled: true, Active: false, State: plugins.StateStopped},
+	}
+	harness.manager.snapshots = append([]plugins.RuntimeSnapshot(nil), wantSnapshots...)
 	app := harness.newApp(t)
 
 	if err := app.Start(context.Background()); err != nil {
@@ -116,6 +121,8 @@ func TestApplicationStartSubscribesBeforeProducersAndStartsOSCLast(t *testing.T)
 		"plugins.start",
 		"coordinator.start",
 		"coordinator.ready",
+		"plugins.list",
+		"coordinator.reconcile",
 		"osc.start",
 	}
 	if got := harness.trace.snapshot(); !reflect.DeepEqual(got, want) {
@@ -123,6 +130,86 @@ func TestApplicationStartSubscribesBeforeProducersAndStartsOSCLast(t *testing.T)
 	}
 	if status := app.Status(); status.Lifecycle != LifecycleRunning {
 		t.Fatalf("Status().Lifecycle = %q, want %q", status.Lifecycle, LifecycleRunning)
+	}
+	if got := harness.coordinator.reconciledSnapshots(); !reflect.DeepEqual(got, wantSnapshots) {
+		t.Fatalf("coordinator reconciled snapshots = %#v, want %#v", got, wantSnapshots)
+	}
+}
+
+func TestApplicationCloseWaitsForStartLifecycleOwnershipBeforeTeardown(t *testing.T) {
+	harness := newApplicationHarness(t, "", nil)
+	harness.osc.startEntered = make(chan struct{})
+	harness.osc.releaseStart = make(chan struct{})
+	harness.osc.closeCalled = make(chan struct{}, 1)
+	app := harness.newApp(t)
+
+	startResult := make(chan error, 1)
+	go func() { startResult <- app.Start(context.Background()) }()
+	receiveApplicationSignal(t, harness.osc.startEntered, "OSC Start entry")
+
+	closeCtx, cancelClose := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelClose()
+	if err := app.Close(closeCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close() while Start owns lifecycle error = %v, want context deadline exceeded", err)
+	}
+	select {
+	case <-harness.osc.closeCalled:
+		close(harness.osc.releaseStart)
+		<-startResult
+		t.Fatal("Close() called OSC Close before blocked Start released lifecycle ownership")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(harness.osc.releaseStart)
+	if err := receiveApplicationError(t, startResult, "Start completion"); !errors.Is(err, ErrInvalidLifecycle) {
+		t.Fatalf("Start() overtaken by Close error = %v, want errors.Is(_, ErrInvalidLifecycle)", err)
+	}
+	harness.trace.reset()
+	if err := app.Close(context.Background()); err != nil {
+		t.Fatalf("retry Close() error = %v", err)
+	}
+	want := []string{"osc.close", "coordinator.cancel", "coordinator.join", "plugins.close"}
+	if got := harness.trace.snapshot(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("serialized close trace = %v, want %v", got, want)
+	}
+}
+
+func TestApplicationLifecycleDoesNotRegressWhenCloseOvertakesStart(t *testing.T) {
+	harness := newApplicationHarness(t, "", nil)
+	harness.osc.startEntered = make(chan struct{})
+	harness.osc.releaseStart = make(chan struct{})
+	app := harness.newApp(t)
+	updatesCtx, cancelUpdates := context.WithCancel(context.Background())
+	defer cancelUpdates()
+	updates := app.SubscribeStatus(updatesCtx)
+	_ = receiveApplicationStatus(t, updates)
+
+	startResult := make(chan error, 1)
+	go func() { startResult <- app.Start(context.Background()) }()
+	receiveApplicationSignal(t, harness.osc.startEntered, "OSC Start entry")
+	if status := awaitApplicationLifecycle(t, updates, LifecycleStarting); status.Lifecycle != LifecycleStarting {
+		t.Fatalf("startup lifecycle = %q, want starting", status.Lifecycle)
+	}
+
+	closeCtx, cancelClose := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelClose()
+	if err := app.Close(closeCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close() while Start owns lifecycle error = %v, want context deadline exceeded", err)
+	}
+	if status := app.Status(); status.Lifecycle != LifecycleClosing {
+		t.Fatalf("lifecycle after bounded Close = %q, want closing", status.Lifecycle)
+	}
+
+	close(harness.osc.releaseStart)
+	_ = receiveApplicationError(t, startResult, "Start completion")
+	if status := app.Status(); status.Lifecycle != LifecycleClosing {
+		t.Fatalf("lifecycle after overtaken Start returns = %q, want closing", status.Lifecycle)
+	}
+	if err := app.Close(context.Background()); err != nil {
+		t.Fatalf("final Close() error = %v", err)
+	}
+	if status := app.Status(); status.Lifecycle != LifecycleClosed {
+		t.Fatalf("final lifecycle = %q, want closed", status.Lifecycle)
 	}
 }
 
@@ -151,6 +238,42 @@ func TestApplicationOSCStartFailureRollsBackCoordinatorThenPluginsAndJoinsErrors
 	trace := harness.trace.snapshot()
 	if len(trace) < len(wantTail) || !reflect.DeepEqual(trace[len(trace)-len(wantTail):], wantTail) {
 		t.Fatalf("rollback trace = %v, want tail %v", trace, wantTail)
+	}
+}
+
+func TestApplicationCloseRetriesStartupCleanupThatDidNotComplete(t *testing.T) {
+	startErr := errors.New("OSC start failed")
+	joinErr := errors.New("first coordinator join failed")
+	managerCloseErr := errors.New("first manager close failed")
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	harness := newApplicationHarness(t, "", nil)
+	harness.osc.startErr = startErr
+	harness.osc.onStart = cancelStart
+	harness.coordinator.joinErrs = []error{joinErr, nil}
+	harness.manager.closeErrs = []error{managerCloseErr, nil}
+	app := harness.newApp(t)
+
+	err := app.Start(startCtx)
+	for _, want := range []error{startErr, joinErr, managerCloseErr} {
+		if !errors.Is(err, want) {
+			t.Fatalf("Start() error = %v, want errors.Is(_, %v)", err, want)
+		}
+	}
+	if got := harness.coordinator.joinContextErrors(); len(got) != 1 || got[0] != nil {
+		t.Fatalf("startup coordinator join context errors = %v, want [nil]", got)
+	}
+	if got := harness.manager.closeContextErrors(); len(got) != 1 || got[0] != nil {
+		t.Fatalf("startup Manager close context errors = %v, want [nil]", got)
+	}
+	receiveApplicationSignal(t, harness.coordinator.cancelledSignal(), "coordinator rollback cancellation")
+
+	harness.trace.reset()
+	if err := app.Close(context.Background()); err != nil {
+		t.Fatalf("Close() retry error = %v", err)
+	}
+	want := []string{"osc.close", "coordinator.join", "plugins.close"}
+	if got := harness.trace.snapshot(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("cleanup retry trace = %v, want %v", got, want)
 	}
 }
 
@@ -326,6 +449,26 @@ func awaitApplicationLifecycle(t *testing.T, updates <-chan Status, lifecycle Li
 	}
 }
 
+func receiveApplicationSignal(t *testing.T, signal <-chan struct{}, operation string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", operation)
+	}
+}
+
+func receiveApplicationError(t *testing.T, result <-chan error, operation string) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", operation)
+		return nil
+	}
+}
+
 type applicationHarness struct {
 	trace       *applicationTrace
 	failFactory string
@@ -476,10 +619,14 @@ type fakeApplicationFrameSink struct{}
 func (fakeApplicationFrameSink) Submit(string, uint64, trackingmodel.TrackingFrame) {}
 
 type fakeApplicationManager struct {
-	trace    *applicationTrace
-	events   chan plugins.Event
-	startErr error
-	closeErr error
+	trace     *applicationTrace
+	events    chan plugins.Event
+	startErr  error
+	closeErr  error
+	mu        sync.Mutex
+	snapshots []plugins.RuntimeSnapshot
+	closeErrs []error
+	closeCtxs []error
 }
 
 func (m *fakeApplicationManager) Start(context.Context) error {
@@ -487,12 +634,32 @@ func (m *fakeApplicationManager) Start(context.Context) error {
 	return m.startErr
 }
 
-func (m *fakeApplicationManager) Close(context.Context) error {
+func (m *fakeApplicationManager) Close(ctx context.Context) error {
 	m.trace.add("plugins.close")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closeCtxs = append(m.closeCtxs, ctx.Err())
+	if len(m.closeErrs) != 0 {
+		err := m.closeErrs[0]
+		m.closeErrs = m.closeErrs[1:]
+		return err
+	}
 	return m.closeErr
 }
 
-func (*fakeApplicationManager) List() []plugins.RuntimeSnapshot { return nil }
+func (m *fakeApplicationManager) List() []plugins.RuntimeSnapshot {
+	m.trace.add("plugins.list")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]plugins.RuntimeSnapshot(nil), m.snapshots...)
+}
+
+func (m *fakeApplicationManager) closeContextErrors() []error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]error(nil), m.closeCtxs...)
+}
+
 func (*fakeApplicationManager) SetActive(context.Context, string, bool) error {
 	return nil
 }
@@ -510,15 +677,34 @@ type fakeApplicationOSC struct {
 	events        chan osc.ControllerEvent
 	startErr      error
 	closeErr      error
+	onStart       func()
+	startEntered  chan struct{}
+	releaseStart  chan struct{}
+	closeCalled   chan struct{}
 }
 
 func (o *fakeApplicationOSC) Start(context.Context) error {
 	o.trace.add("osc.start")
+	if o.onStart != nil {
+		o.onStart()
+	}
+	if o.startEntered != nil {
+		close(o.startEntered)
+	}
+	if o.releaseStart != nil {
+		<-o.releaseStart
+	}
 	return o.startErr
 }
 
 func (o *fakeApplicationOSC) Close(context.Context) error {
 	o.trace.add("osc.close")
+	if o.closeCalled != nil {
+		select {
+		case o.closeCalled <- struct{}{}:
+		default:
+		}
+	}
 	return o.closeErr
 }
 
@@ -538,12 +724,16 @@ func (*fakeApplicationOSC) Publish(uint64, osc.ValueSource) error { return nil }
 func (*fakeApplicationOSC) Status() osc.OSCStatus                 { return osc.OSCStatus{} }
 
 type fakeApplicationCoordinator struct {
-	trace    *applicationTrace
-	startErr error
-	joinErr  error
-	mu       sync.Mutex
-	ready    chan struct{}
-	done     chan struct{}
+	trace      *applicationTrace
+	startErr   error
+	joinErr    error
+	mu         sync.Mutex
+	ready      chan struct{}
+	done       chan struct{}
+	cancelled  chan struct{}
+	joinErrs   []error
+	joinCtxs   []error
+	reconciled []plugins.RuntimeSnapshot
 }
 
 func (c *fakeApplicationCoordinator) Start(ctx context.Context, _ coordinatorInputs) error {
@@ -554,14 +744,17 @@ func (c *fakeApplicationCoordinator) Start(ctx context.Context, _ coordinatorInp
 	c.mu.Lock()
 	c.ready = make(chan struct{})
 	c.done = make(chan struct{})
+	c.cancelled = make(chan struct{})
 	ready := c.ready
 	done := c.done
+	cancelled := c.cancelled
 	c.mu.Unlock()
 	go func() {
 		c.trace.add("coordinator.ready")
 		close(ready)
 		<-ctx.Done()
 		c.trace.add("coordinator.cancel")
+		close(cancelled)
 		close(done)
 	}()
 	return nil
@@ -573,11 +766,42 @@ func (c *fakeApplicationCoordinator) Ready() <-chan struct{} {
 	return c.ready
 }
 
-func (*fakeApplicationCoordinator) Reconcile([]plugins.RuntimeSnapshot) {}
+func (c *fakeApplicationCoordinator) Reconcile(snapshots []plugins.RuntimeSnapshot) {
+	c.trace.add("coordinator.reconcile")
+	c.mu.Lock()
+	c.reconciled = append([]plugins.RuntimeSnapshot(nil), snapshots...)
+	c.mu.Unlock()
+}
+
+func (c *fakeApplicationCoordinator) reconciledSnapshots() []plugins.RuntimeSnapshot {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]plugins.RuntimeSnapshot(nil), c.reconciled...)
+}
+
+func (c *fakeApplicationCoordinator) joinContextErrors() []error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]error(nil), c.joinCtxs...)
+}
+
+func (c *fakeApplicationCoordinator) cancelledSignal() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cancelled
+}
 
 func (c *fakeApplicationCoordinator) Join(ctx context.Context) error {
 	c.mu.Lock()
 	done := c.done
+	c.joinCtxs = append(c.joinCtxs, ctx.Err())
+	if len(c.joinErrs) != 0 {
+		err := c.joinErrs[0]
+		c.joinErrs = c.joinErrs[1:]
+		c.mu.Unlock()
+		c.trace.add("coordinator.join")
+		return err
+	}
 	c.mu.Unlock()
 	if done != nil {
 		select {
