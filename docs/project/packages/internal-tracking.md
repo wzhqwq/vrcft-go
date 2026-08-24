@@ -109,9 +109,9 @@ The package tests prove generation unset/advance/regression/idempotence and atom
 
 ## Known gaps
 
-- M6 must wire the Service and `PluginFrameSink` into Application construction and connect plugin lifecycle loss to `RemoveSource`.
+- M6 Application construction now wires the Service and `PluginFrameSink` and removes sources when plugin lifecycle state is lost; tracking retains ingest, generation, routing, and merge ownership.
 - A future optional shared-memory transport must define its own slot, commit-sequence, synchronization, torn-read protection, and notification protocol before copying a stable frame value into this boundary.
-- M5 avatar planning/binding is implemented by `internal/avatar`. M6 Application installation and evaluator-to-OSC composition plus M7 persistence/UI remain incomplete and outside this package. OSC networking remains outside this package; numeric Lip payload and Expression-to-Lip mapping remain deferred to later product decisions.
+- M5 avatar planning/binding is implemented by `internal/avatar`, and M6 Application installation plus evaluator-to-OSC composition are complete outside this package. M7 persistence/UI and OSC networking remain outside this package; numeric Lip payload and Expression-to-Lip mapping remain deferred to later product decisions.
 
 ## Completion definition
 

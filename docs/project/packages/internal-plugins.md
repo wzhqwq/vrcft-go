@@ -117,7 +117,7 @@ Catalog entries and executable paths must remain within validated roots. Manifes
 Executable package and race tests cover manifest and builtin/dev catalog validation, Lip-only manifest and Host negotiation, Host handshake phases and secret redaction, direct FrameSink delivery with identity and generation, absence of frame events, bounded event behavior, finite supervisor restart, and process/session shutdown. `integration_test.go` is Windows-only real-process evidence for named pipes, handshake, controls, telemetry, cleanup, crashes, and bounded restart.
 
 ## Known gaps
-No `internal/plugins` runtime implementation gap remains. M6 Application wiring is still deferred. The distribution ecosystem—installer APIs, package acquisition, updates, signing, and marketplace policy—and any numeric Lip/Expression-to-Lip contract remain deferred until product requirements define them.
+No `internal/plugins` runtime implementation gap remains. M6 Application wiring now consumes the generation-bearing `FrameSink` and lifecycle state without moving plugin supervision or session ownership into Application. The distribution ecosystem—installer APIs, package acquisition, updates, signing, and marketplace policy—and any numeric Lip/Expression-to-Lip contract remain deferred until product requirements define them.
 
 ## Completion definition
 Builtin and development plugins can be discovered and independently supervised as authenticated, bounded Host sessions; persistent preferences survive restart, session state does not, direct generation-bearing frames reach tracking, and crashes stop after the configured finite restart budget.

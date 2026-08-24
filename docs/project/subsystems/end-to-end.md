@@ -10,7 +10,7 @@ checks:
     type: aggregate
     members:
       - internal-application:tracking-wired
-      - internal-plugins:runtime-loop
+      - internal-plugins:package-tests
       - internal-tracking:service-implemented
       - internal-processing:pipeline-implemented
       - internal-evaluator:package-tests
@@ -21,8 +21,8 @@ checks:
   - id: integration-test
     description: Avatar-aware end-to-end integration test exists
     type: symbol
-    path: internal/application/app_test.go
-    pattern: 'Test.*Avatar.*OSC|Test.*EndToEnd'
+    path: internal/application/integration_test.go
+    pattern: '(?m)^func TestApplicationAvatarAwareOSCEndToEnd\('
     weight: 3
     required: true
 ---
@@ -35,15 +35,15 @@ Verify avatar configuration, selective IPC, ingest, merge, processing, evaluatio
 ## Non-responsibilities
 Component algorithms remain owned by their packages.
 ## Current implementation
-Plugin IPC/session management, generation-aware merge, processing, evaluator, OSC transport, and M5 avatar planning are implemented as components. Application composition, atomic installation of an avatar plan, evaluator-to-OSC feeding, and a complete integration fixture remain absent.
+M6 backend composition is implemented: Application constructs the component path, atomically installs each avatar-plan transition, routes selected current-generation plugin data through merge, processing, and evaluation, and publishes only through current-avatar OSC bindings. `TestApplicationAvatarAwareOSCEndToEnd` provides the deterministic cross-package fixture.
 ## Public/internal interfaces
 The observable product behavior, diagnostics, and integration fixtures.
 ## Owned data
 End-to-end test scenarios and expected cross-package behavior.
 ## Dependencies
-The planned M6 path depends on application, plugins, tracking, processing, evaluator, OSC, and avatar-planning components. The dependency and aggregate entries record required components only; they do not claim production Application wiring or plan installation.
+The M6 path composes application, plugins, tracking, processing, evaluator, OSC, and avatar-planning components while preserving their existing ownership and dependency direction.
 ## Concurrency and lifecycle
-Required integration coverage includes startup, avatar generation changes, frame races, and reverse-order shutdown; that fixture is not implemented yet.
+The coordinator serializes plan activation and frame evaluation; bounded latest-value streams prevent control or diagnostics backlog. Integration coverage includes startup, avatar generation switching, stale-generation fencing, and reverse-order shutdown.
 ## Error handling
 Failures retain package/check provenance and never silently send stale avatar data.
 ## Performance constraints
@@ -53,6 +53,6 @@ Fixtures use isolated files and loopback transports without real user data.
 ## Required tests
 Plugin handshake through OSC output, avatar switching, stale generation rejection, and failure recovery.
 ## Known gaps
-No end-to-end Application integration test or complete avatar-aware data path exists. M5 avatar planning is implemented, but M6 atomic plan installation/binding and lifecycle wiring remain deferred, along with M7 fallback persistence/UI, frontend/release work, numeric Lip payload, and Expression-to-Lip mapping.
+M6 backend composition is complete. Real root Wails construction and lifecycle integration, persisted configuration/path selection, frontend diagnostics and configuration UX, and release work remain M7 concerns. Numeric Lip payload and Expression-to-Lip mapping are not claimed by M6.
 ## Completion definition
 A deterministic fixture proves selected plugin data reaches only current-avatar OSC bindings.
