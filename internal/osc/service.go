@@ -21,11 +21,12 @@ type OSCTarget struct {
 }
 
 type OSCStatus struct {
-	Running   bool
-	Connected bool
-	HasTarget bool
-	Target    OSCTarget
-	LastError string
+	Running    bool
+	Connected  bool
+	HasTarget  bool
+	TargetMode TargetMode
+	Target     OSCTarget
+	LastError  string
 }
 
 type baseOSCService struct {

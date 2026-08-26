@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -13,12 +14,21 @@ import (
 	"unicode/utf8"
 )
 
+type TargetMode string
+
+const (
+	TargetModeAuto   TargetMode = "auto"
+	TargetModeManual TargetMode = "manual"
+)
+
 type ControllerConfig struct {
-	ServiceName string
-	HTTPBind    string
-	OSCBind     string
-	Interfaces  []net.Interface
-	CatalogMode CatalogMode
+	ServiceName  string
+	HTTPBind     string
+	OSCBind      string
+	Interfaces   []net.Interface
+	CatalogMode  CatalogMode
+	TargetMode   TargetMode
+	ManualTarget OSCTarget
 
 	PreferredVRChatService string
 	QueryTimeout           time.Duration
@@ -132,6 +142,9 @@ func NewControllerWithCatalog(
 	if config.CatalogMode != CatalogOSCQuery && config.CatalogMode != CatalogExternal {
 		return nil, fmt.Errorf("invalid OSC catalog mode %d", config.CatalogMode)
 	}
+	if err := normalizeTargetConfig(&config); err != nil {
+		return nil, err
+	}
 	if config.ServiceName == "" {
 		config.ServiceName = "VRCFaceTracking-Go"
 	}
@@ -194,6 +207,16 @@ func (c *Controller) Start(parent context.Context) error {
 		return err
 	}
 	c.udp = udp
+	if c.config.TargetMode == TargetModeManual {
+		target, err := manualUDPAddr(c.config.ManualTarget)
+		if err != nil {
+			_ = udp.Close()
+			_ = queryListener.Close()
+			c.cancel()
+			return err
+		}
+		c.udp.SetTarget(target)
+	}
 	c.sender.transport = udp
 	c.queryClient = NewQueryClient(c.config.QueryTimeout)
 
@@ -309,7 +332,7 @@ func (c *Controller) Status() OSCStatus {
 	connected := c.active != nil
 	c.activeMu.Unlock()
 
-	status := OSCStatus{Running: running, Connected: connected, LastError: lastError}
+	status := OSCStatus{Running: running, Connected: connected, TargetMode: c.config.TargetMode, LastError: lastError}
 	if c.udp != nil {
 		if target := c.udp.Target(); target != nil {
 			status.HasTarget = true
@@ -438,7 +461,9 @@ func (c *Controller) probeService(service DiscoveredService) (*activeVRChat, err
 		if err != nil {
 			continue
 		}
-		c.udp.SetTarget(target)
+		if c.config.TargetMode == TargetModeAuto {
+			c.udp.SetTarget(target)
+		}
 		return &activeVRChat{service: service, baseURL: baseURL, hostInfo: hostInfo}, nil
 	}
 	return nil, fmt.Errorf("service %s is not a usable VRChat OSCQuery service", service.Instance)
@@ -512,7 +537,7 @@ func (c *Controller) clearActive(reason error) {
 	}
 	c.active = nil
 	c.activeMu.Unlock()
-	if c.udp != nil {
+	if c.config.TargetMode == TargetModeAuto && c.udp != nil {
 		c.udp.SetTarget(nil)
 	}
 	if c.config.CatalogMode == CatalogOSCQuery {
@@ -526,6 +551,41 @@ func (c *Controller) clearActive(reason error) {
 			Err:     reason,
 		})
 	}
+}
+
+func normalizeTargetConfig(config *ControllerConfig) error {
+	switch config.TargetMode {
+	case "", TargetModeAuto:
+		config.TargetMode = TargetModeAuto
+		if config.ManualTarget != (OSCTarget{}) {
+			return errors.New("manual OSC target requires manual target mode")
+		}
+	case TargetModeManual:
+		if config.PreferredVRChatService != "" {
+			return errors.New("preferred VRChat service is incompatible with manual OSC target mode")
+		}
+		if _, err := manualUDPAddr(config.ManualTarget); err != nil {
+			return fmt.Errorf("invalid manual OSC target: %w", err)
+		}
+	default:
+		return fmt.Errorf("invalid OSC target mode %q", config.TargetMode)
+	}
+	return nil
+}
+
+func manualUDPAddr(target OSCTarget) (*net.UDPAddr, error) {
+	if target.Port < 1 || target.Port > 65535 {
+		return nil, fmt.Errorf("port %d is outside 1..65535", target.Port)
+	}
+	addr, err := netip.ParseAddr(target.Host)
+	if err != nil {
+		return nil, fmt.Errorf("host %q is not a literal IP address: %w", target.Host, err)
+	}
+	unmapped := addr.Unmap()
+	if unmapped.IsUnspecified() || unmapped.IsMulticast() || unmapped == netip.MustParseAddr("255.255.255.255") {
+		return nil, fmt.Errorf("host %q is not a unicast address", target.Host)
+	}
+	return &net.UDPAddr{IP: net.IP(addr.AsSlice()), Port: target.Port}, nil
 }
 
 func (c *Controller) currentActive() *activeVRChat {

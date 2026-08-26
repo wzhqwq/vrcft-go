@@ -11,6 +11,160 @@ import (
 	"github.com/wzhqwq/vrcft-go/internal/parameters"
 )
 
+func TestNewControllerValidatesTargetMode(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      TargetMode
+		target    OSCTarget
+		preferred string
+		wantErr   bool
+		wantMode  TargetMode
+	}{
+		{"zero is auto", "", OSCTarget{}, "", false, TargetModeAuto},
+		{"auto rejects manual fields", TargetModeAuto, OSCTarget{Host: "127.0.0.1", Port: 9000}, "", true, ""},
+		{"manual IPv4", TargetModeManual, OSCTarget{Host: "127.0.0.1", Port: 9000}, "", false, TargetModeManual},
+		{"manual IPv6", TargetModeManual, OSCTarget{Host: "::1", Port: 9000}, "", false, TargetModeManual},
+		{"manual DNS rejected", TargetModeManual, OSCTarget{Host: "localhost", Port: 9000}, "", true, ""},
+		{"manual unspecified", TargetModeManual, OSCTarget{Host: "0.0.0.0", Port: 9000}, "", true, ""},
+		{"manual multicast", TargetModeManual, OSCTarget{Host: "239.1.1.1", Port: 9000}, "", true, ""},
+		{"manual broadcast", TargetModeManual, OSCTarget{Host: "255.255.255.255", Port: 9000}, "", true, ""},
+		{"manual zero port", TargetModeManual, OSCTarget{Host: "127.0.0.1"}, "", true, ""},
+		{"manual rejects preferred service", TargetModeManual, OSCTarget{Host: "127.0.0.1", Port: 9000}, "VRChat", true, ""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			controller, err := NewController(ControllerConfig{
+				TargetMode:             test.mode,
+				ManualTarget:           test.target,
+				PreferredVRChatService: test.preferred,
+			}, nil, nil)
+			if gotErr := err != nil; gotErr != test.wantErr {
+				t.Fatalf("NewController error = %v, want error %t", err, test.wantErr)
+			}
+			if !test.wantErr && controller.config.TargetMode != test.wantMode {
+				t.Fatalf("TargetMode = %q, want %q", controller.config.TargetMode, test.wantMode)
+			}
+		})
+	}
+}
+
+func TestControllerManualTargetSurvivesDiscoveryTransitions(t *testing.T) {
+	controller, err := NewController(ControllerConfig{
+		TargetMode:   TargetModeManual,
+		ManualTarget: OSCTarget{Host: "127.0.0.1", Port: 9000},
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.ctx = context.Background()
+	controller.udp = &UDPTransport{}
+	controller.udp.SetTarget(&net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 9000})
+	controller.queryClient = &fakeControllerQueryClient{
+		hostInfo:    HostInfo{Name: "VRChat", OSCIP: "127.0.0.2", OSCPort: 9001, OSCTransport: "UDP"},
+		hasHostInfo: true,
+		nodes:       map[string]*QueryNode{"/": NewQueryRoot()},
+	}
+	service := DiscoveredService{Instance: "VRChat", Service: ServiceOSCQuery, HostName: "localhost", Port: 8000}
+
+	for _, step := range []struct {
+		name      string
+		connected bool
+	}{
+		{name: "connect", connected: true},
+		{name: "disconnect", connected: false},
+		{name: "reconnect", connected: true},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			if step.connected {
+				active, err := controller.probeService(service)
+				if err != nil {
+					t.Fatal(err)
+				}
+				controller.active = active
+			} else {
+				controller.clearActive(errors.New("lost"))
+			}
+
+			status := controller.Status()
+			if status.Connected != step.connected {
+				t.Fatalf("Connected = %t, want %t", status.Connected, step.connected)
+			}
+			if !status.HasTarget || status.Target != (OSCTarget{Host: "127.0.0.1", Port: 9000}) {
+				t.Fatalf("target status = %#v, want manual target", status)
+			}
+		})
+	}
+}
+
+func TestControllerManualTargetStillPublishesAvatarChanges(t *testing.T) {
+	controller, err := NewController(ControllerConfig{
+		TargetMode:   TargetModeManual,
+		ManualTarget: OSCTarget{Host: "127.0.0.1", Port: 9000},
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	controller.ctx = ctx
+	controller.cancel = cancel
+	udp, err := ListenUDP("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.udp = udp
+	controller.udp.SetTarget(&net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 9000})
+	controller.wg.Add(1)
+	go controller.runUDPReceiver()
+	defer func() {
+		cancel()
+		_ = udp.Close()
+		controller.wg.Wait()
+	}()
+
+	changes := controller.AvatarChanges(context.Background())
+	packet, err := MarshalMessage(Message{Address: "/avatar/change", Args: []Value{String("avtr_manual")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := net.DialUDP("udp", nil, udp.LocalAddr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+	if _, err := sender.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+	if got := receiveAvatarChange(t, changes); got.AvatarID != "avtr_manual" {
+		t.Fatalf("avatar change = %#v", got)
+	}
+	if status := controller.Status(); !status.HasTarget || status.Target != (OSCTarget{Host: "127.0.0.1", Port: 9000}) {
+		t.Fatalf("target status = %#v, want manual target", status)
+	}
+}
+
+func TestControllerPreferredMissingServiceDoesNotSelectAnotherVRChat(t *testing.T) {
+	controller, err := NewController(ControllerConfig{PreferredVRChatService: "wanted"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.ctx = context.Background()
+	controller.udp = &UDPTransport{}
+	controller.queryClient = &fakeControllerQueryClient{nodes: map[string]*QueryNode{"/": NewQueryRoot()}}
+	controller.services[serviceKey(DiscoveredService{Instance: "other", Service: ServiceOSCQuery})] = DiscoveredService{
+		Instance: "other", Service: ServiceOSCQuery, HostName: "localhost", Port: 8000, LastSeen: time.Now(),
+	}
+
+	controller.connectBest()
+
+	if active := controller.currentActive(); active != nil {
+		t.Fatalf("active service = %#v, want nil", active)
+	}
+	if target := controller.udp.Target(); target != nil {
+		t.Fatalf("target = %v, want nil", target)
+	}
+}
+
 func TestControllerEventCatalogIsolatedFromInstalledCatalog(t *testing.T) {
 	catalog := buildSenderTestCatalog(t, false)
 	transport := &recordingPacketSender{}
@@ -186,13 +340,18 @@ func newRuntimeController(t testing.TB, mode CatalogMode, transport packetSender
 }
 
 type fakeControllerQueryClient struct {
-	nodes map[string]*QueryNode
-	paths []string
-	err   error
+	hostInfo    HostInfo
+	hasHostInfo bool
+	nodes       map[string]*QueryNode
+	paths       []string
+	err         error
 }
 
 func (client *fakeControllerQueryClient) HostInfo(context.Context, string) (HostInfo, error) {
-	return HostInfo{Name: "VRChat", OSCIP: "127.0.0.1", OSCPort: 9000, OSCTransport: "UDP"}, client.err
+	if !client.hasHostInfo {
+		return HostInfo{Name: "VRChat", OSCIP: "127.0.0.1", OSCPort: 9000, OSCTransport: "UDP"}, client.err
+	}
+	return client.hostInfo, client.err
 }
 
 func (client *fakeControllerQueryClient) Node(_ context.Context, _ string, path string) (*QueryNode, error) {

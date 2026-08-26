@@ -50,7 +50,7 @@ func TestOSCServiceForwardsRuntimeMailboxEventsAndStatus(t *testing.T) {
 		t.Fatalf("installed catalog = %#v", got)
 	}
 	status := service.Status()
-	if !status.Running || !status.Connected || !status.HasTarget || status.Target != (OSCTarget{Host: "127.0.0.1", Port: 9000}) {
+	if !status.Running || !status.Connected || !status.HasTarget || status.TargetMode != TargetModeAuto || status.Target != (OSCTarget{Host: "127.0.0.1", Port: 9000}) {
 		t.Fatalf("status = %#v", status)
 	}
 
