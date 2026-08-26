@@ -62,6 +62,39 @@ func TestNormalizeRejectsSemanticErrors(t *testing.T) {
 	}
 }
 
+func TestNormalizeManualTargetAcceptsOnlyUnicastLiterals(t *testing.T) {
+	base := DefaultCandidate(Paths{DefaultOSCRoot: `C:\VRChat\OSC`})
+	tests := []struct {
+		name    string
+		host    string
+		wantErr bool
+	}{
+		{"IPv4 loopback", "127.0.0.1", false},
+		{"IPv6 loopback", "::1", false},
+		{"IPv4 mapped unicast", "::ffff:127.0.0.1", false},
+		{"IPv4 unspecified", "0.0.0.0", true},
+		{"IPv6 unspecified", "::", true},
+		{"IPv4 multicast", "224.0.0.1", true},
+		{"IPv6 multicast", "ff02::1", true},
+		{"IPv4 broadcast", "255.255.255.255", true},
+		{"mapped IPv4 unspecified", "::ffff:0.0.0.0", true},
+		{"mapped IPv4 multicast", "::ffff:224.0.0.1", true},
+		{"mapped IPv4 broadcast", "::ffff:255.255.255.255", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := base.Clone()
+			candidate.OSC.TargetMode = osc.TargetModeManual
+			candidate.OSC.ManualHost = tt.host
+			candidate.OSC.ManualPort = 9000
+			_, err := Normalize(candidate)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Normalize(%q) error = %v, want error %t", tt.host, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestApplicationConfigMapsFreshOwnedBackendConfig(t *testing.T) {
 	paths := Paths{BuiltinPluginDir: `C:\bin\plugins`, PluginStoreFile: `C:\AppData\vrcft-go\plugins.json`, DefaultOSCRoot: `C:\VRChat\OSC`}
 	candidate := DefaultCandidate(paths)

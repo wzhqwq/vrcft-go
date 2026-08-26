@@ -126,7 +126,11 @@ func normalizeOSC(value *OSC) error {
 			return validation("osc.manualPort", errors.New("must be a valid port"))
 		}
 		address, err := netip.ParseAddr(value.ManualHost)
-		if err != nil || address.IsUnspecified() || address.IsMulticast() || value.ManualHost == "255.255.255.255" {
+		if err != nil {
+			return validation("osc.manualHost", errors.New("must be a unicast IP literal"))
+		}
+		address = address.Unmap()
+		if address.IsUnspecified() || address.IsMulticast() || address == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
 			return validation("osc.manualHost", errors.New("must be a unicast IP literal"))
 		}
 	default:

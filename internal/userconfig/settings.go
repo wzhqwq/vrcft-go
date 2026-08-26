@@ -112,9 +112,11 @@ func (candidate Candidate) Clone() Candidate {
 func (processing Processing) Clone() Processing {
 	clone := processing
 	clone.Overrides = append([]ProcessingOverride(nil), processing.Overrides...)
-	clone.MutualExclusion = make([][]string, len(processing.MutualExclusion))
-	for i, group := range processing.MutualExclusion {
-		clone.MutualExclusion[i] = append([]string(nil), group...)
+	if processing.MutualExclusion != nil {
+		clone.MutualExclusion = make([][]string, len(processing.MutualExclusion))
+		for i, group := range processing.MutualExclusion {
+			clone.MutualExclusion[i] = append([]string(nil), group...)
+		}
 	}
 	return clone
 }

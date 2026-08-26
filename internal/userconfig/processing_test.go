@@ -5,6 +5,7 @@ import (
 	"math"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/wzhqwq/vrcft-go/internal/processing"
 )
@@ -46,6 +47,7 @@ func TestProcessingRejectsInvalidWireValues(t *testing.T) {
 			p.Overrides = []ProcessingOverride{{Name: "eye.left_gaze_x", Channel: p.DefaultChannel}, {Name: "eye.left_gaze_x", Channel: p.DefaultChannel}}
 		}, processing.ErrInvalidConfig},
 		{"invalid milliseconds", func(p *Processing) { p.ActiveStaleAfterMs = 0 }, processing.ErrInvalidDropout},
+		{"overflow milliseconds", func(p *Processing) { p.ActiveStaleAfterMs = int64(^uint64(0)>>1)/int64(time.Millisecond) + 1 }, processing.ErrInvalidDropout},
 		{"duplicate group membership", func(p *Processing) {
 			p.MutualExclusion = [][]string{{"eye.left_gaze_x", "eye.right_gaze_x"}, {"eye.left_gaze_x", "eye.left_gaze_y"}}
 		}, processing.ErrInvalidMutualExclusion},

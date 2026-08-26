@@ -46,3 +46,11 @@ func TestSettingsCloneDeepCopiesMutableFields(t *testing.T) {
 		t.Fatalf("settings was mutated through clone: %#v", settings)
 	}
 }
+
+func TestSettingsClonePreservesNilMutualExclusion(t *testing.T) {
+	settings := Settings{Processing: Processing{}}
+	clone := settings.Clone()
+	if clone.Processing.MutualExclusion != nil {
+		t.Fatalf("clone mutual exclusion = %#v, want nil", clone.Processing.MutualExclusion)
+	}
+}
