@@ -481,6 +481,286 @@ func TestApplicationStatusAccessorsExposeOwnedLifecycleSnapshots(t *testing.T) {
 	}
 }
 
+func TestApplicationPluginMutationsRequireRunningLifecycle(t *testing.T) {
+	for _, lifecycle := range []applicationLifecycle{
+		applicationCreated,
+		applicationStarting,
+		applicationFailed,
+		applicationClosing,
+		applicationClosed,
+	} {
+		t.Run(fmt.Sprintf("state-%d", lifecycle), func(t *testing.T) {
+			harness := newApplicationHarness(t, "", nil)
+			app := harness.newApp(t)
+			app.mu.Lock()
+			app.lifecycle = lifecycle
+			app.mu.Unlock()
+
+			for _, mutate := range []struct {
+				name string
+				call func() error
+			}{
+				{name: "enable", call: func() error {
+					return app.SetPluginEnabled(context.Background(), "vendor.alpha", true)
+				}},
+				{name: "disable", call: func() error {
+					return app.SetPluginEnabled(context.Background(), "vendor.alpha", false)
+				}},
+				{name: "update", call: func() error {
+					return app.UpdatePluginConfig(context.Background(), "vendor.alpha", pluginapi.Config{Revision: 1, Data: []byte(`{"gain":2}`)})
+				}},
+			} {
+				t.Run(mutate.name, func(t *testing.T) {
+					if err := mutate.call(); !errors.Is(err, ErrInvalidLifecycle) {
+						t.Fatalf("mutation error = %v, want errors.Is(_, ErrInvalidLifecycle)", err)
+					}
+					if got := harness.manager.pluginCalls(); len(got) != 0 {
+						t.Fatalf("manager calls = %v, want none", got)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestApplicationPluginMutationsDelegateOnceWhileRunning(t *testing.T) {
+	harness := newApplicationHarness(t, "", nil)
+	app := harness.newApp(t)
+	app.mu.Lock()
+	app.lifecycle = applicationRunning
+	app.mu.Unlock()
+	harness.manager.onPluginCall = func() {
+		if !app.mu.TryLock() {
+			t.Error("plugin Manager called while Application lifecycle lock was held")
+			return
+		}
+		app.mu.Unlock()
+	}
+
+	config := pluginapi.Config{Revision: 2, Data: []byte(`{"gain":2}`)}
+	if err := app.SetPluginEnabled(context.Background(), "vendor.alpha", true); err != nil {
+		t.Fatalf("SetPluginEnabled(enable) error = %v", err)
+	}
+	if err := app.SetPluginEnabled(context.Background(), "vendor.alpha", false); err != nil {
+		t.Fatalf("SetPluginEnabled(disable) error = %v", err)
+	}
+	if err := app.UpdatePluginConfig(context.Background(), "vendor.alpha", config); err != nil {
+		t.Fatalf("UpdatePluginConfig() error = %v", err)
+	}
+	config.Data[2] = 'X'
+
+	want := []fakeApplicationPluginCall{
+		{operation: "enable", id: "vendor.alpha"},
+		{operation: "disable", id: "vendor.alpha"},
+		{operation: "update", id: "vendor.alpha", config: pluginapi.Config{Revision: 2, Data: []byte(`{"gain":2}`)}},
+	}
+	if got := harness.manager.pluginCalls(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("manager calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestApplicationPluginMutationsRejectNilContextAndWrapManagerErrors(t *testing.T) {
+	managerErr := errors.New("plugin operation failed")
+	harness := newApplicationHarness(t, "", nil)
+	harness.manager.enableErr = managerErr
+	harness.manager.disableErr = managerErr
+	harness.manager.updateErr = managerErr
+	app := harness.newApp(t)
+	app.mu.Lock()
+	app.lifecycle = applicationRunning
+	app.mu.Unlock()
+
+	if err := app.SetPluginEnabled(nil, "vendor.alpha", true); err == nil || !strings.Contains(err.Error(), "context is required") {
+		t.Fatalf("SetPluginEnabled(nil) error = %v, want context-required error", err)
+	}
+	if err := app.UpdatePluginConfig(nil, "vendor.alpha", pluginapi.Config{}); err == nil || !strings.Contains(err.Error(), "context is required") {
+		t.Fatalf("UpdatePluginConfig(nil) error = %v, want context-required error", err)
+	}
+	if got := harness.manager.pluginCalls(); len(got) != 0 {
+		t.Fatalf("manager calls after nil contexts = %v, want none", got)
+	}
+
+	for _, call := range []struct {
+		name string
+		call func() error
+	}{
+		{name: "enable", call: func() error { return app.SetPluginEnabled(context.Background(), "vendor.alpha", true) }},
+		{name: "disable", call: func() error { return app.SetPluginEnabled(context.Background(), "vendor.alpha", false) }},
+		{name: "update", call: func() error {
+			return app.UpdatePluginConfig(context.Background(), "vendor.alpha", pluginapi.Config{Revision: 1, Data: []byte(`{"gain":1}`)})
+		}},
+	} {
+		t.Run(call.name, func(t *testing.T) {
+			err := call.call()
+			if !errors.Is(err, managerErr) {
+				t.Fatalf("operation error = %v, want errors.Is(_, %v)", err, managerErr)
+			}
+			if !strings.Contains(err.Error(), "vendor.alpha") {
+				t.Fatalf("operation error = %q, want plugin ID", err)
+			}
+		})
+	}
+}
+
+func TestApplicationPluginReadsReturnOwnedCopies(t *testing.T) {
+	harness := newApplicationHarness(t, "", nil)
+	harness.manager.snapshots = []plugins.RuntimeSnapshot{{ID: "vendor.alpha", Name: "Alpha"}}
+	harness.manager.configs = map[string]pluginapi.Config{
+		"vendor.alpha": {Revision: 2, Data: []byte(`{"gain":2}`)},
+	}
+	app := harness.newApp(t)
+
+	values := app.Plugins()
+	values[0].Name = "caller mutation"
+	if got := app.Plugins()[0].Name; got != "Alpha" {
+		t.Fatalf("Plugins() aliases Manager snapshots: %q", got)
+	}
+
+	config, ok := app.PluginConfig("vendor.alpha")
+	if !ok || config.Revision != 2 || string(config.Data) != `{"gain":2}` {
+		t.Fatalf("PluginConfig() = %#v, %v", config, ok)
+	}
+	config.Data[2] = 'X'
+	again, _ := app.PluginConfig("vendor.alpha")
+	if string(again.Data) != `{"gain":2}` {
+		t.Fatalf("PluginConfig() aliases Manager config: %q", again.Data)
+	}
+	if _, ok := app.PluginConfig("missing"); ok {
+		t.Fatal("PluginConfig() reported unknown plugin present")
+	}
+}
+
+func TestApplicationPluginSubscriptionPublishesInitialLatestOwnedSnapshots(t *testing.T) {
+	harness := newApplicationHarness(t, "", nil)
+	harness.manager.snapshots = []plugins.RuntimeSnapshot{{ID: "vendor.alpha", Name: "Alpha"}}
+	app := harness.newApp(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	updates := app.SubscribePlugins(ctx)
+	if capacity := cap(updates); capacity != 1 {
+		t.Fatalf("SubscribePlugins() capacity = %d, want 1", capacity)
+	}
+	initial := receiveApplicationPluginSnapshots(t, updates)
+	if got := initial[0].Name; got != "Alpha" {
+		t.Fatalf("initial snapshots = %#v, want Alpha", initial)
+	}
+	initial[0].Name = "caller mutation"
+
+	harness.manager.setSnapshots([]plugins.RuntimeSnapshot{{ID: "vendor.alpha", Name: "Bravo"}})
+	harness.manager.events <- plugins.Event{Type: plugins.EventPluginStateChanged, PluginID: "vendor.alpha"}
+	updated := receiveApplicationPluginSnapshots(t, updates)
+	if got := updated[0].Name; got != "Bravo" {
+		t.Fatalf("updated snapshots = %#v, want Bravo", updated)
+	}
+	if got := app.Plugins()[0].Name; got != "Bravo" {
+		t.Fatalf("Plugins() after subscriber mutation = %q, want Bravo", got)
+	}
+}
+
+func TestApplicationPluginSubscriptionCoalescesAndCloses(t *testing.T) {
+	harness := newApplicationHarness(t, "", nil)
+	harness.manager.snapshots = []plugins.RuntimeSnapshot{{ID: "vendor.alpha", Name: "initial"}}
+	app := harness.newApp(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	updates := app.SubscribePlugins(ctx)
+	_ = receiveApplicationPluginSnapshots(t, updates)
+
+	for _, name := range []string{"one", "two", "three"} {
+		harness.manager.setSnapshots([]plugins.RuntimeSnapshot{{ID: "vendor.alpha", Name: name}})
+		harness.manager.events <- plugins.Event{Type: plugins.EventPluginStateChanged, PluginID: "vendor.alpha"}
+	}
+	awaitApplicationPluginListCalls(t, harness.manager, 4)
+	latest := receiveApplicationPluginSnapshots(t, updates)
+	if got := latest[0].Name; got != "three" {
+		t.Fatalf("coalesced snapshots = %#v, want latest three", latest)
+	}
+	select {
+	case value := <-updates:
+		t.Fatalf("subscription retained stale snapshot %#v", value)
+	default:
+	}
+
+	cancel()
+	awaitApplicationPluginSubscriptionClosed(t, updates)
+}
+
+func TestApplicationPluginSubscriptionIgnoresLogsAndClosesWithManager(t *testing.T) {
+	harness := newApplicationHarness(t, "", nil)
+	harness.manager.snapshots = []plugins.RuntimeSnapshot{{ID: "vendor.alpha", Name: "Alpha"}}
+	app := harness.newApp(t)
+	updates := app.SubscribePlugins(context.Background())
+	_ = receiveApplicationPluginSnapshots(t, updates)
+
+	harness.manager.setSnapshots([]plugins.RuntimeSnapshot{{ID: "vendor.alpha", Name: "log ignored"}})
+	harness.manager.events <- plugins.Event{Type: plugins.EventPluginLog, PluginID: "vendor.alpha"}
+	select {
+	case value := <-updates:
+		t.Fatalf("log event published snapshots %#v", value)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(harness.manager.events)
+	awaitApplicationPluginSubscriptionClosed(t, updates)
+}
+
+func TestApplicationPluginSubscriptionClosesDuringApplicationClose(t *testing.T) {
+	harness := newApplicationHarness(t, "", nil)
+	harness.manager.snapshots = []plugins.RuntimeSnapshot{{ID: "vendor.alpha", Name: "Alpha"}}
+	app := harness.newApp(t)
+	app.mu.Lock()
+	app.lifecycle = applicationRunning
+	app.mu.Unlock()
+	updates := app.SubscribePlugins(context.Background())
+	_ = receiveApplicationPluginSnapshots(t, updates)
+
+	if err := app.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	awaitApplicationPluginSubscriptionClosed(t, updates)
+}
+
+func receiveApplicationPluginSnapshots(t *testing.T, updates <-chan []plugins.RuntimeSnapshot) []plugins.RuntimeSnapshot {
+	t.Helper()
+	select {
+	case snapshots, ok := <-updates:
+		if !ok {
+			t.Fatal("plugin subscription closed unexpectedly")
+		}
+		return snapshots
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for plugin snapshots")
+		return nil
+	}
+}
+
+func awaitApplicationPluginListCalls(t *testing.T, manager *fakeApplicationManager, want int) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		if manager.listCalls() >= want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("Manager List calls = %d, want at least %d", manager.listCalls(), want)
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func awaitApplicationPluginSubscriptionClosed(t *testing.T, updates <-chan []plugins.RuntimeSnapshot) {
+	t.Helper()
+	select {
+	case _, ok := <-updates:
+		if ok {
+			t.Fatal("plugin subscription delivered a value after closure, want closed channel")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("plugin subscription did not close")
+	}
+}
+
 func receiveApplicationStatus(t *testing.T, updates <-chan Status) Status {
 	t.Helper()
 	select {
@@ -689,14 +969,28 @@ type fakeApplicationFrameSink struct{}
 func (fakeApplicationFrameSink) Submit(string, uint64, trackingmodel.TrackingFrame) {}
 
 type fakeApplicationManager struct {
-	trace     *applicationTrace
-	events    chan plugins.Event
-	startErr  error
-	closeErr  error
-	mu        sync.Mutex
-	snapshots []plugins.RuntimeSnapshot
-	closeErrs []error
-	closeCtxs []error
+	trace         *applicationTrace
+	events        chan plugins.Event
+	startErr      error
+	closeErr      error
+	enableErr     error
+	disableErr    error
+	updateErr     error
+	onPluginCall  func()
+	mu            sync.Mutex
+	snapshots     []plugins.RuntimeSnapshot
+	configs       map[string]pluginapi.Config
+	pluginCallLog []fakeApplicationPluginCall
+	listCount     int
+	closeErrs     []error
+	closeCtxs     []error
+	eventsClosed  sync.Once
+}
+
+type fakeApplicationPluginCall struct {
+	operation string
+	id        string
+	config    pluginapi.Config
 }
 
 func (m *fakeApplicationManager) Start(context.Context) error {
@@ -706,6 +1000,7 @@ func (m *fakeApplicationManager) Start(context.Context) error {
 
 func (m *fakeApplicationManager) Close(ctx context.Context) error {
 	m.trace.add("plugins.close")
+	m.eventsClosed.Do(func() { close(m.events) })
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.closeCtxs = append(m.closeCtxs, ctx.Err())
@@ -721,7 +1016,63 @@ func (m *fakeApplicationManager) List() []plugins.RuntimeSnapshot {
 	m.trace.add("plugins.list")
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]plugins.RuntimeSnapshot(nil), m.snapshots...)
+	m.listCount++
+	return m.snapshots
+}
+
+func (m *fakeApplicationManager) PluginConfig(id string) (pluginapi.Config, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	config, ok := m.configs[id]
+	return config, ok
+}
+
+func (m *fakeApplicationManager) Enable(_ context.Context, id string) error {
+	m.recordPluginCall(fakeApplicationPluginCall{operation: "enable", id: id})
+	return m.enableErr
+}
+
+func (m *fakeApplicationManager) Disable(_ context.Context, id string) error {
+	m.recordPluginCall(fakeApplicationPluginCall{operation: "disable", id: id})
+	return m.disableErr
+}
+
+func (m *fakeApplicationManager) UpdateConfig(_ context.Context, id string, config pluginapi.Config) error {
+	m.recordPluginCall(fakeApplicationPluginCall{operation: "update", id: id, config: config})
+	return m.updateErr
+}
+
+func (m *fakeApplicationManager) recordPluginCall(call fakeApplicationPluginCall) {
+	m.mu.Lock()
+	m.pluginCallLog = append(m.pluginCallLog, call)
+	onPluginCall := m.onPluginCall
+	m.mu.Unlock()
+	if onPluginCall != nil {
+		onPluginCall()
+	}
+}
+
+func (m *fakeApplicationManager) pluginCalls() []fakeApplicationPluginCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	calls := make([]fakeApplicationPluginCall, len(m.pluginCallLog))
+	copy(calls, m.pluginCallLog)
+	for index := range calls {
+		calls[index].config = calls[index].config.Clone()
+	}
+	return calls
+}
+
+func (m *fakeApplicationManager) listCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.listCount
+}
+
+func (m *fakeApplicationManager) setSnapshots(snapshots []plugins.RuntimeSnapshot) {
+	m.mu.Lock()
+	m.snapshots = append([]plugins.RuntimeSnapshot(nil), snapshots...)
+	m.mu.Unlock()
 }
 
 func (m *fakeApplicationManager) closeContextErrors() []error {

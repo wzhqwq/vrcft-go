@@ -34,6 +34,13 @@ type applicationPluginManager interface {
 	Subscribe(context.Context) <-chan plugins.Event
 }
 
+type applicationPluginOperations interface {
+	PluginConfig(string) (pluginapi.Config, bool)
+	Enable(context.Context, string) error
+	Disable(context.Context, string) error
+	UpdateConfig(context.Context, string, pluginapi.Config) error
+}
+
 type applicationOSC interface {
 	Start(context.Context) error
 	Close(context.Context) error
@@ -489,6 +496,122 @@ func (a *Application) Status() Status {
 
 func (a *Application) SubscribeStatus(ctx context.Context) <-chan Status {
 	return a.status.subscribe(ctx)
+}
+
+// Plugins returns an owned point-in-time view of the plugin runtime state.
+func (a *Application) Plugins() []plugins.RuntimeSnapshot {
+	return clonePluginSnapshots(a.plugins.List())
+}
+
+// PluginConfig returns an owned persisted configuration for id.
+func (a *Application) PluginConfig(id string) (pluginapi.Config, bool) {
+	operations, ok := a.plugins.(applicationPluginOperations)
+	if !ok {
+		return pluginapi.Config{}, false
+	}
+	config, ok := operations.PluginConfig(id)
+	if !ok {
+		return pluginapi.Config{}, false
+	}
+	return config.Clone(), true
+}
+
+// SetPluginEnabled changes the desired enabled state of one plugin while the
+// application owns a running backend.
+func (a *Application) SetPluginEnabled(ctx context.Context, id string, enabled bool) error {
+	if err := a.requireRunning(ctx); err != nil {
+		return err
+	}
+	operations, ok := a.plugins.(applicationPluginOperations)
+	if !ok {
+		return errors.New("application: plugin operations are unavailable")
+	}
+	if enabled {
+		if err := operations.Enable(ctx, id); err != nil {
+			return fmt.Errorf("enable plugin %q: %w", id, err)
+		}
+		return nil
+	}
+	if err := operations.Disable(ctx, id); err != nil {
+		return fmt.Errorf("disable plugin %q: %w", id, err)
+	}
+	return nil
+}
+
+// UpdatePluginConfig durably changes the complete configuration of one plugin
+// while the application owns a running backend.
+func (a *Application) UpdatePluginConfig(ctx context.Context, id string, config pluginapi.Config) error {
+	if err := a.requireRunning(ctx); err != nil {
+		return err
+	}
+	operations, ok := a.plugins.(applicationPluginOperations)
+	if !ok {
+		return errors.New("application: plugin operations are unavailable")
+	}
+	if err := operations.UpdateConfig(ctx, id, config.Clone()); err != nil {
+		return fmt.Errorf("update plugin %q configuration: %w", id, err)
+	}
+	return nil
+}
+
+// SubscribePlugins publishes an initial complete snapshot, then latest-only
+// complete snapshots after non-log plugin events.
+func (a *Application) SubscribePlugins(ctx context.Context) <-chan []plugins.RuntimeSnapshot {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	updates := make(chan []plugins.RuntimeSnapshot, 1)
+	events := a.plugins.Subscribe(ctx)
+	go func() {
+		defer close(updates)
+		offerPluginList(updates, a.plugins.List())
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-events:
+				if !ok {
+					return
+				}
+				if event.Type != plugins.EventPluginLog {
+					offerPluginList(updates, a.plugins.List())
+				}
+			}
+		}
+	}()
+	return updates
+}
+
+func (a *Application) requireRunning(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("application: plugin operation context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	lifecycle := a.lifecycle
+	a.mu.Unlock()
+	if lifecycle != applicationRunning {
+		return fmt.Errorf("%w: plugin operation from state %d", ErrInvalidLifecycle, lifecycle)
+	}
+	return nil
+}
+
+func offerPluginList(out chan []plugins.RuntimeSnapshot, values []plugins.RuntimeSnapshot) {
+	owned := clonePluginSnapshots(values)
+	select {
+	case <-out:
+	default:
+	}
+	select {
+	case out <- owned:
+	default:
+	}
+}
+
+func clonePluginSnapshots(values []plugins.RuntimeSnapshot) []plugins.RuntimeSnapshot {
+	return append([]plugins.RuntimeSnapshot(nil), values...)
 }
 
 func (a *Application) setCoordinatorStarted(started bool) {
