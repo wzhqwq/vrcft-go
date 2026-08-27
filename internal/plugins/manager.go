@@ -399,6 +399,17 @@ func (m *pluginManager) Get(id string) (RuntimeSnapshot, bool) {
 	return overlayPreference(supervisor.Snapshot(), preference), true
 }
 
+func (m *pluginManager) PluginConfig(id string) (pluginapi.Config, bool) {
+	m.mu.RLock()
+	preference, ok := m.settings.Plugins[id]
+	_, installed := m.supervisors[id]
+	m.mu.RUnlock()
+	if !ok || !installed {
+		return pluginapi.Config{}, false
+	}
+	return preference.Config.Clone(), true
+}
+
 func overlayPreference(snapshot RuntimeSnapshot, preference PluginPreference) RuntimeSnapshot {
 	snapshot.Enabled = preference.Enabled
 	snapshot.ConfigRevision = preference.Config.Revision

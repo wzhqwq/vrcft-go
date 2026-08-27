@@ -66,6 +66,33 @@ func TestManagerSubscriberBeforeStartReceivesStartupSnapshot(t *testing.T) {
 	}
 }
 
+func TestManagerPluginConfigReturnsOwnedPreference(t *testing.T) {
+	manager := newManagerForTest(t, &managerTestCatalog{plugins: []InstalledPlugin{
+		managerTestPlugin("vendor.alpha"),
+	}}, newManagerTestStore(PluginSettings{Plugins: map[string]PluginPreference{
+		"vendor.alpha": {
+			Config: pluginapi.Config{Revision: 2, Data: []byte(`{"gain":2}`)},
+		},
+	}}), newManagerTestSupervisorFactory())
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+
+	got, ok := manager.PluginConfig("vendor.alpha")
+	if !ok || got.Revision != 2 || string(got.Data) != `{"gain":2}` {
+		t.Fatalf("PluginConfig = %#v, %v", got, ok)
+	}
+	got.Data[0] = 'x'
+	again, _ := manager.PluginConfig("vendor.alpha")
+	if string(again.Data) != `{"gain":2}` {
+		t.Fatal("PluginConfig aliases manager settings")
+	}
+	if _, ok := manager.PluginConfig("missing"); ok {
+		t.Fatal("unknown plugin reported present")
+	}
+}
+
 func TestManagerStartupBuildsFixedSortedRegistryAndPreservesUnavailablePreferences(t *testing.T) {
 	catalog := &managerTestCatalog{plugins: []InstalledPlugin{
 		managerTestPlugin("vendor.beta"),

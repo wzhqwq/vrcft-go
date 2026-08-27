@@ -41,6 +41,7 @@ type Manager interface {
 	Close(context.Context) error
 	List() []RuntimeSnapshot
 	Get(string) (RuntimeSnapshot, bool)
+	PluginConfig(string) (pluginapi.Config, bool)
 	Enable(context.Context, string) error
 	Disable(context.Context, string) error
 	Restart(context.Context, string) error
