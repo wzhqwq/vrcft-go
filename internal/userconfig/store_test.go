@@ -3,11 +3,11 @@ package userconfig
 import (
 	"context"
 	"errors"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -104,6 +104,44 @@ func TestStoreLoadPreservesInvalidDocuments(t *testing.T) {
 	}
 }
 
+func TestStoreLoadAcceptsExactMaximumAndRejectsMaximumPlusOne(t *testing.T) {
+	valid := validSettingsJSON(t)
+	if len(valid) >= MaxSettingsBytes {
+		t.Fatalf("valid fixture length = %d, need less than %d", len(valid), MaxSettingsBytes)
+	}
+	for _, test := range []struct {
+		name    string
+		size    int
+		invalid bool
+	}{
+		{name: "exact maximum", size: MaxSettingsBytes},
+		{name: "maximum plus one", size: MaxSettingsBytes + 1, invalid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			paths := testStorePaths(t)
+			data := append([]byte(nil), valid...)
+			data = append(data, make([]byte, test.size-len(data))...)
+			for index := len(valid); index < len(data); index++ {
+				data[index] = ' '
+			}
+			if err := os.WriteFile(paths.SettingsFile, data, 0o600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			store, err := NewStore(paths)
+			if err != nil {
+				t.Fatalf("NewStore() error = %v", err)
+			}
+			loaded, err := store.LoadOrCreate(context.Background())
+			if err != nil {
+				t.Fatalf("LoadOrCreate() error = %v", err)
+			}
+			if loaded.Invalid != test.invalid {
+				t.Fatalf("LoadOrCreate() invalid = %v, want %v", loaded.Invalid, test.invalid)
+			}
+		})
+	}
+}
+
 // A save of equivalent intent must not churn the revision or touch the file;
 // this catches accidental comparison of the caller's unnormalized DTO.
 func TestStoreSaveNoOpDoesNotWriteOrIncrement(t *testing.T) {
@@ -163,6 +201,210 @@ func TestStoreSavePersistsOneNormalizedRevisionIncrement(t *testing.T) {
 	}
 	if fresh.Settings == nil || fresh.Settings.Revision != 2 || fresh.Settings.Avatar.FallbackPath != filepath.Join(paths.SettingsDir, "next") {
 		t.Fatalf("persisted settings = %#v", fresh.Settings)
+	}
+}
+
+func TestStoreSaveDerivesRevisionAndNoOpFromAuthoritativeDocument(t *testing.T) {
+	paths := testStorePaths(t)
+	store, loaded := loadedStore(t, paths)
+	candidate := candidateFromSettings(*loaded.Settings)
+	candidate.Avatar.FallbackPath = filepath.Join(paths.SettingsDir, "authoritative-change")
+
+	loaded.Invalid = true
+	loaded.Settings.Revision = math.MaxUint64
+	loaded.Settings.Avatar.FallbackPath = candidate.Avatar.FallbackPath
+	result, err := store.Save(context.Background(), loaded, candidate)
+	if err != nil {
+		t.Fatalf("Save(tampered loaded) error = %v", err)
+	}
+	if !result.Changed || result.Loaded.Settings == nil || result.Loaded.Settings.Revision != 2 {
+		t.Fatalf("Save(tampered loaded) = %#v, want authoritative revision 2", result)
+	}
+	if _, err := os.Stat(paths.SettingsFile + ".invalid.bak"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Save(tampered loaded) installed repair backup: %v", err)
+	}
+}
+
+func TestStoreSaveDoesNotAcceptTamperedLoadedCandidateAsNoOp(t *testing.T) {
+	paths := testStorePaths(t)
+	store, loaded := loadedStore(t, paths)
+	candidate := candidateFromSettings(*loaded.Settings)
+	candidate.Avatar.FallbackPath = filepath.Join(paths.SettingsDir, "actual-change")
+	loaded.Settings.Avatar.FallbackPath = candidate.Avatar.FallbackPath
+
+	result, err := store.Save(context.Background(), loaded, candidate)
+	if err != nil {
+		t.Fatalf("Save(tampered candidate) error = %v", err)
+	}
+	if !result.Changed || result.Loaded.Settings == nil || result.Loaded.Settings.Revision != 2 {
+		t.Fatalf("Save(tampered candidate) = %#v, want authoritative changed revision 2", result)
+	}
+}
+
+func TestStoreSaveTreatsNilAndEmptyRequiredSlicesAsSemanticNoOp(t *testing.T) {
+	paths := testStorePaths(t)
+	store, loaded := loadedStore(t, paths)
+	candidate := candidateFromSettings(*loaded.Settings)
+	candidate.Plugins.DevRoots = []string{}
+	candidate.Processing.Overrides = []ProcessingOverride{}
+	candidate.Processing.MutualExclusion = [][]string{}
+
+	result, err := store.Save(context.Background(), loaded, candidate)
+	if err != nil {
+		t.Fatalf("Save(nil/empty equivalent) error = %v", err)
+	}
+	if result.Changed || result.Loaded.Settings == nil || result.Loaded.Settings.Revision != 1 {
+		t.Fatalf("Save(nil/empty equivalent) = %#v, want unchanged revision 1", result)
+	}
+}
+
+func TestStoreRepairCopiesEntireOversizedDocumentToBackup(t *testing.T) {
+	paths := testStorePaths(t)
+	marker := []byte("<complete-invalid-tail>")
+	invalid := append([]byte(`{"schemaVersion":1,"revision":1,"avatar":`), make([]byte, MaxSettingsBytes+1)...)
+	invalid = append(invalid, marker...)
+	if err := os.WriteFile(paths.SettingsFile, invalid, 0o600); err != nil {
+		t.Fatalf("WriteFile(oversized) error = %v", err)
+	}
+	store, err := NewStore(paths)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	loaded, err := store.LoadOrCreate(context.Background())
+	if err != nil || !loaded.Invalid {
+		t.Fatalf("LoadOrCreate() = %#v, %v", loaded, err)
+	}
+	if _, err := store.Save(context.Background(), loaded, loaded.Defaults); err != nil {
+		t.Fatalf("Save(repair oversized) error = %v", err)
+	}
+	backup, err := os.ReadFile(paths.SettingsFile + ".invalid.bak")
+	if err != nil {
+		t.Fatalf("ReadFile(backup) error = %v", err)
+	}
+	if string(backup) != string(invalid) {
+		t.Fatalf("backup lost oversized bytes: got %d bytes, want %d", len(backup), len(invalid))
+	}
+}
+
+func TestStoreSaveSucceedsWhenPostReplaceReadWouldFail(t *testing.T) {
+	paths := testStorePaths(t)
+	store, loaded := loadedStore(t, paths)
+	open := store.ops.open
+	calls := 0
+	store.ops.open = func(path string) (storeFile, error) {
+		calls++
+		if calls == 3 {
+			return nil, errors.New("post-replace read must not occur")
+		}
+		return open(path)
+	}
+	candidate := candidateFromSettings(*loaded.Settings)
+	candidate.Avatar.FallbackPath = filepath.Join(paths.SettingsDir, "saved")
+	result, err := store.Save(context.Background(), loaded, candidate)
+	if err != nil {
+		t.Fatalf("Save() after replacement error = %v", err)
+	}
+	if !result.Changed || result.Loaded.Settings == nil || result.Loaded.Settings.Revision != 2 {
+		t.Fatalf("Save() result = %#v", result)
+	}
+}
+
+func TestStoreSaveRejectsSameBytesFromReplacedFileIdentity(t *testing.T) {
+	paths := testStorePaths(t)
+	store, loaded := loadedStore(t, paths)
+	data, err := os.ReadFile(paths.SettingsFile)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	info, err := os.Stat(paths.SettingsFile)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	replacement, err := os.CreateTemp(paths.SettingsDir, ".identity-*.tmp")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	replacementPath := replacement.Name()
+	defer os.Remove(replacementPath)
+	if _, err := replacement.Write(data); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := replacement.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Chtimes(replacementPath, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatalf("Chtimes() error = %v", err)
+	}
+	if err := replaceSettingsFile(replacementPath, paths.SettingsFile); err != nil {
+		t.Fatalf("replaceSettingsFile() error = %v", err)
+	}
+	candidate := candidateFromSettings(*loaded.Settings)
+	candidate.Avatar.FallbackPath = filepath.Join(paths.SettingsDir, "changed")
+	if _, err := store.Save(context.Background(), loaded, candidate); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Save() error = %v, want ErrConflict after same-byte replacement", err)
+	}
+}
+
+func TestStoreTemporaryPermissionsAndDirectorySync(t *testing.T) {
+	paths := testStorePaths(t)
+	store, loaded := loadedStore(t, paths)
+	var directoryModes []os.FileMode
+	chmod := store.ops.chmod
+	store.ops.chmod = func(path string, mode os.FileMode) error {
+		directoryModes = append(directoryModes, mode)
+		return chmod(path, mode)
+	}
+	var temporaryModes []os.FileMode
+	create := store.ops.createTemp
+	store.ops.createTemp = func(dir, pattern string) (storeFile, error) {
+		file, err := create(dir, pattern)
+		if err != nil {
+			return nil, err
+		}
+		return &modeStoreFile{storeFile: file, modes: &temporaryModes}, nil
+	}
+	syncs := 0
+	store.ops.syncDirectory = func(string) error { syncs++; return nil }
+	candidate := candidateFromSettings(*loaded.Settings)
+	candidate.Avatar.FallbackPath = filepath.Join(paths.SettingsDir, "changed")
+	if _, err := store.Save(context.Background(), loaded, candidate); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if len(directoryModes) == 0 || directoryModes[0] != 0o700 {
+		t.Fatalf("directory chmod calls = %#v, want 0700", directoryModes)
+	}
+	if len(temporaryModes) == 0 || temporaryModes[0] != 0o600 {
+		t.Fatalf("temporary chmod calls = %#v, want 0600", temporaryModes)
+	}
+	if syncs != 1 {
+		t.Fatalf("directory sync calls = %d, want 1", syncs)
+	}
+}
+
+func TestStoreTempChmodFailureCleansTemporaryFile(t *testing.T) {
+	paths := testStorePaths(t)
+	store, loaded := loadedStore(t, paths)
+	create := store.ops.createTemp
+	store.ops.createTemp = func(dir, pattern string) (storeFile, error) {
+		file, err := create(dir, pattern)
+		if err != nil {
+			return nil, err
+		}
+		return &failingTempChmodFile{storeFile: file}, nil
+	}
+	candidate := candidateFromSettings(*loaded.Settings)
+	candidate.Avatar.FallbackPath = filepath.Join(paths.SettingsDir, "changed")
+	if _, err := store.Save(context.Background(), loaded, candidate); err == nil {
+		t.Fatal("Save() succeeded despite temporary chmod failure")
+	}
+	entries, err := os.ReadDir(paths.SettingsDir)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Fatalf("temporary file leaked after chmod failure: %s", entry.Name())
+		}
 	}
 }
 
@@ -351,9 +593,9 @@ func installStoreFailure(store *Store, stage string) {
 	case "open":
 		store.ops.open = func(string) (storeFile, error) { return nil, fail }
 	case "read":
-		store.ops.readAll = func(io.Reader, int64) ([]byte, error) { return nil, fail }
+		store.ops.read = func(storeFile, []byte) (int, error) { return 0, fail }
 	case "stat":
-		store.ops.stat = func(string) (os.FileInfo, error) { return nil, fail }
+		store.ops.stat = func(storeFile) (os.FileInfo, error) { return nil, fail }
 	case "mkdir":
 		store.ops.mkdirAll = func(string, os.FileMode) error { return fail }
 	case "chmod":
@@ -402,6 +644,34 @@ func (f *failingStoreFile) Close() error {
 		return f.err
 	}
 	return f.storeFile.Close()
+}
+
+func (f *failingStoreFile) SyscallConn() (syscall.RawConn, error) {
+	return f.storeFile.(interface {
+		SyscallConn() (syscall.RawConn, error)
+	}).SyscallConn()
+}
+
+type modeStoreFile struct {
+	storeFile
+	modes *[]os.FileMode
+}
+
+func (f *modeStoreFile) Chmod(mode os.FileMode) error {
+	*f.modes = append(*f.modes, mode)
+	return f.storeFile.Chmod(mode)
+}
+
+func (f *modeStoreFile) SyscallConn() (syscall.RawConn, error) {
+	return f.storeFile.(interface {
+		SyscallConn() (syscall.RawConn, error)
+	}).SyscallConn()
+}
+
+type failingTempChmodFile struct{ storeFile }
+
+func (f *failingTempChmodFile) Chmod(os.FileMode) error {
+	return errors.New("injected temporary chmod failure")
 }
 
 func testStorePaths(t *testing.T) Paths {

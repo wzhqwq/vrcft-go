@@ -30,6 +30,7 @@ type DocumentToken struct {
 	hash     [sha256.Size]byte
 	size     int64
 	modified int64
+	identity documentIdentity
 }
 
 // Loaded is an owned snapshot of one settings document. Invalid documents do
@@ -55,13 +56,14 @@ type storeFile interface {
 	Name() string
 	Chmod(os.FileMode) error
 	Sync() error
+	Stat() (os.FileInfo, error)
 	Close() error
 }
 
 type storeOps struct {
 	open          func(string) (storeFile, error)
-	readAll       func(io.Reader, int64) ([]byte, error)
-	stat          func(string) (os.FileInfo, error)
+	read          func(storeFile, []byte) (int, error)
+	stat          func(storeFile) (os.FileInfo, error)
 	mkdirAll      func(string, os.FileMode) error
 	chmod         func(string, os.FileMode) error
 	createTemp    func(string, string) (storeFile, error)
@@ -78,6 +80,16 @@ type Store struct {
 	lock  chan struct{}
 }
 
+type documentRead struct {
+	data  []byte
+	token DocumentToken
+}
+
+type preparedTemporary struct {
+	path  string
+	token DocumentToken
+}
+
 func NewStore(paths Paths) (*Store, error) {
 	if strings.TrimSpace(paths.SettingsDir) == "" || strings.TrimSpace(paths.SettingsFile) == "" {
 		return nil, errors.New("userconfig: settings paths are required")
@@ -85,7 +97,7 @@ func NewStore(paths Paths) (*Store, error) {
 	if strings.IndexByte(paths.SettingsDir, 0) >= 0 || strings.IndexByte(paths.SettingsFile, 0) >= 0 {
 		return nil, errors.New("userconfig: settings paths contain NUL")
 	}
-	if _, err := Normalize(DefaultCandidate(paths)); err != nil {
+	if _, err := canonicalCandidate(DefaultCandidate(paths)); err != nil {
 		return nil, fmt.Errorf("userconfig: invalid default settings: %w", err)
 	}
 	store := &Store{paths: paths, ops: defaultStoreOps(), lock: make(chan struct{}, 1)}
@@ -95,11 +107,9 @@ func NewStore(paths Paths) (*Store, error) {
 
 func defaultStoreOps() storeOps {
 	return storeOps{
-		open: func(path string) (storeFile, error) { return os.Open(path) },
-		readAll: func(reader io.Reader, limit int64) ([]byte, error) {
-			return io.ReadAll(io.LimitReader(reader, limit))
-		},
-		stat:     os.Stat,
+		open:     func(path string) (storeFile, error) { return os.Open(path) },
+		read:     func(file storeFile, data []byte) (int, error) { return file.Read(data) },
+		stat:     func(file storeFile) (os.FileInfo, error) { return file.Stat() },
 		mkdirAll: os.MkdirAll,
 		chmod:    os.Chmod,
 		createTemp: func(dir, pattern string) (storeFile, error) {
@@ -124,16 +134,16 @@ func (s *Store) LoadOrCreate(ctx context.Context) (Loaded, error) {
 	}
 	defer s.release()
 
-	data, token, err := s.readCurrent(ctx)
+	current, err := s.readCurrent(ctx)
 	if errors.Is(err, os.ErrNotExist) {
 		return s.createDefaults(ctx)
 	}
 	if err != nil {
 		return Loaded{}, err
 	}
-	loaded, err := s.decodeLoaded(data, token)
+	loaded, err := s.decodeLoaded(current)
 	if err != nil {
-		return s.invalidLoaded(token, err)
+		return s.invalidLoaded(current.token, err)
 	}
 	return loaded, nil
 }
@@ -141,6 +151,23 @@ func (s *Store) LoadOrCreate(ctx context.Context) (Loaded, error) {
 // Validate applies all decode-independent semantic checks without I/O.
 func (s *Store) Validate(candidate Candidate) (Candidate, error) {
 	return Normalize(candidate)
+}
+
+func canonicalCandidate(candidate Candidate) (Candidate, error) {
+	normalized, err := Normalize(candidate)
+	if err != nil {
+		return Candidate{}, err
+	}
+	if normalized.Plugins.DevRoots == nil {
+		normalized.Plugins.DevRoots = []string{}
+	}
+	if normalized.Processing.Overrides == nil {
+		normalized.Processing.Overrides = []ProcessingOverride{}
+	}
+	if normalized.Processing.MutualExclusion == nil {
+		normalized.Processing.MutualExclusion = [][]string{}
+	}
+	return normalized, nil
 }
 
 func (s *Store) Save(ctx context.Context, loaded Loaded, candidate Candidate) (SaveResult, error) {
@@ -151,36 +178,40 @@ func (s *Store) Save(ctx context.Context, loaded Loaded, candidate Candidate) (S
 	if err := ctx.Err(); err != nil {
 		return SaveResult{}, err
 	}
-	normalized, err := s.Validate(candidate)
+	normalized, err := canonicalCandidate(candidate)
 	if err != nil {
 		return SaveResult{}, err
 	}
-	_, currentToken, err := s.readCurrent(ctx)
+	current, err := s.readCurrent(ctx)
 	if err != nil {
 		return SaveResult{}, fmt.Errorf("userconfig: read authoritative settings: %w", err)
 	}
-	if currentToken != loaded.Token {
+	if current.token != loaded.Token {
 		return SaveResult{}, ErrConflict
 	}
-	if !loaded.Invalid {
-		if loaded.Settings == nil || loaded.Diagnostic != nil {
-			return SaveResult{}, ErrInvalidLoadedState
+	authoritative, decodeErr := s.decodeLoaded(current)
+	if decodeErr != nil {
+		authoritative, err = s.invalidLoaded(current.token, decodeErr)
+		if err != nil {
+			return SaveResult{}, err
 		}
-		currentCandidate, err := s.Validate(candidateFromSettings(*loaded.Settings))
+	}
+	if !authoritative.Invalid {
+		currentCandidate, err := canonicalCandidate(candidateFromSettings(*authoritative.Settings))
 		if err != nil {
 			return SaveResult{}, fmt.Errorf("userconfig: validate loaded settings: %w", err)
 		}
 		if reflect.DeepEqual(normalized, currentCandidate) {
-			return SaveResult{Loaded: cloneLoaded(loaded), Changed: false}, nil
+			return SaveResult{Loaded: cloneLoaded(authoritative), Changed: false}, nil
 		}
-		if loaded.Settings.Revision == math.MaxUint64 {
+		if authoritative.Settings.Revision == math.MaxUint64 {
 			return SaveResult{}, ErrRevisionExhausted
 		}
 	}
 
 	revision := uint64(1)
-	if !loaded.Invalid {
-		revision = loaded.Settings.Revision + 1
+	if !authoritative.Invalid {
+		revision = authoritative.Settings.Revision + 1
 	}
 	next := Settings{
 		SchemaVersion: SchemaVersion,
@@ -195,20 +226,13 @@ func (s *Store) Save(ctx context.Context, loaded Loaded, candidate Candidate) (S
 		return SaveResult{}, err
 	}
 
-	if loaded.Invalid {
-		original, token, err := s.readCurrent(ctx)
-		if err != nil {
-			return SaveResult{}, fmt.Errorf("userconfig: reread invalid settings: %w", err)
-		}
-		if token != loaded.Token {
-			return SaveResult{}, ErrConflict
-		}
-		backupTemp, err := s.writeTemporary(ctx, original, ".config-invalid-*.tmp")
+	if authoritative.Invalid {
+		backupTemp, err := s.copyCurrentToTemporary(ctx, authoritative.Token, ".config-invalid-*.tmp")
 		if err != nil {
 			return SaveResult{}, err
 		}
 		backupPath := s.paths.SettingsFile + ".invalid.bak"
-		if err := s.replaceTemporary(ctx, backupTemp, backupPath, loaded.Token); err != nil {
+		if err := s.replaceTemporary(ctx, backupTemp.path, backupPath, authoritative.Token); err != nil {
 			return SaveResult{}, err
 		}
 	}
@@ -217,14 +241,10 @@ func (s *Store) Save(ctx context.Context, loaded Loaded, candidate Candidate) (S
 	if err != nil {
 		return SaveResult{}, err
 	}
-	if err := s.replaceTemporary(ctx, temporary, s.paths.SettingsFile, loaded.Token); err != nil {
+	if err := s.replaceTemporary(ctx, temporary.path, s.paths.SettingsFile, authoritative.Token); err != nil {
 		return SaveResult{}, err
 	}
-	_, nextToken, err := s.readCurrent(ctx)
-	if err != nil {
-		return SaveResult{}, fmt.Errorf("userconfig: read saved settings: %w", err)
-	}
-	return SaveResult{Loaded: Loaded{Settings: settingsPointer(next.Clone()), Defaults: s.defaults(), Token: nextToken}, Changed: true}, nil
+	return SaveResult{Loaded: Loaded{Settings: settingsPointer(next.Clone()), Defaults: s.defaults(), Token: temporary.token}, Changed: true}, nil
 }
 
 func (s *Store) createDefaults(ctx context.Context) (Loaded, error) {
@@ -238,18 +258,14 @@ func (s *Store) createDefaults(ctx context.Context) (Loaded, error) {
 	if err != nil {
 		return Loaded{}, err
 	}
-	if err := s.replaceTemporary(ctx, temporary, s.paths.SettingsFile, DocumentToken{}); err != nil {
+	if err := s.replaceTemporary(ctx, temporary.path, s.paths.SettingsFile, DocumentToken{}); err != nil {
 		return Loaded{}, err
 	}
-	_, token, err := s.readCurrent(ctx)
-	if err != nil {
-		return Loaded{}, fmt.Errorf("userconfig: read created settings: %w", err)
-	}
-	return Loaded{Settings: settingsPointer(settings.Clone()), Defaults: candidate, Token: token}, nil
+	return Loaded{Settings: settingsPointer(settings.Clone()), Defaults: candidate, Token: temporary.token}, nil
 }
 
 func (s *Store) defaults() Candidate {
-	defaults, err := Normalize(DefaultCandidate(s.paths))
+	defaults, err := canonicalCandidate(DefaultCandidate(s.paths))
 	if err != nil {
 		// Paths are validated before Store construction; this is only reachable
 		// for a malformed caller-supplied DefaultOSCRoot.
@@ -262,40 +278,68 @@ func (s *Store) invalidLoaded(token DocumentToken, diagnostic error) (Loaded, er
 	return Loaded{Defaults: s.defaults(), Invalid: true, Diagnostic: fmt.Errorf("userconfig: invalid settings: %w", diagnostic), Token: token}, nil
 }
 
-func (s *Store) readCurrent(ctx context.Context) ([]byte, DocumentToken, error) {
+func (s *Store) readCurrent(ctx context.Context) (documentRead, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, DocumentToken{}, err
+		return documentRead{}, err
 	}
 	file, err := s.ops.open(s.paths.SettingsFile)
 	if err != nil {
-		return nil, DocumentToken{}, err
+		return documentRead{}, err
 	}
-	data, readErr := s.ops.readAll(file, MaxSettingsBytes+1)
-	closeErr := file.Close()
-	if readErr != nil {
-		return nil, DocumentToken{}, fmt.Errorf("userconfig: read settings: %w", readErr)
-	}
-	if closeErr != nil {
-		return nil, DocumentToken{}, fmt.Errorf("userconfig: close settings: %w", closeErr)
-	}
-	info, err := s.ops.stat(s.paths.SettingsFile)
+	info, err := s.ops.stat(file)
 	if err != nil {
-		return nil, DocumentToken{}, fmt.Errorf("userconfig: stat settings: %w", err)
+		_ = file.Close()
+		return documentRead{}, fmt.Errorf("userconfig: stat settings: %w", err)
 	}
-	return data, documentToken(data, info), nil
+	identity, err := documentIdentityForFile(file, info)
+	if err != nil {
+		_ = file.Close()
+		return documentRead{}, fmt.Errorf("userconfig: identify settings: %w", err)
+	}
+	hash := sha256.New()
+	data := make([]byte, 0, MaxSettingsBytes+1)
+	buffer := make([]byte, 32<<10)
+	var size int64
+	for {
+		count, readErr := s.ops.read(file, buffer)
+		if count > 0 {
+			_, _ = hash.Write(buffer[:count])
+			size += int64(count)
+			remaining := MaxSettingsBytes + 1 - len(data)
+			if remaining > 0 {
+				if count > remaining {
+					count = remaining
+				}
+				data = append(data, buffer[:count]...)
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			_ = file.Close()
+			return documentRead{}, fmt.Errorf("userconfig: read settings: %w", readErr)
+		}
+	}
+	if err := file.Close(); err != nil {
+		return documentRead{}, fmt.Errorf("userconfig: close settings: %w", err)
+	}
+	var sum [sha256.Size]byte
+	copy(sum[:], hash.Sum(nil))
+	return documentRead{data: data, token: documentToken(sum, size, info, identity)}, nil
 }
 
-func (s *Store) decodeLoaded(data []byte, token DocumentToken) (Loaded, error) {
-	if len(data) > MaxSettingsBytes {
+func (s *Store) decodeLoaded(document documentRead) (Loaded, error) {
+	if document.token.size > MaxSettingsBytes {
 		return Loaded{}, fmt.Errorf("settings file exceeds %d bytes", MaxSettingsBytes)
 	}
-	if !utf8.Valid(data) {
+	if !utf8.Valid(document.data) {
 		return Loaded{}, errors.New("settings file is not valid UTF-8")
 	}
-	if err := rejectDuplicateObjectKeys(data); err != nil {
+	if err := rejectDuplicateObjectKeys(document.data); err != nil {
 		return Loaded{}, err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder := json.NewDecoder(bytes.NewReader(document.data))
 	decoder.DisallowUnknownFields()
 	var settings Settings
 	if err := decoder.Decode(&settings); err != nil {
@@ -314,7 +358,7 @@ func (s *Store) decodeLoaded(data []byte, token DocumentToken) (Loaded, error) {
 	if settings.Revision == 0 {
 		return Loaded{}, errors.New("revision must be positive")
 	}
-	normalized, err := Normalize(candidateFromSettings(settings))
+	normalized, err := canonicalCandidate(candidateFromSettings(settings))
 	if err != nil {
 		return Loaded{}, err
 	}
@@ -322,7 +366,7 @@ func (s *Store) decodeLoaded(data []byte, token DocumentToken) (Loaded, error) {
 	settings.Plugins = normalized.Plugins
 	settings.Processing = normalized.Processing
 	settings.OSC = normalized.OSC
-	return Loaded{Settings: settingsPointer(settings.Clone()), Defaults: s.defaults(), Token: token}, nil
+	return Loaded{Settings: settingsPointer(settings.Clone()), Defaults: s.defaults(), Token: document.token}, nil
 }
 
 func candidateFromSettings(settings Settings) Candidate {
@@ -340,8 +384,8 @@ func cloneLoaded(loaded Loaded) Loaded {
 	return clone
 }
 
-func documentToken(data []byte, info os.FileInfo) DocumentToken {
-	return DocumentToken{exists: true, hash: sha256.Sum256(data), size: info.Size(), modified: info.ModTime().UnixNano()}
+func documentToken(hash [sha256.Size]byte, size int64, info os.FileInfo, identity documentIdentity) DocumentToken {
+	return DocumentToken{exists: true, hash: hash, size: size, modified: info.ModTime().UnixNano(), identity: identity}
 }
 
 func encodeSettingsDocument(settings Settings) ([]byte, error) {
@@ -433,49 +477,151 @@ func scanJSONValue(decoder *json.Decoder) error {
 	return nil
 }
 
-func (s *Store) writeTemporary(ctx context.Context, data []byte, pattern string) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if err := s.ops.mkdirAll(s.paths.SettingsDir, 0o700); err != nil {
-		return "", fmt.Errorf("userconfig: create settings directory: %w", err)
-	}
-	if err := s.ops.chmod(s.paths.SettingsDir, 0o700); err != nil {
-		return "", fmt.Errorf("userconfig: secure settings directory: %w", err)
-	}
-	temporary, err := s.ops.createTemp(s.paths.SettingsDir, pattern)
+func (s *Store) writeTemporary(ctx context.Context, data []byte, pattern string) (preparedTemporary, error) {
+	temporary, path, cleanup, err := s.newTemporary(ctx, pattern)
 	if err != nil {
-		return "", fmt.Errorf("userconfig: create temporary settings: %w", err)
+		return preparedTemporary{}, err
 	}
-	path := temporary.Name()
 	keep := false
 	defer func() {
 		if !keep {
-			_ = temporary.Close()
-			_ = s.ops.remove(path)
+			cleanup()
 		}
 	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return "", fmt.Errorf("userconfig: secure temporary settings: %w", err)
+	if err := writeAll(temporary, data); err != nil {
+		return preparedTemporary{}, fmt.Errorf("userconfig: write temporary settings: %w", err)
 	}
+	hash := sha256.Sum256(data)
+	prepared, err := s.finishTemporary(temporary, path, hash, int64(len(data)))
+	if err != nil {
+		return preparedTemporary{}, err
+	}
+	keep = true
+	return prepared, nil
+}
+
+func (s *Store) newTemporary(ctx context.Context, pattern string) (storeFile, string, func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", nil, err
+	}
+	if err := s.ops.mkdirAll(s.paths.SettingsDir, 0o700); err != nil {
+		return nil, "", nil, fmt.Errorf("userconfig: create settings directory: %w", err)
+	}
+	if err := s.ops.chmod(s.paths.SettingsDir, 0o700); err != nil {
+		return nil, "", nil, fmt.Errorf("userconfig: secure settings directory: %w", err)
+	}
+	temporary, err := s.ops.createTemp(s.paths.SettingsDir, pattern)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("userconfig: create temporary settings: %w", err)
+	}
+	path := temporary.Name()
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		_ = s.ops.remove(path)
+		return nil, "", nil, fmt.Errorf("userconfig: secure temporary settings: %w", err)
+	}
+	return temporary, path, func() {
+		_ = temporary.Close()
+		_ = s.ops.remove(path)
+	}, nil
+}
+
+func (s *Store) finishTemporary(file storeFile, path string, hash [sha256.Size]byte, size int64) (preparedTemporary, error) {
+	if err := file.Sync(); err != nil {
+		return preparedTemporary{}, fmt.Errorf("userconfig: sync temporary settings: %w", err)
+	}
+	info, err := s.ops.stat(file)
+	if err != nil {
+		return preparedTemporary{}, fmt.Errorf("userconfig: stat temporary settings: %w", err)
+	}
+	identity, err := documentIdentityForFile(file, info)
+	if err != nil {
+		return preparedTemporary{}, fmt.Errorf("userconfig: identify temporary settings: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return preparedTemporary{}, fmt.Errorf("userconfig: close temporary settings: %w", err)
+	}
+	return preparedTemporary{path: path, token: documentToken(hash, size, info, identity)}, nil
+}
+
+func writeAll(file io.Writer, data []byte) error {
 	for len(data) > 0 {
-		count, err := temporary.Write(data)
+		count, err := file.Write(data)
 		if err != nil {
-			return "", fmt.Errorf("userconfig: write temporary settings: %w", err)
+			return err
 		}
 		if count <= 0 {
-			return "", io.ErrShortWrite
+			return io.ErrShortWrite
 		}
 		data = data[count:]
 	}
-	if err := temporary.Sync(); err != nil {
-		return "", fmt.Errorf("userconfig: sync temporary settings: %w", err)
+	return nil
+}
+
+func (s *Store) copyCurrentToTemporary(ctx context.Context, expected DocumentToken, pattern string) (preparedTemporary, error) {
+	temporary, path, cleanup, err := s.newTemporary(ctx, pattern)
+	if err != nil {
+		return preparedTemporary{}, err
 	}
-	if err := temporary.Close(); err != nil {
-		return "", fmt.Errorf("userconfig: close temporary settings: %w", err)
+	keep := false
+	defer func() {
+		if !keep {
+			cleanup()
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return preparedTemporary{}, err
+	}
+	source, err := s.ops.open(s.paths.SettingsFile)
+	if err != nil {
+		return preparedTemporary{}, fmt.Errorf("userconfig: open invalid settings for backup: %w", err)
+	}
+	info, err := s.ops.stat(source)
+	if err != nil {
+		_ = source.Close()
+		return preparedTemporary{}, fmt.Errorf("userconfig: stat invalid settings for backup: %w", err)
+	}
+	identity, err := documentIdentityForFile(source, info)
+	if err != nil {
+		_ = source.Close()
+		return preparedTemporary{}, fmt.Errorf("userconfig: identify invalid settings for backup: %w", err)
+	}
+	hash := sha256.New()
+	buffer := make([]byte, 32<<10)
+	var size int64
+	for {
+		count, readErr := s.ops.read(source, buffer)
+		if count > 0 {
+			chunk := buffer[:count]
+			_, _ = hash.Write(chunk)
+			size += int64(count)
+			if err := writeAll(temporary, chunk); err != nil {
+				_ = source.Close()
+				return preparedTemporary{}, fmt.Errorf("userconfig: write invalid backup: %w", err)
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			_ = source.Close()
+			return preparedTemporary{}, fmt.Errorf("userconfig: read invalid settings for backup: %w", readErr)
+		}
+	}
+	if err := source.Close(); err != nil {
+		return preparedTemporary{}, fmt.Errorf("userconfig: close invalid settings for backup: %w", err)
+	}
+	var sum [sha256.Size]byte
+	copy(sum[:], hash.Sum(nil))
+	if token := documentToken(sum, size, info, identity); token != expected {
+		return preparedTemporary{}, ErrConflict
+	}
+	prepared, err := s.finishTemporary(temporary, path, sum, size)
+	if err != nil {
+		return preparedTemporary{}, err
 	}
 	keep = true
-	return path, nil
+	return prepared, nil
 }
 
 func (s *Store) replaceTemporary(ctx context.Context, temporary, destination string, expected DocumentToken) error {
@@ -483,12 +629,12 @@ func (s *Store) replaceTemporary(ctx context.Context, temporary, destination str
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	_, current, err := s.readCurrent(ctx)
+	current, err := s.readCurrent(ctx)
 	if errors.Is(err, os.ErrNotExist) && !expected.exists {
 		// First-run creation is allowed only while the destination still does not exist.
 	} else if err != nil {
 		return fmt.Errorf("userconfig: reread before replacement: %w", err)
-	} else if current != expected {
+	} else if current.token != expected {
 		return ErrConflict
 	}
 	if err := s.ops.replace(temporary, destination); err != nil {
