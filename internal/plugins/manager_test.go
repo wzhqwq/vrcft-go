@@ -69,9 +69,13 @@ func TestManagerSubscriberBeforeStartReceivesStartupSnapshot(t *testing.T) {
 func TestManagerPluginConfigReturnsOwnedPreference(t *testing.T) {
 	manager := newManagerForTest(t, &managerTestCatalog{plugins: []InstalledPlugin{
 		managerTestPlugin("vendor.alpha"),
+		managerTestPlugin("vendor.no-preference"),
 	}}, newManagerTestStore(PluginSettings{Plugins: map[string]PluginPreference{
 		"vendor.alpha": {
 			Config: pluginapi.Config{Revision: 2, Data: []byte(`{"gain":2}`)},
+		},
+		"vendor.unavailable": {
+			Config: pluginapi.Config{Revision: 3, Data: []byte(`{"kept":true}`)},
 		},
 	}}), newManagerTestSupervisorFactory())
 	if err := manager.Start(context.Background()); err != nil {
@@ -90,6 +94,12 @@ func TestManagerPluginConfigReturnsOwnedPreference(t *testing.T) {
 	}
 	if _, ok := manager.PluginConfig("missing"); ok {
 		t.Fatal("unknown plugin reported present")
+	}
+	if _, ok := manager.PluginConfig("vendor.no-preference"); ok {
+		t.Fatal("installed plugin without preference reported present")
+	}
+	if _, ok := manager.PluginConfig("vendor.unavailable"); ok {
+		t.Fatal("uninstalled plugin preference reported present")
 	}
 }
 
