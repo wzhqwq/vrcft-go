@@ -386,6 +386,35 @@ func (manager *endToEndManager) List() []plugins.RuntimeSnapshot {
 	}}
 }
 
+func (manager *endToEndManager) PluginConfig(string) (pluginapi.Config, bool) {
+	return pluginapi.Config{}, false
+}
+
+func (manager *endToEndManager) Enable(ctx context.Context, pluginID string) error {
+	return manager.rejectPluginOperation(ctx, pluginID)
+}
+
+func (manager *endToEndManager) Disable(ctx context.Context, pluginID string) error {
+	return manager.rejectPluginOperation(ctx, pluginID)
+}
+
+func (manager *endToEndManager) UpdateConfig(ctx context.Context, pluginID string, _ pluginapi.Config) error {
+	return manager.rejectPluginOperation(ctx, pluginID)
+}
+
+func (manager *endToEndManager) rejectPluginOperation(ctx context.Context, pluginID string) error {
+	if ctx == nil {
+		return errors.New("end-to-end manager plugin operation context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if pluginID != "vendor.expression" {
+		return plugins.ErrUnknownPlugin
+	}
+	return errors.New("end-to-end manager plugin operations are unavailable")
+}
+
 func (manager *endToEndManager) SetActive(ctx context.Context, pluginID string, active bool) error {
 	if ctx == nil {
 		return errors.New("end-to-end manager control context is required")

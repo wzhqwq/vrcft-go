@@ -29,16 +29,13 @@ type applicationPluginManager interface {
 	Start(context.Context) error
 	Close(context.Context) error
 	List() []plugins.RuntimeSnapshot
-	SetActive(context.Context, string, bool) error
-	UpdateSubscription(context.Context, string, pluginapi.Subscription) error
-	Subscribe(context.Context) <-chan plugins.Event
-}
-
-type applicationPluginOperations interface {
 	PluginConfig(string) (pluginapi.Config, bool)
 	Enable(context.Context, string) error
 	Disable(context.Context, string) error
 	UpdateConfig(context.Context, string, pluginapi.Config) error
+	SetActive(context.Context, string, bool) error
+	UpdateSubscription(context.Context, string, pluginapi.Subscription) error
+	Subscribe(context.Context) <-chan plugins.Event
 }
 
 type applicationOSC interface {
@@ -505,11 +502,7 @@ func (a *Application) Plugins() []plugins.RuntimeSnapshot {
 
 // PluginConfig returns an owned persisted configuration for id.
 func (a *Application) PluginConfig(id string) (pluginapi.Config, bool) {
-	operations, ok := a.plugins.(applicationPluginOperations)
-	if !ok {
-		return pluginapi.Config{}, false
-	}
-	config, ok := operations.PluginConfig(id)
+	config, ok := a.plugins.PluginConfig(id)
 	if !ok {
 		return pluginapi.Config{}, false
 	}
@@ -522,17 +515,13 @@ func (a *Application) SetPluginEnabled(ctx context.Context, id string, enabled b
 	if err := a.requireRunning(ctx); err != nil {
 		return err
 	}
-	operations, ok := a.plugins.(applicationPluginOperations)
-	if !ok {
-		return errors.New("application: plugin operations are unavailable")
-	}
 	if enabled {
-		if err := operations.Enable(ctx, id); err != nil {
+		if err := a.plugins.Enable(ctx, id); err != nil {
 			return fmt.Errorf("enable plugin %q: %w", id, err)
 		}
 		return nil
 	}
-	if err := operations.Disable(ctx, id); err != nil {
+	if err := a.plugins.Disable(ctx, id); err != nil {
 		return fmt.Errorf("disable plugin %q: %w", id, err)
 	}
 	return nil
@@ -544,11 +533,7 @@ func (a *Application) UpdatePluginConfig(ctx context.Context, id string, config 
 	if err := a.requireRunning(ctx); err != nil {
 		return err
 	}
-	operations, ok := a.plugins.(applicationPluginOperations)
-	if !ok {
-		return errors.New("application: plugin operations are unavailable")
-	}
-	if err := operations.UpdateConfig(ctx, id, config.Clone()); err != nil {
+	if err := a.plugins.UpdateConfig(ctx, id, config.Clone()); err != nil {
 		return fmt.Errorf("update plugin %q configuration: %w", id, err)
 	}
 	return nil
