@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -373,6 +374,212 @@ func TestSettingsAPISubscribeIsOwnedLatestOnlyAndCancelable(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("subscription did not close after cancellation")
+	}
+}
+
+func TestSettingsAPIClosedAdmissionRejectsWithoutWaitingForPriorSave(t *testing.T) {
+	settings := settingsAtRevision(1, "C:/before")
+	entered := make(chan struct{})
+	allowReturn := make(chan struct{})
+	backend := &fakeSettingsBackend{
+		loaded: userconfig.Loaded{Settings: &settings},
+		saveFn: func(ctx context.Context, _ userconfig.Loaded, _ userconfig.Candidate) (userconfig.SaveResult, error) {
+			close(entered)
+			<-ctx.Done()
+			<-allowReturn
+			return userconfig.SaveResult{}, ctx.Err()
+		},
+	}
+	api := newSettingsAPI(backend, candidate("C:/initial"), nil)
+	if _, err := api.loadForStartup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	go api.Save(api.Get().Revision, candidate("C:/after"))
+	<-entered
+	closed := make(chan struct{})
+	go func() {
+		api.close()
+		close(closed)
+	}()
+
+	deadline := time.After(time.Second)
+	for !api.closed.Load() {
+		select {
+		case <-deadline:
+			t.Fatal("close did not mark admission closed")
+		default:
+			runtime.Gosched()
+		}
+	}
+	validated := make(chan SettingsValidationResponse, 1)
+	go func() { validated <- api.Validate(candidate("C:/candidate")) }()
+	select {
+	case got := <-validated:
+		if got.Problem == nil || got.Problem.Code != ProblemUnavailable {
+			t.Fatalf("Validate while close waits = %+v, want unavailable", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("new Validate waited behind pre-close Save")
+	}
+	close(allowReturn)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("close did not finish after compliant Save cleanup")
+	}
+}
+
+func TestSettingsAPILoadContextPreservesParentAndSkipsCanceledAdmission(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	backend := &fakeSettingsBackend{}
+	api := newSettingsAPI(backend, candidate("C:/initial"), nil)
+	if _, err := api.loadForStartup(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("loadForStartup(canceled) error = %v, want context.Canceled", err)
+	}
+	backend.mu.Lock()
+	if backend.loadCalls != 0 {
+		t.Fatalf("LoadOrCreate calls = %d, want 0 for canceled parent", backend.loadCalls)
+	}
+	backend.mu.Unlock()
+	if got := api.Get(); got.Revision != 1 {
+		t.Fatalf("canceled startup published %+v", got)
+	}
+
+	type contextKey struct{}
+	valueCtx, valueCancel := context.WithTimeout(context.WithValue(context.Background(), contextKey{}, "parent-value"), time.Second)
+	defer valueCancel()
+	seen := make(chan bool, 1)
+	backend.loadFn = func(ctx context.Context) (userconfig.Loaded, error) {
+		_, hasDeadline := ctx.Deadline()
+		seen <- ctx.Value(contextKey{}) == "parent-value" && hasDeadline && ctx.Err() == nil
+		settings := settingsAtRevision(1, "C:/osc")
+		return userconfig.Loaded{Settings: &settings}, nil
+	}
+	if _, err := api.loadForStartup(valueCtx); err != nil {
+		t.Fatal(err)
+	}
+	if ok := <-seen; !ok {
+		t.Fatal("operation context did not preserve parent value and deadline")
+	}
+}
+
+func TestSettingsAPIDurableSaveCompletesBeforeClose(t *testing.T) {
+	before := settingsAtRevision(1, "C:/before")
+	after := settingsAtRevision(2, "C:/after")
+	entered := make(chan struct{})
+	backend := &fakeSettingsBackend{
+		loaded: userconfig.Loaded{Settings: &before},
+		saveFn: func(ctx context.Context, _ userconfig.Loaded, _ userconfig.Candidate) (userconfig.SaveResult, error) {
+			close(entered)
+			<-ctx.Done()
+			return userconfig.SaveResult{Changed: true, Loaded: userconfig.Loaded{Settings: &after}}, nil
+		},
+	}
+	api := newSettingsAPI(backend, candidate("C:/initial"), nil)
+	if _, err := api.loadForStartup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	previous := api.Get()
+	result := make(chan SettingsSaveResponse, 1)
+	go func() { result <- api.Save(previous.Revision, candidate("C:/after")) }()
+	<-entered
+	closed := make(chan struct{})
+	go func() {
+		api.close()
+		close(closed)
+	}()
+	select {
+	case got := <-result:
+		if got.Problem != nil || !got.RestartRequired || got.FileRevision != 2 || got.Revision != previous.Revision+1 {
+			t.Fatalf("durable Save result = %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("durable Save did not reconcile after close")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("close did not wait for durable Save reconciliation")
+	}
+	if snapshot := api.store.snapshot(); snapshot.Revision != previous.Revision+1 || snapshot.Value.fileRevision != 2 || snapshot.Value.settings.Avatar.OSCRoot != "C:/after" {
+		t.Fatalf("durable Save did not update authoritative API state: %+v", snapshot)
+	}
+}
+
+func TestSettingsAPICloseJoinsSubscriptions(t *testing.T) {
+	settings := settingsAtRevision(1, "C:/osc")
+	api := newSettingsAPI(&fakeSettingsBackend{loaded: userconfig.Loaded{Settings: &settings}}, candidate("C:/initial"), nil)
+	if _, err := api.loadForStartup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	updates := api.subscribe(context.Background())
+	<-updates
+	api.close()
+	select {
+	case _, ok := <-updates:
+		if ok {
+			t.Fatal("subscription remained open after API close returned")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("API close did not join subscription")
+	}
+}
+
+func TestSettingsAPINoOpRefreshesPrivateLoadedForNextSave(t *testing.T) {
+	settings := settingsAtRevision(1, "C:/same")
+	refreshed := settingsAtRevision(1, "C:/same")
+	refreshedDefaults := candidate("C:/refreshed-loaded-token")
+	changed := settingsAtRevision(2, "C:/changed")
+	var calls int
+	backend := &fakeSettingsBackend{
+		loaded: userconfig.Loaded{Settings: &settings, Defaults: candidate("C:/original")},
+		saveFn: func(_ context.Context, loaded userconfig.Loaded, _ userconfig.Candidate) (userconfig.SaveResult, error) {
+			calls++
+			if calls == 1 {
+				return userconfig.SaveResult{Loaded: userconfig.Loaded{Settings: &refreshed, Defaults: refreshedDefaults}}, nil
+			}
+			if loaded.Defaults.Avatar.OSCRoot != "C:/refreshed-loaded-token" {
+				return userconfig.SaveResult{}, errors.New("next save did not receive refreshed Loaded token")
+			}
+			return userconfig.SaveResult{Changed: true, Loaded: userconfig.Loaded{Settings: &changed}}, nil
+		},
+	}
+	api := newSettingsAPI(backend, candidate("C:/initial"), nil)
+	if _, err := api.loadForStartup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first := api.Get()
+	if got := api.Save(first.Revision, candidate("C:/same")); got.Problem != nil || got.RestartRequired {
+		t.Fatalf("no-op Save = %+v", got)
+	}
+	if got := api.Save(first.Revision, candidate("C:/changed")); got.Problem != nil || !got.RestartRequired || got.FileRevision != 2 {
+		t.Fatalf("changed Save after no-op = %+v", got)
+	}
+}
+
+func TestSettingsAPIOwnsBackendSaveResult(t *testing.T) {
+	before := settingsAtRevision(1, "C:/before")
+	after := settingsAtRevision(2, "C:/after")
+	after.Plugins.DevRoots = []string{"C:/owned"}
+	backend := &fakeSettingsBackend{
+		loaded: userconfig.Loaded{Settings: &before},
+		saveFn: func(_ context.Context, _ userconfig.Loaded, candidate userconfig.Candidate) (userconfig.SaveResult, error) {
+			candidate.Plugins.DevRoots = append(candidate.Plugins.DevRoots, "C:/mutated-input")
+			return userconfig.SaveResult{Changed: true, Loaded: userconfig.Loaded{Settings: &after}}, nil
+		},
+	}
+	api := newSettingsAPI(backend, candidate("C:/initial"), nil)
+	if _, err := api.loadForStartup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := api.Save(api.Get().Revision, candidate("C:/candidate")); got.Problem != nil {
+		t.Fatalf("Save() = %+v", got)
+	}
+	after.Avatar.OSCRoot = "C:/mutated-result"
+	after.Plugins.DevRoots[0] = "C:/mutated-result"
+	if got := api.Get(); got.Settings.Avatar.OSCRoot != "C:/after" || got.Settings.Plugins.DevRoots[0] != "C:/owned" {
+		t.Fatalf("backend mutation polluted API state: %+v", got)
 	}
 }
 
