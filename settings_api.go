@@ -34,17 +34,22 @@ type SettingsAPI struct {
 	loaded    userconfig.Loaded
 	hasLoaded bool
 	closed    atomic.Bool
+	lifecycle context.Context
+	cancel    context.CancelFunc
 	done      chan struct{}
 	closeOnce sync.Once
 }
 
 func newSettingsAPI(backend settingsBackend, defaults userconfig.Candidate, now func() time.Time) *SettingsAPI {
+	lifecycle, cancel := context.WithCancel(context.Background())
 	return &SettingsAPI{
 		backend: backend,
 		store: newModuleStore(settingsSnapshot{
 			settings: defaults.Clone(),
 		}, cloneSettingsSnapshot, now),
-		done: make(chan struct{}),
+		lifecycle: lifecycle,
+		cancel:    cancel,
+		done:      make(chan struct{}),
 	}
 }
 
@@ -68,6 +73,9 @@ func (api *SettingsAPI) Validate(candidate userconfig.Candidate) SettingsValidat
 		return settingsValidationResponse(envelope, candidate, unavailableSettingsProblem(envelope.Revision))
 	}
 	normalized, err := api.backend.Validate(candidate.Clone())
+	if api.closed.Load() {
+		return settingsValidationResponse(envelope, candidate, unavailableSettingsProblem(envelope.Revision))
+	}
 	if err != nil {
 		problem := sanitizeProblem(err, envelope.Revision)
 		return settingsValidationResponse(envelope, candidate, &problem)
@@ -90,7 +98,12 @@ func (api *SettingsAPI) Save(expectedRevision uint64, candidate userconfig.Candi
 		return settingsSaveResponse(envelope, false, &problem)
 	}
 
-	result, err := api.backend.Save(context.Background(), cloneSettingsLoadedForAPI(api.loaded), candidate.Clone())
+	ctx, cancel := api.operationContext(context.Background())
+	defer cancel()
+	result, err := api.backend.Save(ctx, cloneSettingsLoadedForAPI(api.loaded), candidate.Clone())
+	if api.closed.Load() {
+		return settingsSaveResponse(envelope, false, unavailableSettingsProblem(envelope.Revision))
+	}
 	if err != nil {
 		problem := sanitizeProblem(err, envelope.Revision)
 		return settingsSaveResponse(envelope, false, &problem)
@@ -116,10 +129,15 @@ func (api *SettingsAPI) loadForStartup(ctx context.Context) (userconfig.Loaded, 
 	if api.closed.Load() || api.backend == nil {
 		return userconfig.Loaded{}, errors.New("settings API is unavailable")
 	}
-	loaded, err := api.backend.LoadOrCreate(ctx)
+	operationCtx, cancel := api.operationContext(ctx)
+	defer cancel()
+	loaded, err := api.backend.LoadOrCreate(operationCtx)
+	if api.closed.Load() {
+		return userconfig.Loaded{}, context.Canceled
+	}
 	if err != nil {
 		envelope := api.store.snapshot()
-		problem := sanitizeProblem(err, envelope.Revision)
+		problem := sanitizeProblem(err, nextModuleRevision(envelope.Revision))
 		api.store.update(envelope.Value, &problem)
 		return userconfig.Loaded{}, err
 	}
@@ -132,7 +150,7 @@ func (api *SettingsAPI) loadForStartup(ctx context.Context) (userconfig.Loaded, 
 		if loaded.Diagnostic == nil {
 			loaded.Diagnostic = errors.New("settings file is invalid")
 		}
-		mapped := sanitizeProblem(loaded.Diagnostic, envelope.Revision)
+		mapped := sanitizeProblem(loaded.Diagnostic, nextModuleRevision(envelope.Revision))
 		problem = &mapped
 	}
 	api.store.update(settingsSnapshotFromLoaded(loaded), problem)
@@ -175,10 +193,28 @@ func (api *SettingsAPI) subscribe(ctx context.Context) <-chan SettingsResponse {
 // close rejects future validation and save admissions and stops root event
 // subscriptions. It does not close the Store because root owns that lifetime.
 func (api *SettingsAPI) close() {
-	api.admission.Lock()
-	api.closed.Store(true)
-	api.admission.Unlock()
-	api.closeOnce.Do(func() { close(api.done) })
+	api.closeOnce.Do(func() {
+		api.closed.Store(true)
+		api.cancel()
+		close(api.done)
+		// An admitted Store call receives lifecycle cancellation above. Waiting
+		// for the serial gate makes close linearize after that call has either
+		// published its successful result or observed cancellation.
+		api.admission.Lock()
+		api.admission.Unlock()
+	})
+}
+
+func (api *SettingsAPI) operationContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(api.lifecycle)
+	stop := context.AfterFunc(parent, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 func settingsSnapshotFromLoaded(loaded userconfig.Loaded) settingsSnapshot {
