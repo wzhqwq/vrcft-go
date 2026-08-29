@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"reflect"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -25,17 +26,31 @@ func (emitter *recordingEventEmitter) Emit(_ context.Context, name string, value
 }
 
 type blockingEventEmitter struct {
-	calls   chan emittedEvent
-	entered chan struct{}
-	release chan struct{}
-	once    sync.Once
+	calls        chan emittedEvent
+	entered      chan struct{}
+	release      chan struct{}
+	canceled     chan struct{}
+	beforeReturn func()
+	once         sync.Once
 }
 
-func (emitter *blockingEventEmitter) Emit(_ context.Context, name string, values ...any) {
+func (emitter *blockingEventEmitter) Emit(ctx context.Context, name string, values ...any) {
 	emitter.calls <- emittedEvent{name: name, values: append([]any(nil), values...)}
 	emitter.once.Do(func() {
 		close(emitter.entered)
-		<-emitter.release
+		if emitter.canceled == nil {
+			<-emitter.release
+		} else {
+			select {
+			case <-emitter.release:
+			case <-ctx.Done():
+				close(emitter.canceled)
+				<-emitter.release
+			}
+		}
+		if emitter.beforeReturn != nil {
+			emitter.beforeReturn()
+		}
 	})
 }
 
@@ -100,16 +115,79 @@ func TestEventBridgeBlockedEmitterSendsFirstInflightThenNewestPending(t *testing
 	select {
 	case stale := <-emitter.calls:
 		t.Fatalf("event bridge retained stale pending response %+v", stale)
-	case <-time.After(20 * time.Millisecond):
+	default:
+	}
+}
+
+func TestEventBridgeBlockedPluginsEmitterSkipsIntermediatePendingSnapshot(t *testing.T) {
+	previousProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previousProcs)
+	pluginsAPI := newPluginsAPI(time.Now)
+	t.Cleanup(pluginsAPI.close)
+	emitter := &blockingEventEmitter{
+		calls:   make(chan emittedEvent, 4),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	forwarders := startEventForwarders(context.Background(), emitter, nil, pluginsAPI, nil)
+	t.Cleanup(forwarders.stop)
+	waitEmitterEntered(t, emitter.entered)
+
+	pluginsAPI.store.update([]PluginDTO{{ID: "intermediate"}}, nil)
+	yieldEventPipeline()
+	emitter.beforeReturn = func() {
+		pluginsAPI.store.update([]PluginDTO{{ID: "latest"}}, nil)
+	}
+	close(emitter.release)
+
+	first := receiveEmittedEvent(t, emitter.calls)
+	latest := receiveEmittedEvent(t, emitter.calls)
+	if got := first.values[0].(PluginListResponse); len(got.Plugins) != 0 {
+		t.Fatalf("first plugin event = %+v, want initial empty list", got)
+	}
+	if got := latest.values[0].(PluginListResponse); len(got.Plugins) != 1 || got.Plugins[0].ID != "latest" {
+		t.Fatalf("plugin event after blocked burst = %+v, want only latest", got)
+	}
+}
+
+func TestEventBridgeBlockedSettingsEmitterSkipsIntermediatePendingSnapshot(t *testing.T) {
+	previousProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previousProcs)
+	settingsAPI := newSettingsAPI(nil, userconfig.Candidate{}, time.Now)
+	t.Cleanup(settingsAPI.close)
+	emitter := &blockingEventEmitter{
+		calls:   make(chan emittedEvent, 4),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	forwarders := startEventForwarders(context.Background(), emitter, nil, nil, settingsAPI)
+	t.Cleanup(forwarders.stop)
+	waitEmitterEntered(t, emitter.entered)
+
+	settingsAPI.store.update(settingsSnapshot{fileRevision: 2, settings: userconfig.Candidate{Avatar: userconfig.Avatar{OSCRoot: "C:/intermediate"}}}, nil)
+	yieldEventPipeline()
+	emitter.beforeReturn = func() {
+		settingsAPI.store.update(settingsSnapshot{fileRevision: 3, settings: userconfig.Candidate{Avatar: userconfig.Avatar{OSCRoot: "C:/latest"}}}, nil)
+	}
+	close(emitter.release)
+
+	first := receiveEmittedEvent(t, emitter.calls)
+	latest := receiveEmittedEvent(t, emitter.calls)
+	if got := first.values[0].(SettingsResponse); got.FileRevision != 0 {
+		t.Fatalf("first settings event = %+v, want initial revision zero", got)
+	}
+	if got := latest.values[0].(SettingsResponse); got.FileRevision != 3 || got.Settings.Avatar.OSCRoot != "C:/latest" {
+		t.Fatalf("settings event after blocked burst = %+v, want only latest", got)
 	}
 }
 
 func TestEventBridgeStopJoinsBlockedEmitAndSuppressesPendingAndFutureEvents(t *testing.T) {
 	runtimeAPI := newRuntimeAPI(true, time.Now)
 	emitter := &blockingEventEmitter{
-		calls:   make(chan emittedEvent, 4),
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
+		calls:    make(chan emittedEvent, 4),
+		entered:  make(chan struct{}),
+		release:  make(chan struct{}),
+		canceled: make(chan struct{}),
 	}
 	forwarders := startEventForwarders(context.Background(), emitter, runtimeAPI, nil, nil)
 	select {
@@ -125,9 +203,14 @@ func TestEventBridgeStopJoinsBlockedEmitAndSuppressesPendingAndFutureEvents(t *t
 		close(stopped)
 	}()
 	select {
+	case <-emitter.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("blocked emitter did not observe event bridge cancellation")
+	}
+	select {
 	case <-stopped:
 		t.Fatal("event bridge stop returned while synchronous emitter remained blocked")
-	case <-time.After(20 * time.Millisecond):
+	default:
 	}
 	close(emitter.release)
 	select {
@@ -140,13 +223,13 @@ func TestEventBridgeStopJoinsBlockedEmitAndSuppressesPendingAndFutureEvents(t *t
 	select {
 	case event := <-emitter.calls:
 		t.Fatalf("event emitted after cancellation: %+v", event)
-	case <-time.After(20 * time.Millisecond):
+	default:
 	}
 	runtimeAPI.setPhase(runtimePhaseClosed)
 	select {
 	case event := <-emitter.calls:
 		t.Fatalf("future event emitted after joined stop: %+v", event)
-	case <-time.After(20 * time.Millisecond):
+	default:
 	}
 
 	secondStop := make(chan struct{})
@@ -180,7 +263,66 @@ func TestEventBridgeParentCancellationStopsAllForwarders(t *testing.T) {
 	select {
 	case event := <-emitter.calls:
 		t.Fatalf("event emitted after parent cancellation joined: %+v", event)
-	case <-time.After(20 * time.Millisecond):
+	default:
+	}
+}
+
+func TestEventBridgeClosedSourceStopsWorkerWithoutEmission(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	source := make(chan int)
+	close(source)
+	emitter := &recordingEventEmitter{calls: make(chan emittedEvent, 1)}
+	var workers sync.WaitGroup
+	startEventForwarder(ctx, &workers, emitter, eventRuntimeStatus, source, func(value int) any { return value })
+	done := make(chan struct{})
+	go func() {
+		workers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("event worker did not stop after its source closed")
+	}
+	select {
+	case event := <-emitter.calls:
+		t.Fatalf("closed source emitted event: %+v", event)
+	default:
+	}
+}
+
+func TestEventBridgeConcurrentRepeatedStopIsSafe(t *testing.T) {
+	runtimeAPI := newRuntimeAPI(true, time.Now)
+	emitter := &recordingEventEmitter{calls: make(chan emittedEvent, 2)}
+	forwarders := startEventForwarders(context.Background(), emitter, runtimeAPI, nil, nil)
+	_ = receiveEmittedEvent(t, emitter.calls)
+
+	const callers = 16
+	var stopped sync.WaitGroup
+	stopped.Add(callers)
+	for range callers {
+		go func() {
+			defer stopped.Done()
+			forwarders.stop()
+		}()
+	}
+	done := make(chan struct{})
+	go func() {
+		stopped.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("concurrent repeated event bridge stops did not return")
+	}
+
+	runtimeAPI.setPhase(runtimePhaseClosed)
+	select {
+	case event := <-emitter.calls:
+		t.Fatalf("event emitted after concurrent stops joined: %+v", event)
+	default:
 	}
 }
 
@@ -190,7 +332,7 @@ func TestEventBridgeStopJoinsModuleSubscriptionAdapters(t *testing.T) {
 	forwarders := startEventForwarders(context.Background(), emitter, runtimeAPI, nil, nil)
 	_ = receiveEmittedEvent(t, emitter.calls)
 
-	runtimeAPI.mu.Lock()
+	runtimeAPI.store.mu.Lock()
 	stopped := make(chan struct{})
 	go func() {
 		forwarders.stop()
@@ -198,11 +340,11 @@ func TestEventBridgeStopJoinsModuleSubscriptionAdapters(t *testing.T) {
 	}()
 	select {
 	case <-stopped:
-		runtimeAPI.mu.Unlock()
-		t.Fatal("event bridge stop returned before its module subscription adapter exited")
+		runtimeAPI.store.mu.Unlock()
+		t.Fatal("event bridge stop returned before its owned module source cleanup exited")
 	case <-time.After(20 * time.Millisecond):
 	}
-	runtimeAPI.mu.Unlock()
+	runtimeAPI.store.mu.Unlock()
 	select {
 	case <-stopped:
 	case <-time.After(time.Second):
@@ -225,5 +367,20 @@ func receiveEmittedEvent(t *testing.T, events <-chan emittedEvent) emittedEvent 
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for emitted event")
 		return emittedEvent{}
+	}
+}
+
+func waitEmitterEntered(t *testing.T, entered <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("event emitter was not entered")
+	}
+}
+
+func yieldEventPipeline() {
+	for range 100 {
+		runtime.Gosched()
 	}
 }

@@ -36,7 +36,6 @@ type RuntimeAPI struct {
 	mu          sync.Mutex
 	store       *moduleStore[runtimeSnapshot]
 	subscribers map[chan RuntimeResponse]struct{}
-	subsWG      sync.WaitGroup
 }
 
 func newRuntimeAPI(platformSupported bool, now func() time.Time) *RuntimeAPI {
@@ -125,11 +124,9 @@ func (api *RuntimeAPI) subscribe(ctx context.Context) <-chan RuntimeResponse {
 	updates := make(chan RuntimeResponse, 1)
 	api.mu.Lock()
 	api.subscribers[updates] = struct{}{}
-	api.subsWG.Add(1)
 	offerRuntimeResponse(updates, runtimeResponse(api.store.snapshot()))
 	api.mu.Unlock()
 	go func() {
-		defer api.subsWG.Done()
 		<-ctx.Done()
 		api.mu.Lock()
 		if _, ok := api.subscribers[updates]; ok {
@@ -140,8 +137,6 @@ func (api *RuntimeAPI) subscribe(ctx context.Context) <-chan RuntimeResponse {
 	}()
 	return updates
 }
-
-func (api *RuntimeAPI) waitSubscriptions() { api.subsWG.Wait() }
 
 func runtimeApplicationDTO(status application.Status) RuntimeApplicationDTO {
 	result := RuntimeApplicationDTO{

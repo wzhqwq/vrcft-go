@@ -150,7 +150,6 @@ func TestRuntimeAPIApplicationConversionIsBoundedOwnedAndPreservesRootState(t *t
 	}
 	afterCancel := api.GetStatus().Revision
 	updates <- application.Status{Lifecycle: application.LifecycleClosed, PlanStatus: avatar.Status(255), PlanSource: avatar.Source(255)}
-	time.Sleep(20 * time.Millisecond)
 	if revision := api.GetStatus().Revision; revision != afterCancel {
 		t.Fatalf("canceled status consumer changed revision: %d -> %d", afterCancel, revision)
 	}
@@ -194,7 +193,7 @@ func TestRuntimeAPIProblemAndSubscriptionSuppressSemanticDuplicates(t *testing.T
 	select {
 	case duplicate := <-updates:
 		t.Fatalf("semantic duplicate published runtime response %+v", duplicate)
-	case <-time.After(20 * time.Millisecond):
+	default:
 	}
 	if got := api.GetStatus(); got.Revision != changed.Revision {
 		t.Fatalf("semantic duplicate changed revision: %d -> %d", changed.Revision, got.Revision)
