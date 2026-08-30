@@ -19,6 +19,19 @@ import (
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
 
+func TestValidateConfigChecksWithoutConstructingApplication(t *testing.T) {
+	valid := validApplicationConfig(t)
+	if err := ValidateConfig(valid); err != nil {
+		t.Fatalf("ValidateConfig(valid) error = %v", err)
+	}
+
+	invalid := valid
+	invalid.FrameInterval = -time.Nanosecond
+	if err := ValidateConfig(invalid); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("ValidateConfig(invalid) error = %v, want errors.Is(_, %v)", err, ErrInvalidConfig)
+	}
+}
+
 func TestApplicationConstructsComponentsInDependencyOrder(t *testing.T) {
 	harness := newApplicationHarness(t, "", nil)
 

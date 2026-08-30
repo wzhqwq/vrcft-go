@@ -159,7 +159,7 @@ func ApplicationConfig(settings Settings, paths Paths) (application.Config, erro
 		return application.Config{}, validation("processing", err)
 	}
 	config := application.Config{Avatar: avatar.PlannerConfig{OSCRoot: normalized.Avatar.OSCRoot, FallbackPath: normalized.Avatar.FallbackPath}, PluginCatalog: plugins.DirectoryCatalogConfig{BuiltinRoot: paths.BuiltinPluginDir, DevRoots: append([]string(nil), normalized.Plugins.DevRoots...)}, PluginStorePath: paths.PluginStoreFile, PluginStoreMaxBytes: MaxPluginConfigBytes, PluginOptions: plugins.DefaultOptions(), Processing: processingConfig, OSC: osc.ControllerConfig{TargetMode: normalized.OSC.TargetMode, PreferredVRChatService: normalized.OSC.PreferredService, ManualTarget: osc.OSCTarget{Host: normalized.OSC.ManualHost, Port: normalized.OSC.ManualPort}}}
-	if _, err := application.NewApp(config); err != nil {
+	if err := application.ValidateConfig(config); err != nil {
 		return application.Config{}, fmt.Errorf("userconfig: application config: %w", err)
 	}
 	return config, nil

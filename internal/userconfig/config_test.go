@@ -119,4 +119,7 @@ func TestApplicationConfigMapsFreshOwnedBackendConfig(t *testing.T) {
 	if _, err := application.NewApp(config); err != nil {
 		t.Fatalf("application config not accepted: %v", err)
 	}
+	if err := application.ValidateConfig(config); err != nil {
+		t.Fatalf("application config validation failed: %v", err)
+	}
 }

@@ -108,6 +108,14 @@ func NewApp(config Config) (*Application, error) {
 	return newApplication(config, productionApplicationDependencies())
 }
 
+// ValidateConfig applies the same normalization and lower-level constructor
+// validation as NewApp without constructing an Application or any of its
+// owned runtime dependencies.
+func ValidateConfig(config Config) error {
+	_, err := normalizeConfig(config)
+	return err
+}
+
 func newApplication(config Config, dependencies applicationDependencies) (*Application, error) {
 	normalized, err := normalizeConfig(config)
 	if err != nil {
