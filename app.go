@@ -46,6 +46,7 @@ type appDependencies struct {
 	now               func() time.Time
 	emitter           eventEmitter
 	shutdownTimeout   time.Duration
+	startupBoundary   func(string)
 }
 
 type rootLifecycle uint8
@@ -58,6 +59,14 @@ const (
 	rootClosing
 	rootClosed
 )
+
+type rootStartupOperation struct {
+	token  uint64
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+	result rootLifecycle
+}
 
 // App owns the one concrete production Application and the narrower
 // operations seam used by lifecycle tests. NewApp only creates passive values;
@@ -79,6 +88,8 @@ type App struct {
 	consumerCancel context.CancelFunc
 	consumerWG     sync.WaitGroup
 	forwarders     *eventForwarders
+	startupToken   uint64
+	startupOp      *rootStartupOperation
 	shutdownDone   chan struct{}
 }
 
@@ -144,24 +155,35 @@ func (a *App) startup(parent context.Context) {
 	if parent == nil {
 		parent = context.Background()
 	}
-
-	a.mu.Lock()
-	if a.lifecycle != rootCreated {
-		a.mu.Unlock()
+	op := a.admitStartup(parent)
+	if op == nil {
 		return
 	}
-	a.lifecycle = rootStarting
-	a.processCtx, a.processCancel = context.WithCancel(parent)
-	processCtx := a.processCtx
-	a.runtime.setRootState(runtimePhaseStarting, nil)
-	a.forwarders = startEventForwarders(processCtx, a.deps.emitter, a.runtime, a.plugins, a.settings)
-	a.mu.Unlock()
+	defer a.finishStartup(op)
 
-	if err := processCtx.Err(); err != nil {
+	if !a.startupActive(op) {
+		return
+	}
+	a.runtime.setRootState(runtimePhaseStarting, nil)
+	if !a.startupActive(op) {
+		return
+	}
+	forwarders := startEventForwarders(op.ctx, a.deps.emitter, a.runtime, a.plugins, a.settings)
+	a.mu.Lock()
+	if a.startupOp == op {
+		a.forwarders = forwarders
+	}
+	a.mu.Unlock()
+	if !a.startupActive(op) {
+		return
+	}
+
+	if err := op.ctx.Err(); err != nil {
 		a.enterDiagnostic(err, nil)
 		return
 	}
 	if a.deps.goos != "windows" {
+		a.reachStartupBoundary("unsupported")
 		a.setPlatformSupported(false)
 		a.enterDiagnostic(userconfig.ErrUnsupportedPlatform, nil)
 		return
@@ -171,15 +193,23 @@ func (a *App) startup(parent context.Context) {
 		return
 	}
 
+	if !a.startupActive(op) {
+		return
+	}
+	a.reachStartupBoundary("environment")
 	environment, err := a.deps.environment()
+	if !a.startupActive(op) {
+		return
+	}
 	if err != nil {
 		a.enterDiagnostic(err, nil)
 		return
 	}
-	if !a.startupActive(processCtx) {
+	a.reachStartupBoundary("resolve_paths")
+	paths, err := a.deps.resolvePaths(environment)
+	if !a.startupActive(op) {
 		return
 	}
-	paths, err := a.deps.resolvePaths(environment)
 	if err != nil {
 		if errors.Is(err, userconfig.ErrUnsupportedPlatform) {
 			a.setPlatformSupported(false)
@@ -187,30 +217,31 @@ func (a *App) startup(parent context.Context) {
 		a.enterDiagnostic(err, nil)
 		return
 	}
-	if !a.startupActive(processCtx) {
-		return
-	}
+	a.reachStartupBoundary("new_store")
 	store, err := a.deps.newStore(paths)
+	if !a.startupActive(op) {
+		return
+	}
 	if err != nil {
 		a.enterDiagnostic(err, nil)
 		return
 	}
-	if !a.startupActive(processCtx) {
+	a.reachStartupBoundary("settings_attach")
+	err = a.settingsIO.attach(store)
+	if !a.startupActive(op) {
 		return
 	}
-	if err := a.settingsIO.attach(store); err != nil {
-		a.enterDiagnostic(err, nil)
-		return
-	}
-	if !a.startupActive(processCtx) {
-		return
-	}
-	loaded, err := a.settings.loadForStartup(processCtx)
 	if err != nil {
 		a.enterDiagnostic(err, nil)
 		return
 	}
-	if !a.startupActive(processCtx) {
+	a.reachStartupBoundary("settings_load")
+	loaded, err := a.settings.loadForStartup(op.ctx)
+	if !a.startupActive(op) {
+		return
+	}
+	if err != nil {
+		a.enterDiagnostic(err, nil)
 		return
 	}
 	if loaded.Invalid {
@@ -225,74 +256,154 @@ func (a *App) startup(parent context.Context) {
 		a.enterDiagnostic(errors.New("settings load returned no document"), nil)
 		return
 	}
-	config, err := a.deps.applicationConfig(loaded.Settings.Clone(), paths)
-	if err != nil {
-		a.enterDiagnostic(err, nil)
+	if !a.startupActive(op) {
 		return
 	}
-	if !a.startupActive(processCtx) {
+	a.reachStartupBoundary("application_config")
+	config, err := a.deps.applicationConfig(loaded.Settings.Clone(), paths)
+	if !a.startupActive(op) {
+		return
+	}
+	if err != nil {
+		a.enterDiagnostic(err, nil)
 		return
 	}
 
-	// Construction and ownership publication share the root lock. Shutdown can
-	// therefore never observe a construction window without also observing the
-	// operations value that must be closed.
-	a.mu.Lock()
-	if a.lifecycle != rootStarting || processCtx.Err() != nil {
-		a.mu.Unlock()
-		return
-	}
+	// Factory construction is synchronous and bounded by contract, but it does
+	// not receive a context. Keep it outside the root lock so shutdown can mark
+	// closing and cancel the admitted startup while construction is in flight.
+	a.reachStartupBoundary("new_backend")
 	backend, operations, err := a.deps.newBackend(config)
-	if err == nil {
+	a.mu.Lock()
+	if backend != nil || operations != nil {
 		a.backend = backend
 		a.backendOps = operations
 	}
+	activeAfterFactory := a.startupActiveLocked(op)
 	a.mu.Unlock()
 	if err != nil {
-		a.enterDiagnostic(err, nil)
+		if activeAfterFactory {
+			a.enterDiagnostic(err, nil)
+		}
 		return
 	}
 	if operations == nil {
 		a.enterDiagnostic(errors.New("backend factory returned no operations"), nil)
 		return
 	}
-	if !a.startupActive(processCtx) {
+	if !activeAfterFactory {
 		return
 	}
-	if err := operations.Start(processCtx); err != nil {
+	a.reachStartupBoundary("backend_start")
+	if err := operations.Start(op.ctx); err != nil {
+		if !a.startupActive(op) {
+			return
+		}
 		a.enterDiagnostic(err, operations)
 		return
 	}
-	if err := processCtx.Err(); err != nil {
+	if !a.startupActive(op) {
+		return
+	}
+	if err := op.ctx.Err(); err != nil {
 		a.enterDiagnostic(err, operations)
 		return
 	}
-	a.attachRunningConsumers(processCtx, operations)
+	a.attachRunningConsumers(op, operations)
 }
 
-func (a *App) startupActive(processCtx context.Context) bool {
+func (a *App) admitStartup(parent context.Context) *rootStartupOperation {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.lifecycle == rootStarting && processCtx.Err() == nil
+	if a.lifecycle != rootCreated {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(parent)
+	a.startupToken++
+	op := &rootStartupOperation{token: a.startupToken, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	a.startupOp = op
+	a.processCtx = ctx
+	a.processCancel = cancel
+	a.lifecycle = rootStarting
+	return op
 }
 
-func (a *App) attachRunningConsumers(processCtx context.Context, operations backendOperations) {
+func (a *App) finishStartup(op *rootStartupOperation) {
+	a.mu.Lock()
+	if a.startupOp == op {
+		op.result = a.lifecycle
+		close(op.done)
+	}
+	a.mu.Unlock()
+}
+
+func (a *App) startupActive(op *rootStartupOperation) bool {
+	if op == nil || op.ctx.Err() != nil {
+		return false
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.lifecycle != rootStarting || processCtx.Err() != nil || a.backendOps != operations {
+	return a.startupActiveLocked(op)
+}
+
+func (a *App) startupActiveLocked(op *rootStartupOperation) bool {
+	return op != nil && a.startupOp == op && a.lifecycle == rootStarting && op.ctx.Err() == nil
+}
+
+func (a *App) reachStartupBoundary(boundary string) {
+	if a.deps.startupBoundary != nil {
+		a.deps.startupBoundary(boundary)
+	}
+}
+
+func (a *App) attachRunningConsumers(op *rootStartupOperation, operations backendOperations) {
+	if !a.startupActive(op) {
 		return
 	}
-	consumerCtx, cancel := context.WithCancel(processCtx)
+	consumerCtx, cancel := context.WithCancel(op.ctx)
+	a.mu.Lock()
+	if !a.startupActiveLocked(op) || a.backendOps != operations {
+		a.mu.Unlock()
+		cancel()
+		return
+	}
 	a.consumerCancel = cancel
-	a.runtime.setApplicationStatus(operations.Status())
+	a.mu.Unlock()
+
+	status := operations.Status()
+	if !a.startupActive(op) {
+		return
+	}
+	a.runtime.setApplicationStatus(status)
+	if !a.startupActive(op) {
+		return
+	}
 	a.plugins.attach(consumerCtx, operations)
-	a.plugins.consumeSnapshots(consumerCtx, operations.SubscribePlugins(consumerCtx))
+	if !a.startupActive(op) {
+		return
+	}
+	pluginUpdates := operations.SubscribePlugins(consumerCtx)
+	if !a.startupActive(op) {
+		return
+	}
+	a.plugins.consumeSnapshots(consumerCtx, pluginUpdates)
+	if !a.startupActive(op) {
+		return
+	}
 	statusUpdates := operations.SubscribeStatus(consumerCtx)
+	if !a.startupActive(op) {
+		return
+	}
 	a.consumerWG.Add(1)
 	go func() {
 		defer a.consumerWG.Done()
 		a.runtime.consumeStatus(consumerCtx, statusUpdates)
 	}()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.startupActiveLocked(op) {
+		return
+	}
 	a.lifecycle = rootRunning
 	a.runtime.setRootState(runtimePhaseRunning, nil)
 }
@@ -339,15 +450,23 @@ func (a *App) shutdown(context.Context) {
 	a.shutdownDone = make(chan struct{})
 	done := a.shutdownDone
 	a.lifecycle = rootClosing
-	processCancel := a.processCancel
+	startupOp := a.startupOp
+	if startupOp != nil {
+		startupOp.cancel()
+	} else if a.processCancel != nil {
+		a.processCancel()
+	}
+	a.mu.Unlock()
+
+	if startupOp != nil {
+		<-startupOp.done
+	}
+	a.mu.Lock()
 	consumerCancel := a.consumerCancel
 	forwarders := a.forwarders
 	operations := a.backendOps
 	a.mu.Unlock()
 
-	if processCancel != nil {
-		processCancel()
-	}
 	a.plugins.close()
 	if consumerCancel != nil {
 		consumerCancel()

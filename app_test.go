@@ -298,7 +298,7 @@ func TestAppConcurrentRepeatedShutdownClosesAtMostOnce(t *testing.T) {
 	}
 }
 
-func TestAppShutdownDuringStartupPreventsPostCloseConstruction(t *testing.T) {
+func TestAppShutdownWaitsForAdmittedStartupBeforePublishingClosed(t *testing.T) {
 	harness := newRootAppHarness(t)
 	dependencies := harness.dependencies()
 	environmentEntered := make(chan struct{})
@@ -321,12 +321,38 @@ func TestAppShutdownDuringStartupPreventsPostCloseConstruction(t *testing.T) {
 		t.Fatal("startup did not reach environment dependency")
 	}
 
-	app.shutdown(context.Background())
+	startupCtx := app.processCtx
+	shutdownDone := make(chan struct{})
+	go func() {
+		app.shutdown(context.Background())
+		close(shutdownDone)
+	}()
+	select {
+	case <-startupCtx.Done():
+	case <-time.After(time.Second):
+		close(releaseEnvironment)
+		t.Fatal("shutdown did not cancel the admitted startup")
+	}
+	select {
+	case <-shutdownDone:
+		close(releaseEnvironment)
+		t.Fatal("shutdown returned before admitted startup exited")
+	default:
+	}
+	if got := app.runtime.GetStatus(); got.Phase == "closed" {
+		close(releaseEnvironment)
+		t.Fatal("root published closed before admitted startup exited")
+	}
 	close(releaseEnvironment)
 	select {
 	case <-startupDone:
 	case <-time.After(time.Second):
 		t.Fatal("startup did not return after shutdown")
+	}
+	select {
+	case <-shutdownDone:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finish after admitted startup exited")
 	}
 	if harness.storeFactoryCalls != 0 || harness.configCalls != 0 || harness.backendFactoryCalls != 0 {
 		t.Fatalf("post-close startup work = store %d config %d backend %d, want zero", harness.storeFactoryCalls, harness.configCalls, harness.backendFactoryCalls)
@@ -336,13 +362,190 @@ func TestAppShutdownDuringStartupPreventsPostCloseConstruction(t *testing.T) {
 	}
 }
 
+func TestAppShutdownCancelsWhileFactoryRunsThenClosesDeliveredBackendWithoutStart(t *testing.T) {
+	harness := newRootAppHarness(t)
+	dependencies := harness.dependencies()
+	baseFactory := dependencies.newBackend
+	factoryEntered := make(chan struct{})
+	releaseFactory := make(chan struct{})
+	dependencies.newBackend = func(config application.Config) (*application.Application, backendOperations, error) {
+		close(factoryEntered)
+		<-releaseFactory
+		return baseFactory(config)
+	}
+	app := newAppWithDependencies(dependencies)
+	startupDone := make(chan struct{})
+	go func() {
+		app.startup(context.Background())
+		close(startupDone)
+	}()
+	select {
+	case <-factoryEntered:
+	case <-time.After(time.Second):
+		t.Fatal("startup did not reach backend factory")
+	}
+
+	startupCtx := app.processCtx
+	shutdownDone := make(chan struct{})
+	go func() {
+		app.shutdown(context.Background())
+		close(shutdownDone)
+	}()
+	select {
+	case <-startupCtx.Done():
+	case <-time.After(100 * time.Millisecond):
+		close(releaseFactory)
+		<-startupDone
+		<-shutdownDone
+		t.Fatal("blocking factory held the root lock and prevented shutdown cancellation")
+	}
+	rootLockAvailable := make(chan struct{})
+	go func() {
+		app.mu.Lock()
+		close(rootLockAvailable)
+		app.mu.Unlock()
+	}()
+	select {
+	case <-rootLockAvailable:
+	case <-time.After(time.Second):
+		close(releaseFactory)
+		<-startupDone
+		<-shutdownDone
+		t.Fatal("blocking factory held the root lifecycle lock")
+	}
+	select {
+	case <-shutdownDone:
+		close(releaseFactory)
+		t.Fatal("shutdown returned before factory ownership delivery")
+	default:
+	}
+	close(releaseFactory)
+	select {
+	case <-startupDone:
+	case <-time.After(time.Second):
+		t.Fatal("startup did not finish after factory returned")
+	}
+	select {
+	case <-shutdownDone:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finish after factory ownership delivery")
+	}
+	if harness.backend.startCallCount() != 0 || harness.backend.closeCallCount() != 1 {
+		t.Fatalf("factory/shutdown lifecycle = Start %d Close %d, want 0/1", harness.backend.startCallCount(), harness.backend.closeCallCount())
+	}
+	if app.backendOps != harness.backend {
+		t.Fatalf("delivered backend operations = %T, want retained fake backend", app.backendOps)
+	}
+	if got := app.runtime.GetStatus(); got.Phase != "closed" {
+		t.Fatalf("final runtime phase = %q, want closed", got.Phase)
+	}
+}
+
+func TestAppShutdownJoinsAdmittedUnsupportedPublicationBeforeClosed(t *testing.T) {
+	harness := newRootAppHarness(t)
+	harness.goos = "linux"
+	dependencies := harness.dependencies()
+	barrier := newRootStartupBarrier("unsupported")
+	dependencies.startupBoundary = barrier.wait
+	app := newAppWithDependencies(dependencies)
+	startupDone := make(chan struct{})
+	go func() {
+		app.startup(context.Background())
+		close(startupDone)
+	}()
+	barrier.waitUntilEntered(t)
+	startupCtx := app.processCtx
+	shutdownDone := startRootShutdown(app)
+	waitRootContextCanceled(t, startupCtx)
+	assertRootShutdownWaiting(t, shutdownDone, "unsupported publication")
+
+	barrier.release()
+	waitRootOperationDone(t, startupDone, "unsupported startup")
+	waitRootOperationDone(t, shutdownDone, "shutdown")
+	first := app.runtime.GetStatus()
+	second := app.runtime.GetStatus()
+	if first.Phase != "closed" || first.Revision != second.Revision {
+		t.Fatalf("post-join runtime statuses = %+v then %+v, want stable closed revision", first, second)
+	}
+}
+
+func TestAppShutdownJoinsAdmittedSettingsAttachBeforeClosed(t *testing.T) {
+	harness := newRootAppHarness(t)
+	dependencies := harness.dependencies()
+	barrier := newRootStartupBarrier("settings_attach")
+	dependencies.startupBoundary = barrier.wait
+	app := newAppWithDependencies(dependencies)
+	startupDone := make(chan struct{})
+	go func() {
+		app.startup(context.Background())
+		close(startupDone)
+	}()
+	barrier.waitUntilEntered(t)
+	shutdownDone := startRootShutdown(app)
+	waitRootContextCanceled(t, app.processCtx)
+	assertRootShutdownWaiting(t, shutdownDone, "settings attach")
+
+	barrier.release()
+	waitRootOperationDone(t, startupDone, "settings startup")
+	waitRootOperationDone(t, shutdownDone, "shutdown")
+	if _, err := app.settingsIO.current(); err != nil {
+		t.Fatalf("admitted settings attach did not deliver its store before shutdown: %v", err)
+	}
+	if harness.store.loadCalls != 0 || harness.configCalls != 0 || harness.backendFactoryCalls != 0 {
+		t.Fatalf("post-cancel work after settings attach = load %d config %d backend %d, want zero", harness.store.loadCalls, harness.configCalls, harness.backendFactoryCalls)
+	}
+	if got := app.runtime.GetStatus(); got.Phase != "closed" {
+		t.Fatalf("final runtime phase = %q, want closed", got.Phase)
+	}
+}
+
+func TestAppShutdownJoinsAdmittedConfigConversionBeforeClosed(t *testing.T) {
+	harness := newRootAppHarness(t)
+	dependencies := harness.dependencies()
+	barrier := newRootStartupBarrier("application_config")
+	dependencies.startupBoundary = barrier.wait
+	app := newAppWithDependencies(dependencies)
+	startupDone := make(chan struct{})
+	go func() {
+		app.startup(context.Background())
+		close(startupDone)
+	}()
+	barrier.waitUntilEntered(t)
+	shutdownDone := startRootShutdown(app)
+	waitRootContextCanceled(t, app.processCtx)
+	assertRootShutdownWaiting(t, shutdownDone, "config conversion")
+
+	barrier.release()
+	waitRootOperationDone(t, startupDone, "config startup")
+	waitRootOperationDone(t, shutdownDone, "shutdown")
+	if harness.configCalls != 1 || harness.backendFactoryCalls != 0 {
+		t.Fatalf("admitted config/post-cancel backend calls = %d/%d, want 1/0", harness.configCalls, harness.backendFactoryCalls)
+	}
+	if got := app.runtime.GetStatus(); got.Phase != "closed" {
+		t.Fatalf("final runtime phase = %q, want closed", got.Phase)
+	}
+}
+
 func TestAppShutdownDuringBackendStartCancelsAndClosesRetainedBackend(t *testing.T) {
 	harness := newRootAppHarness(t)
 	startEntered := make(chan struct{})
+	startCanceled := make(chan struct{})
+	allowStartReturn := make(chan struct{})
+	startReturned := make(chan struct{})
 	harness.backend.startFunc = func(ctx context.Context) error {
 		close(startEntered)
 		<-ctx.Done()
+		close(startCanceled)
+		<-allowStartReturn
+		close(startReturned)
 		return ctx.Err()
+	}
+	harness.backend.onClose = func(context.Context) {
+		select {
+		case <-startReturned:
+		default:
+			t.Error("backend Close ran before admitted Start returned")
+		}
 	}
 	app := newAppWithDependencies(harness.dependencies())
 	startupDone := make(chan struct{})
@@ -356,12 +559,26 @@ func TestAppShutdownDuringBackendStartCancelsAndClosesRetainedBackend(t *testing
 		t.Fatal("startup did not reach backend Start")
 	}
 
-	app.shutdown(context.Background())
+	shutdownDone := startRootShutdown(app)
+	select {
+	case <-startCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not cancel backend Start")
+	}
+	if calls := harness.backend.closeCallCount(); calls != 0 {
+		close(allowStartReturn)
+		waitRootOperationDone(t, startupDone, "startup")
+		waitRootOperationDone(t, shutdownDone, "shutdown")
+		t.Fatalf("Close calls while Start remained admitted = %d, want zero", calls)
+	}
+	assertRootShutdownWaiting(t, shutdownDone, "backend Start")
+	close(allowStartReturn)
 	select {
 	case <-startupDone:
 	case <-time.After(time.Second):
 		t.Fatal("canceled startup did not return")
 	}
+	waitRootOperationDone(t, shutdownDone, "shutdown")
 	if harness.backendFactoryCalls != 1 || harness.backend.closeCallCount() != 1 {
 		t.Fatalf("startup/shutdown ownership = factory %d Close %d, want 1/1", harness.backendFactoryCalls, harness.backend.closeCallCount())
 	}
@@ -483,6 +700,72 @@ func (h *rootAppHarness) calls() []string {
 	return append([]string(nil), h.trace...)
 }
 
+type rootStartupBarrier struct {
+	target   string
+	entered  chan struct{}
+	releaseC chan struct{}
+	once     sync.Once
+}
+
+func newRootStartupBarrier(target string) *rootStartupBarrier {
+	return &rootStartupBarrier{target: target, entered: make(chan struct{}), releaseC: make(chan struct{})}
+}
+
+func (barrier *rootStartupBarrier) wait(boundary string) {
+	if boundary != barrier.target {
+		return
+	}
+	barrier.once.Do(func() { close(barrier.entered) })
+	<-barrier.releaseC
+}
+
+func (barrier *rootStartupBarrier) waitUntilEntered(t *testing.T) {
+	t.Helper()
+	select {
+	case <-barrier.entered:
+	case <-time.After(time.Second):
+		t.Fatalf("startup did not reach %q boundary", barrier.target)
+	}
+}
+
+func (barrier *rootStartupBarrier) release() { close(barrier.releaseC) }
+
+func startRootShutdown(app *App) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		app.shutdown(context.Background())
+		close(done)
+	}()
+	return done
+}
+
+func waitRootContextCanceled(t *testing.T, ctx context.Context) {
+	t.Helper()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not cancel startup context")
+	}
+}
+
+func assertRootShutdownWaiting(t *testing.T, done <-chan struct{}, operation string) {
+	t.Helper()
+	select {
+	case <-done:
+		t.Fatalf("shutdown returned before admitted %s completed", operation)
+	default:
+	}
+}
+
+func waitRootOperationDone(t *testing.T, done <-chan struct{}, operation string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not finish", operation)
+	}
+}
+
 type rootDiscardEmitter struct{ record func() }
 
 func (emitter rootDiscardEmitter) Emit(context.Context, string, ...any) {
@@ -584,6 +867,12 @@ func (backend *fakeRootBackend) closeCallCount() int {
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
 	return backend.closeCalls
+}
+
+func (backend *fakeRootBackend) startCallCount() int {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	return backend.startCalls
 }
 
 func (backend *fakeRootBackend) statusSubscriptionCount() int {
