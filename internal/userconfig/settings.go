@@ -97,25 +97,37 @@ type OSC struct {
 
 func (settings Settings) Clone() Settings {
 	clone := settings
-	clone.Plugins.DevRoots = append([]string(nil), settings.Plugins.DevRoots...)
+	if settings.Plugins.DevRoots != nil {
+		clone.Plugins.DevRoots = make([]string, len(settings.Plugins.DevRoots))
+		copy(clone.Plugins.DevRoots, settings.Plugins.DevRoots)
+	}
 	clone.Processing = settings.Processing.Clone()
 	return clone
 }
 
 func (candidate Candidate) Clone() Candidate {
 	clone := candidate
-	clone.Plugins.DevRoots = append([]string(nil), candidate.Plugins.DevRoots...)
+	if candidate.Plugins.DevRoots != nil {
+		clone.Plugins.DevRoots = make([]string, len(candidate.Plugins.DevRoots))
+		copy(clone.Plugins.DevRoots, candidate.Plugins.DevRoots)
+	}
 	clone.Processing = candidate.Processing.Clone()
 	return clone
 }
 
 func (processing Processing) Clone() Processing {
 	clone := processing
-	clone.Overrides = append([]ProcessingOverride(nil), processing.Overrides...)
+	if processing.Overrides != nil {
+		clone.Overrides = make([]ProcessingOverride, len(processing.Overrides))
+		copy(clone.Overrides, processing.Overrides)
+	}
 	if processing.MutualExclusion != nil {
 		clone.MutualExclusion = make([][]string, len(processing.MutualExclusion))
 		for i, group := range processing.MutualExclusion {
-			clone.MutualExclusion[i] = append([]string(nil), group...)
+			if group != nil {
+				clone.MutualExclusion[i] = make([]string, len(group))
+				copy(clone.MutualExclusion[i], group)
+			}
 		}
 	}
 	return clone
