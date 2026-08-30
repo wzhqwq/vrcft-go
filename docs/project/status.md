@@ -1,11 +1,11 @@
 # Project Status
 
-- Generated: 2026-08-24T08:17:56Z
-- Commit: `cc0d37ba4251b3fdb1003aa63bc812649631f054`
-- Source fingerprint: `900f2bd5ff4730ec506040d3f4d15125a636d93816a3235ec1a0f64eaf3c0cc6`
+- Generated: 2026-08-30T15:53:15Z
+- Commit: `66b7261dfd7346e3b6f87b1f6cdda2183a9baa8d`
+- Source fingerprint: `d151a77682ba1eac00983240465c98887e0e894da9159f18402b4514534f7a70`
 - Dirty: `false`
-- State: `blocked`
-- Progress: 94.1% (159/169 weight)
+- State: `in_progress`
+- Progress: 97.4% (190/195 weight)
 
 ## Milestones
 
@@ -17,8 +17,8 @@
 | M3 | complete | 100.0% (7/7) |
 | M4 | complete | 100.0% (10/10) |
 | M5 | complete | 100.0% (10/10) |
-| M6 | complete | 100.0% (25/25) |
-| M7 | blocked | 44.4% (8/18) |
+| M6 | complete | 100.0% (35/35) |
+| M7 | in_progress | 85.3% (29/34) |
 
 ## Packages and Subsystems
 
@@ -42,21 +42,19 @@
 | M4 | internal-evaluator | internal/evaluator | complete | 100.0% (5/5) |
 | M4 | internal-processing | internal/processing | complete | 100.0% (5/5) |
 | M5 | internal-avatar | internal/avatar | complete | 100.0% (10/10) |
-| M6 | end-to-end | docs/project | complete | 100.0% (8/8) |
-| M6 | internal-application | internal/application | complete | 100.0% (8/8) |
-| M6 | internal-osc | internal/osc | complete | 100.0% (9/9) |
+| M6 | end-to-end | docs/project | complete | 100.0% (10/10) |
+| M6 | internal-application | internal/application | complete | 100.0% (11/11) |
+| M6 | internal-osc | internal/osc | complete | 100.0% (14/14) |
 | M7 | build-release | build | complete | 100.0% (5/5) |
-| M7 | frontend | frontend | not_started | 0.0% (0/7) |
-| M7 | root | . | blocked | 50.0% (3/6) |
+| M7 | frontend | frontend | in_progress | 28.6% (2/7) |
+| M7 | internal-userconfig | internal/userconfig | complete | 100.0% (9/9) |
+| M7 | root | . | complete | 100.0% (13/13) |
 
 ## Failed Required Checks
 
-- `frontend/production-build` (failed): node:internal/modules/cjs/loader:1228 throw err; ^ Error: Cannot find module 'C:\Users\wzhqwq\Documents\vrcft-go\frontend\node_modules\vite\bin\vite.js' at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15) at Function._lo…
 - `frontend/project-status-view` (failed): required symbol not found
-- `frontend/type-check` (failed): node:internal/modules/cjs/loader:1228 throw err; ^ Error: Cannot find module 'C:\Users\wzhqwq\Documents\vrcft-go\frontend\node_modules\svelte-check\bin\svelte-check' at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15) at…
-- `root/backend-lifecycle-owned` (failed): required symbol not found
-- `root/wails-lifecycle-callbacks` (failed): required symbol not found
+- `frontend/type-check` (failed): 23:53:12 [vite-plugin-svelte] !!! Support for vite 8 beta in vite-plugin-svelte is experimental (rolldown: 1.1.5, vite: 8.1.5) !!! See https://github.com/sveltejs/vite-plugin-svelte/issues/1143 for a list of known issues and to report feedb…
 
 ## Next Action
 
-Address `frontend/production-build`: node:internal/modules/cjs/loader:1228 throw err; ^ Error: Cannot find module 'C:\Users\wzhqwq\Documents\vrcft-go\frontend\node_modules\vite\bin\vite.js' at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15) at Function._lo…
+Address `frontend/project-status-view`: required symbol not found
