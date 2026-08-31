@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wzhqwq/vrcft-go/internal/application"
 	"github.com/wzhqwq/vrcft-go/internal/plugins"
@@ -79,6 +80,9 @@ func (api *PluginsAPI) List() PluginListResponse {
 
 // GetConfig is the sole plugin API method that returns plugin-owned JSON.
 func (api *PluginsAPI) GetConfig(pluginID string) PluginConfigResponse {
+	if err := validatePublicPluginID(pluginID); err != nil {
+		return api.invalidPluginConfigInput(err)
+	}
 	command, err := api.admit(pluginID)
 	if err != nil {
 		return api.pluginConfigFailure(pluginID, err)
@@ -89,7 +93,7 @@ func (api *PluginsAPI) GetConfig(pluginID string) PluginConfigResponse {
 	if !ok {
 		return api.pluginConfigFailure(pluginID, plugins.ErrUnknownPlugin)
 	}
-	if len(config.Data) > userconfig.MaxPluginConfigBytes || (len(config.Data) != 0 && !json.Valid(config.Data)) {
+	if len(config.Data) > userconfig.MaxPluginConfigBytes || (len(config.Data) != 0 && (!utf8.Valid(config.Data) || !json.Valid(config.Data))) {
 		return api.pluginConfigFailure(pluginID, errors.New("plugin configuration violates the public boundary"))
 	}
 	envelope := api.store.snapshot()
@@ -105,6 +109,9 @@ func (api *PluginsAPI) GetConfig(pluginID string) PluginConfigResponse {
 // SetEnabled changes a plugin's durable desired state. Equal desired state is
 // an idempotent success and never calls the backend mutation method.
 func (api *PluginsAPI) SetEnabled(pluginID string, enabled bool) PluginMutationResponse {
+	if err := validatePublicPluginID(pluginID); err != nil {
+		return api.invalidPluginMutationInput(err)
+	}
 	command, err := api.admit(pluginID)
 	if err != nil {
 		return api.pluginMutationFailure(pluginID, err, 0)
@@ -130,6 +137,9 @@ func (api *PluginsAPI) SetEnabled(pluginID string, enabled bool) PluginMutationR
 // UpdateConfig validates public JSON, performs a per-plugin optimistic check,
 // creates the next revision, and leaves the Manager as final conflict authority.
 func (api *PluginsAPI) UpdateConfig(pluginID string, expectedConfigRevision uint64, data string) PluginMutationResponse {
+	if err := validatePublicPluginID(pluginID); err != nil {
+		return api.invalidPluginMutationInput(err)
+	}
 	command, err := api.admit(pluginID)
 	if err != nil {
 		return api.pluginMutationFailure(pluginID, err, 0)
@@ -143,7 +153,7 @@ func (api *PluginsAPI) UpdateConfig(pluginID string, expectedConfigRevision uint
 		return api.pluginMutationFailure(pluginID, pluginDataValidation("exceeds 64 KiB"), 0)
 	}
 	encoded := []byte(data)
-	if !json.Valid(encoded) {
+	if !utf8.ValidString(data) || !json.Valid(encoded) {
 		return api.pluginMutationFailure(pluginID, pluginDataValidation("must contain valid JSON"), 0)
 	}
 
@@ -436,11 +446,16 @@ func (api *PluginsAPI) publishSnapshotsLocked(snapshots []plugins.RuntimeSnapsho
 	if !valid {
 		return current
 	}
-	converted := pluginDTOList(snapshots)
-	if !force && current.Problem == nil && reflect.DeepEqual(current.Value, converted) {
+	converted, conversionErr := pluginDTOList(snapshots)
+	var problem *Problem
+	if conversionErr != nil {
+		mapped := sanitizeProblem(conversionErr, current.Revision)
+		problem = &mapped
+	}
+	if !force && reflect.DeepEqual(current.Value, converted) && reflect.DeepEqual(current.Problem, problem) {
 		return current
 	}
-	return api.store.update(converted, nil)
+	return api.store.update(converted, problem)
 }
 
 func (api *PluginsAPI) unavailableProblem(currentRevision uint64) *Problem {
@@ -460,10 +475,22 @@ func (api *PluginsAPI) pluginConfigFailure(pluginID string, err error) PluginCon
 	return PluginConfigResponse{Revision: envelope.Revision, UpdatedAt: envelope.UpdatedAt, PluginID: pluginID, Problem: &problem}
 }
 
+func (api *PluginsAPI) invalidPluginConfigInput(err error) PluginConfigResponse {
+	envelope := api.store.snapshot()
+	problem := api.problem(err, envelope.Revision, 0)
+	return PluginConfigResponse{Revision: envelope.Revision, UpdatedAt: envelope.UpdatedAt, Problem: &problem}
+}
+
 func (api *PluginsAPI) pluginMutationFailure(pluginID string, err error, currentConfigRevision uint64) PluginMutationResponse {
 	envelope := api.store.snapshot()
 	problem := api.problem(err, envelope.Revision, currentConfigRevision)
 	return pluginMutationResponse(envelope, pluginID, &problem)
+}
+
+func (api *PluginsAPI) invalidPluginMutationInput(err error) PluginMutationResponse {
+	envelope := api.store.snapshot()
+	problem := api.problem(err, envelope.Revision, 0)
+	return pluginMutationResponse(envelope, "", &problem)
 }
 
 func (api *PluginsAPI) problem(err error, moduleRevision, currentConfigRevision uint64) Problem {
@@ -490,13 +517,26 @@ func findPluginSnapshot(snapshots []plugins.RuntimeSnapshot, id string) (plugins
 	return plugins.RuntimeSnapshot{}, false
 }
 
-func pluginDTOList(snapshots []plugins.RuntimeSnapshot) []PluginDTO {
-	result := make([]PluginDTO, len(snapshots))
-	for index, snapshot := range snapshots {
-		result[index] = pluginDTO(snapshot)
+func pluginDTOList(snapshots []plugins.RuntimeSnapshot) ([]PluginDTO, error) {
+	ordered := append([]plugins.RuntimeSnapshot(nil), snapshots...)
+	sort.Slice(ordered, func(left, right int) bool { return ordered[left].ID < ordered[right].ID })
+	result := make([]PluginDTO, 0, min(len(ordered), maxPublicPluginListEntries))
+	var invalid bool
+	for _, snapshot := range ordered {
+		if len(result) == maxPublicPluginListEntries {
+			invalid = true
+			break
+		}
+		if err := validatePublicPluginSnapshot(snapshot); err != nil {
+			invalid = true
+			continue
+		}
+		result = append(result, pluginDTO(snapshot))
 	}
-	sort.Slice(result, func(left, right int) bool { return result[left].ID < result[right].ID })
-	return result
+	if invalid {
+		return result, &userconfig.ValidationError{Field: "plugins", Err: errors.New("plugin snapshot exceeds public bounds")}
+	}
+	return result, nil
 }
 
 func clonePluginDTOs(values []PluginDTO) []PluginDTO {

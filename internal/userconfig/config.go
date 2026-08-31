@@ -39,6 +39,9 @@ func processingDefaultWire() Processing {
 }
 
 func Normalize(candidate Candidate) (Candidate, error) {
+	if err := ValidateCandidateBounds(candidate); err != nil {
+		return Candidate{}, err
+	}
 	normalized := candidate.Clone()
 	root, err := normalizedPath(normalized.Avatar.OSCRoot)
 	if err != nil || root == "" {

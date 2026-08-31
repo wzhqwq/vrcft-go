@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -237,6 +238,57 @@ func TestPluginsAPIGetConfigIsOwnedAndBounded(t *testing.T) {
 	oversized := api.GetConfig("vendor.alpha")
 	if oversized.Problem == nil || oversized.Problem.Code != ProblemInternal || oversized.Data != "" {
 		t.Fatalf("oversized GetConfig = %+v", oversized)
+	}
+}
+
+func TestPluginsAPIRejectsInvalidCallerPluginIDsBeforeAdmissionOrEcho(t *testing.T) {
+	fake := &fakePluginsBackend{
+		snapshots: []plugins.RuntimeSnapshot{{ID: "vendor.alpha"}},
+		configs:   map[string]pluginapi.Config{"vendor.alpha": {Revision: 1, Data: json.RawMessage(`{}`)}},
+	}
+	api := attachedPluginsAPI(t, context.Background(), fake)
+	for _, id := range []string{"", "Vendor.alpha", "vendor..alpha", strings.Repeat("a", 257)} {
+		t.Run(fmt.Sprintf("%q", id), func(t *testing.T) {
+			got := api.GetConfig(id)
+			if got.Problem == nil || got.Problem.Code != ProblemValidation || got.Problem.Field != "pluginId" || got.PluginID != "" {
+				t.Fatalf("GetConfig(%q) = %+v", id, got)
+			}
+			mutation := api.SetEnabled(id, true)
+			if mutation.Problem == nil || mutation.Problem.Code != ProblemValidation || mutation.Problem.Field != "pluginId" || mutation.PluginID != "" {
+				t.Fatalf("SetEnabled(%q) = %+v", id, mutation)
+			}
+			update := api.UpdateConfig(id, 1, `{}`)
+			if update.Problem == nil || update.Problem.Code != ProblemValidation || update.Problem.Field != "pluginId" || update.PluginID != "" {
+				t.Fatalf("UpdateConfig(%q) = %+v", id, update)
+			}
+		})
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.configCalls != 0 || len(fake.setCalls) != 0 || len(fake.updateCalls) != 0 {
+		t.Fatalf("invalid caller ID reached backend: configs=%d set=%v update=%v", fake.configCalls, fake.setCalls, fake.updateCalls)
+	}
+}
+
+func TestPluginsAPIConfigBoundaryRequiresValidUTF8AndPermitsExactCallerIDMaximum(t *testing.T) {
+	maxID := strings.Repeat("a", 256)
+	invalidUTF8JSON := string([]byte{'{', '"', 0xff, '"', '}'})
+	fake := &fakePluginsBackend{
+		snapshots: []plugins.RuntimeSnapshot{{ID: maxID}},
+		configs:   map[string]pluginapi.Config{maxID: {Revision: 1, Data: json.RawMessage(`{}`)}},
+	}
+	api := attachedPluginsAPI(t, context.Background(), fake)
+	if got := api.GetConfig(maxID); got.Problem != nil || got.PluginID != maxID {
+		t.Fatalf("exact maximum caller ID = %+v", got)
+	}
+	if got := api.UpdateConfig(maxID, 1, invalidUTF8JSON); got.Problem == nil || got.Problem.Code != ProblemValidation || got.Problem.Field != "data" {
+		t.Fatalf("invalid UTF-8 mutation = %+v", got)
+	}
+	fake.mu.Lock()
+	fake.configs[maxID] = pluginapi.Config{Revision: 1, Data: json.RawMessage(invalidUTF8JSON)}
+	fake.mu.Unlock()
+	if got := api.GetConfig(maxID); got.Problem == nil || got.Problem.Code != ProblemInternal || got.Data != "" {
+		t.Fatalf("invalid UTF-8 backend config = %+v", got)
 	}
 }
 

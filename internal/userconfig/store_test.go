@@ -3,12 +3,15 @@ package userconfig
 import (
 	"context"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // A missing configuration must be distinguished from corrupt user data: only
@@ -574,6 +577,177 @@ func TestStoreHonorsCanceledContextBeforeIOAndWhileWaiting(t *testing.T) {
 	store.lock <- struct{}{}
 }
 
+func TestStoreReadCurrentStopsAfterCanceledStreamChunkAndClosesFile(t *testing.T) {
+	paths := testStorePaths(t)
+	store, _ := loadedStore(t, paths)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	closed := make(chan struct{})
+	open := store.ops.open
+	store.ops.open = func(path string) (storeFile, error) {
+		file, err := open(path)
+		if err != nil {
+			return nil, err
+		}
+		return &closeSignalStoreFile{storeFile: file, closed: closed}, nil
+	}
+	read := store.ops.read
+	calls := 0
+	store.ops.read = func(file storeFile, data []byte) (int, error) {
+		calls++
+		switch calls {
+		case 1:
+			count, _ := read(file, data[:1])
+			return count, nil
+		case 2:
+			close(entered)
+			<-release
+			return 0, nil
+		default:
+			return 0, errors.New("read resumed after cancellation")
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := store.LoadOrCreate(ctx)
+		result <- err
+	}()
+	<-entered
+	cancel()
+	close(release)
+	if err := waitStoreError(t, result); !errors.Is(err, context.Canceled) {
+		t.Fatalf("LoadOrCreate(canceled stream) error = %v, want context.Canceled", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("LoadOrCreate(canceled stream) leaked its file handle")
+	}
+}
+
+func TestStoreRepairBackupStopsAfterCanceledStreamChunkAndCleansTemporary(t *testing.T) {
+	paths := testStorePaths(t)
+	invalid := []byte(`{"schemaVersion":0}`)
+	if err := os.WriteFile(paths.SettingsFile, invalid, 0o600); err != nil {
+		t.Fatalf("WriteFile(invalid) error = %v", err)
+	}
+	store, err := NewStore(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadOrCreate(context.Background())
+	if err != nil || !loaded.Invalid {
+		t.Fatalf("LoadOrCreate() = %#v, %v; want invalid document", loaded, err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	read := store.ops.read
+	authoritativeReadComplete := false
+	backupCalls := 0
+	store.ops.read = func(file storeFile, data []byte) (int, error) {
+		if !authoritativeReadComplete {
+			count, readErr := read(file, data)
+			if readErr == io.EOF {
+				authoritativeReadComplete = true
+			}
+			return count, readErr
+		}
+		backupCalls++
+		switch backupCalls {
+		case 1:
+			count, _ := read(file, data[:1])
+			return count, nil
+		case 2:
+			close(entered)
+			<-release
+			return 0, nil
+		default:
+			return 0, errors.New("backup read resumed after cancellation")
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := store.Save(ctx, loaded, loaded.Defaults)
+		result <- err
+	}()
+	<-entered
+	cancel()
+	close(release)
+	if err := waitStoreError(t, result); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Save(canceled backup stream) error = %v, want context.Canceled", err)
+	}
+	assertStoreTemporaryCleanup(t, paths)
+	if got, err := os.ReadFile(paths.SettingsFile); err != nil || string(got) != string(invalid) {
+		t.Fatalf("canceled repair changed authoritative settings: %q, %v", got, err)
+	}
+	if _, err := os.Stat(paths.SettingsFile + ".invalid.bak"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled repair installed backup: %v", err)
+	}
+}
+
+func TestStoreTemporaryWriteStopsAfterCanceledChunkAndCleansTemporary(t *testing.T) {
+	paths := testStorePaths(t)
+	store, loaded := loadedStore(t, paths)
+	old, err := os.ReadFile(paths.SettingsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	create := store.ops.createTemp
+	store.ops.createTemp = func(dir, pattern string) (storeFile, error) {
+		file, err := create(dir, pattern)
+		if err != nil {
+			return nil, err
+		}
+		return &blockingWriteStoreFile{storeFile: file, entered: entered, release: release}, nil
+	}
+	candidate := candidateFromSettings(*loaded.Settings)
+	candidate.Avatar.FallbackPath = filepath.Join(paths.SettingsDir, "changed")
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := store.Save(ctx, loaded, candidate)
+		result <- err
+	}()
+	<-entered
+	cancel()
+	close(release)
+	if err := waitStoreError(t, result); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Save(canceled temporary write) error = %v, want context.Canceled", err)
+	}
+	assertStoreTemporaryCleanup(t, paths)
+	if got, err := os.ReadFile(paths.SettingsFile); err != nil || string(got) != string(old) {
+		t.Fatalf("canceled temporary write changed authoritative settings: %q, %v", got, err)
+	}
+}
+
+func waitStoreError(t *testing.T, result <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(time.Second):
+		t.Fatal("canceled store operation did not return after its blocked operation was released")
+		return nil
+	}
+}
+
+func assertStoreTemporaryCleanup(t *testing.T, paths Paths) {
+	t.Helper()
+	entries, err := os.ReadDir(paths.SettingsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Fatalf("temporary file leaked after cancellation: %s", entry.Name())
+		}
+	}
+}
+
 func loadedStore(t *testing.T, paths Paths) (*Store, Loaded) {
 	t.Helper()
 	store, err := NewStore(paths)
@@ -620,6 +794,50 @@ type failingStoreFile struct {
 	storeFile
 	stage string
 	err   error
+}
+
+type closeSignalStoreFile struct {
+	storeFile
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (f *closeSignalStoreFile) Close() error {
+	err := f.storeFile.Close()
+	f.once.Do(func() { close(f.closed) })
+	return err
+}
+
+func (f *closeSignalStoreFile) SyscallConn() (syscall.RawConn, error) {
+	return f.storeFile.(interface {
+		SyscallConn() (syscall.RawConn, error)
+	}).SyscallConn()
+}
+
+type blockingWriteStoreFile struct {
+	storeFile
+	entered chan struct{}
+	release chan struct{}
+	writes  int
+}
+
+func (f *blockingWriteStoreFile) Write(data []byte) (int, error) {
+	f.writes++
+	if f.writes > 1 {
+		return 0, errors.New("write resumed after cancellation")
+	}
+	close(f.entered)
+	<-f.release
+	if len(data) == 0 {
+		return 0, nil
+	}
+	return f.storeFile.Write(data[:1])
+}
+
+func (f *blockingWriteStoreFile) SyscallConn() (syscall.RawConn, error) {
+	return f.storeFile.(interface {
+		SyscallConn() (syscall.RawConn, error)
+	}).SyscallConn()
 }
 
 func (f *failingStoreFile) Write(data []byte) (int, error) {

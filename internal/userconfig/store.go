@@ -286,6 +286,10 @@ func (s *Store) readCurrent(ctx context.Context) (documentRead, error) {
 	if err != nil {
 		return documentRead{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		_ = file.Close()
+		return documentRead{}, err
+	}
 	info, err := s.ops.stat(file)
 	if err != nil {
 		_ = file.Close()
@@ -296,12 +300,24 @@ func (s *Store) readCurrent(ctx context.Context) (documentRead, error) {
 		_ = file.Close()
 		return documentRead{}, fmt.Errorf("userconfig: identify settings: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		_ = file.Close()
+		return documentRead{}, err
+	}
 	hash := sha256.New()
 	data := make([]byte, 0, MaxSettingsBytes+1)
 	buffer := make([]byte, 32<<10)
 	var size int64
 	for {
+		if err := ctx.Err(); err != nil {
+			_ = file.Close()
+			return documentRead{}, err
+		}
 		count, readErr := s.ops.read(file, buffer)
+		if err := ctx.Err(); err != nil {
+			_ = file.Close()
+			return documentRead{}, err
+		}
 		if count > 0 {
 			_, _ = hash.Write(buffer[:count])
 			size += int64(count)
@@ -488,11 +504,11 @@ func (s *Store) writeTemporary(ctx context.Context, data []byte, pattern string)
 			cleanup()
 		}
 	}()
-	if err := writeAll(temporary, data); err != nil {
+	if err := writeAll(ctx, temporary, data); err != nil {
 		return preparedTemporary{}, fmt.Errorf("userconfig: write temporary settings: %w", err)
 	}
 	hash := sha256.Sum256(data)
-	prepared, err := s.finishTemporary(temporary, path, hash, int64(len(data)))
+	prepared, err := s.finishTemporary(ctx, temporary, path, hash, int64(len(data)))
 	if err != nil {
 		return preparedTemporary{}, err
 	}
@@ -526,9 +542,17 @@ func (s *Store) newTemporary(ctx context.Context, pattern string) (storeFile, st
 	}, nil
 }
 
-func (s *Store) finishTemporary(file storeFile, path string, hash [sha256.Size]byte, size int64) (preparedTemporary, error) {
+func (s *Store) finishTemporary(ctx context.Context, file storeFile, path string, hash [sha256.Size]byte, size int64) (preparedTemporary, error) {
+	if err := ctx.Err(); err != nil {
+		_ = file.Close()
+		return preparedTemporary{}, err
+	}
 	if err := file.Sync(); err != nil {
 		return preparedTemporary{}, fmt.Errorf("userconfig: sync temporary settings: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		_ = file.Close()
+		return preparedTemporary{}, err
 	}
 	info, err := s.ops.stat(file)
 	if err != nil {
@@ -538,15 +562,29 @@ func (s *Store) finishTemporary(file storeFile, path string, hash [sha256.Size]b
 	if err != nil {
 		return preparedTemporary{}, fmt.Errorf("userconfig: identify temporary settings: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		_ = file.Close()
+		return preparedTemporary{}, err
+	}
 	if err := file.Close(); err != nil {
 		return preparedTemporary{}, fmt.Errorf("userconfig: close temporary settings: %w", err)
 	}
 	return preparedTemporary{path: path, token: documentToken(hash, size, info, identity)}, nil
 }
 
-func writeAll(file io.Writer, data []byte) error {
+func writeAll(ctx context.Context, file io.Writer, data []byte) error {
 	for len(data) > 0 {
-		count, err := file.Write(data)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		chunk := data
+		if len(chunk) > 32<<10 {
+			chunk = chunk[:32<<10]
+		}
+		count, err := file.Write(chunk)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
 		if err != nil {
 			return err
 		}
@@ -576,6 +614,10 @@ func (s *Store) copyCurrentToTemporary(ctx context.Context, expected DocumentTok
 	if err != nil {
 		return preparedTemporary{}, fmt.Errorf("userconfig: open invalid settings for backup: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		_ = source.Close()
+		return preparedTemporary{}, err
+	}
 	info, err := s.ops.stat(source)
 	if err != nil {
 		_ = source.Close()
@@ -586,16 +628,28 @@ func (s *Store) copyCurrentToTemporary(ctx context.Context, expected DocumentTok
 		_ = source.Close()
 		return preparedTemporary{}, fmt.Errorf("userconfig: identify invalid settings for backup: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		_ = source.Close()
+		return preparedTemporary{}, err
+	}
 	hash := sha256.New()
 	buffer := make([]byte, 32<<10)
 	var size int64
 	for {
+		if err := ctx.Err(); err != nil {
+			_ = source.Close()
+			return preparedTemporary{}, err
+		}
 		count, readErr := s.ops.read(source, buffer)
+		if err := ctx.Err(); err != nil {
+			_ = source.Close()
+			return preparedTemporary{}, err
+		}
 		if count > 0 {
 			chunk := buffer[:count]
 			_, _ = hash.Write(chunk)
 			size += int64(count)
-			if err := writeAll(temporary, chunk); err != nil {
+			if err := writeAll(ctx, temporary, chunk); err != nil {
 				_ = source.Close()
 				return preparedTemporary{}, fmt.Errorf("userconfig: write invalid backup: %w", err)
 			}
@@ -616,7 +670,7 @@ func (s *Store) copyCurrentToTemporary(ctx context.Context, expected DocumentTok
 	if token := documentToken(sum, size, info, identity); token != expected {
 		return preparedTemporary{}, ErrConflict
 	}
-	prepared, err := s.finishTemporary(temporary, path, sum, size)
+	prepared, err := s.finishTemporary(ctx, temporary, path, sum, size)
 	if err != nil {
 		return preparedTemporary{}, err
 	}

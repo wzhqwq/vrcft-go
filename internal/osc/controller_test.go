@@ -165,6 +165,68 @@ func TestControllerPreferredMissingServiceDoesNotSelectAnotherVRChat(t *testing.
 	}
 }
 
+func TestControllerPreferredServiceAbsenceAndUnusableServiceDiagnoseWithoutFallback(t *testing.T) {
+	missing, err := NewController(ControllerConfig{PreferredVRChatService: "wanted"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing.ctx = context.Background()
+	missing.udp = &UDPTransport{}
+	missing.setRunning(true)
+	missing.connectBest()
+	missingStatus := missing.Status()
+	if !missingStatus.Running || missingStatus.HasTarget || missingStatus.LastError == "" || len(missingStatus.LastError) > 512 {
+		t.Fatalf("missing preferred service status = %#v", missingStatus)
+	}
+
+	unusable, err := NewController(ControllerConfig{PreferredVRChatService: "wanted"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unusable.ctx = context.Background()
+	unusable.udp = &UDPTransport{}
+	unusable.setRunning(true)
+	unusable.queryClient = &fakeControllerQueryClient{err: errors.New("query refused")}
+	unusable.services[serviceKey(DiscoveredService{Instance: "wanted", Service: ServiceOSCQuery})] = DiscoveredService{
+		Instance: "wanted", Service: ServiceOSCQuery, HostName: "localhost", Port: 8000, LastSeen: time.Now(),
+	}
+	unusable.services[serviceKey(DiscoveredService{Instance: "other", Service: ServiceOSCQuery})] = DiscoveredService{
+		Instance: "other", Service: ServiceOSCQuery, HostName: "localhost", Port: 8001, LastSeen: time.Now(),
+	}
+	unusable.connectBest()
+	unusableStatus := unusable.Status()
+	if unusableStatus.HasTarget || unusableStatus.LastError == "" || unusableStatus.LastError == missingStatus.LastError {
+		t.Fatalf("unusable preferred service status = %#v; missing status = %#v", unusableStatus, missingStatus)
+	}
+}
+
+func TestControllerPreferredServiceRecoversByInstallingOnlyExactTarget(t *testing.T) {
+	controller, err := NewController(ControllerConfig{PreferredVRChatService: "wanted", QueryPollInterval: time.Hour}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		controller.wg.Wait()
+	}()
+	controller.ctx = ctx
+	controller.udp = &UDPTransport{}
+	controller.setRunning(true)
+	controller.connectBest()
+	if got := controller.Status(); got.LastError == "" || got.HasTarget {
+		t.Fatalf("missing preferred baseline = %#v", got)
+	}
+	controller.queryClient = &fakeControllerQueryClient{nodes: map[string]*QueryNode{"/": NewQueryRoot()}}
+	controller.services[serviceKey(DiscoveredService{Instance: "wanted", Service: ServiceOSCQuery})] = DiscoveredService{
+		Instance: "wanted", Service: ServiceOSCQuery, HostName: "localhost", Port: 8000, LastSeen: time.Now(),
+	}
+	controller.connectBest()
+	if got := controller.Status(); !got.Connected || !got.HasTarget || got.Target != (OSCTarget{Host: "127.0.0.1", Port: 9000}) || got.LastError != "" {
+		t.Fatalf("recovered preferred service = %#v", got)
+	}
+}
+
 func TestControllerEventCatalogIsolatedFromInstalledCatalog(t *testing.T) {
 	catalog := buildSenderTestCatalog(t, false)
 	transport := &recordingPacketSender{}

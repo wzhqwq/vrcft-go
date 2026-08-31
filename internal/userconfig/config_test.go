@@ -1,14 +1,104 @@
 package userconfig
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/wzhqwq/vrcft-go/internal/application"
 	"github.com/wzhqwq/vrcft-go/internal/osc"
 	"github.com/wzhqwq/vrcft-go/internal/plugins"
 )
+
+// This catches any future change that lets a Wails-sized candidate allocate or
+// normalize before its public field, nested-collection, and aggregate limits
+// have been established.
+func TestValidateCandidateBoundsEnforcesExactAndNestedLimits(t *testing.T) {
+	base := DefaultCandidate(Paths{DefaultOSCRoot: `C:\VRChat\OSC`})
+	if err := ValidateCandidateBounds(base); err != nil {
+		t.Fatalf("ValidateCandidateBounds(default) error = %v", err)
+	}
+
+	tests := []struct {
+		name, field string
+		mutate      func(*Candidate)
+	}{
+		{"oversized path", "avatar.fallbackPath", func(c *Candidate) { c.Avatar.FallbackPath = strings.Repeat("a", MaxSettingsPathBytes+1) }},
+		{"invalid utf8 path", "avatar.oscRoot", func(c *Candidate) { c.Avatar.OSCRoot = string([]byte{'a', 0xff}) }},
+		{"too many development roots", "plugins.devRoots", func(c *Candidate) { c.Plugins.DevRoots = make([]string, MaxSettingsDevRoots+1) }},
+		{"too many overrides", "processing.overrides", func(c *Candidate) { c.Processing.Overrides = make([]ProcessingOverride, MaxSettingsOverrides+1) }},
+		{"too many mutual exclusion groups", "processing.mutualExclusion", func(c *Candidate) {
+			c.Processing.MutualExclusion = make([][]string, MaxSettingsMutualExclusionGroups+1)
+		}},
+		{"too many mutual exclusion members", "processing.mutualExclusion", func(c *Candidate) {
+			c.Processing.MutualExclusion = [][]string{make([]string, MaxSettingsMutualExclusionMembers+1)}
+		}},
+		{"oversized nested name", "processing.overrides", func(c *Candidate) {
+			c.Processing.Overrides = []ProcessingOverride{{Name: strings.Repeat("a", MaxSettingsChannelNameBytes+1)}}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := base.Clone()
+			test.mutate(&candidate)
+			err := ValidateCandidateBounds(candidate)
+			var validation *ValidationError
+			if !errors.As(err, &validation) || validation.Field != test.field {
+				t.Fatalf("ValidateCandidateBounds() error = %v, want field %q", err, test.field)
+			}
+		})
+	}
+}
+
+func TestValidateCandidateBoundsEnforcesEncodedAggregateLimit(t *testing.T) {
+	// Seven maximum-length Windows paths leave less than one path's worth of
+	// aggregate JSON space. The last root can therefore exercise the precise
+	// 256 KiB wire boundary without exceeding an individual field limit.
+	candidate := Candidate{
+		Avatar: Avatar{
+			OSCRoot:      strings.Repeat("a", MaxSettingsPathBytes),
+			FallbackPath: strings.Repeat("b", MaxSettingsPathBytes),
+		},
+		Plugins: Plugins{DevRoots: []string{
+			strings.Repeat("c", MaxSettingsPathBytes),
+			strings.Repeat("d", MaxSettingsPathBytes),
+			strings.Repeat("e", MaxSettingsPathBytes),
+			strings.Repeat("f", MaxSettingsPathBytes),
+			strings.Repeat("g", MaxSettingsPathBytes),
+			"",
+		}},
+	}
+	encodedSize := func(value Candidate) int {
+		t.Helper()
+		data, err := json.Marshal(Settings{SchemaVersion: SchemaVersion, Revision: 1, Avatar: value.Avatar, Plugins: value.Plugins, Processing: value.Processing, OSC: value.OSC})
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		return len(data)
+	}
+	remaining := MaxSettingsBytes - encodedSize(candidate)
+	if remaining <= 0 || remaining > MaxSettingsPathBytes {
+		t.Fatalf("aggregate fixture remaining path bytes = %d, want 1..%d", remaining, MaxSettingsPathBytes)
+	}
+	candidate.Plugins.DevRoots[len(candidate.Plugins.DevRoots)-1] = strings.Repeat("h", remaining)
+	if got := encodedSize(candidate); got != MaxSettingsBytes {
+		t.Fatalf("encoded candidate size = %d, want %d", got, MaxSettingsBytes)
+	}
+	if err := ValidateCandidateBounds(candidate); err != nil {
+		t.Fatalf("ValidateCandidateBounds(exact aggregate) error = %v", err)
+	}
+	candidate.Plugins.DevRoots[len(candidate.Plugins.DevRoots)-1] += "i"
+	if err := ValidateCandidateBounds(candidate); err == nil {
+		t.Fatal("ValidateCandidateBounds(maximum plus one) succeeded")
+	} else {
+		var validation *ValidationError
+		if !errors.As(err, &validation) || validation.Field != "settings" {
+			t.Fatalf("ValidateCandidateBounds(maximum plus one) error = %v, want settings validation", err)
+		}
+	}
+}
 
 func TestNormalizeCleansAndSortsOwnedPaths(t *testing.T) {
 	candidate := DefaultCandidate(Paths{DefaultOSCRoot: `C:\VRChat\OSC`})

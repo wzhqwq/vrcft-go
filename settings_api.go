@@ -74,22 +74,31 @@ func (api *SettingsAPI) Get() SettingsResponse {
 // Validate normalizes a candidate without changing the loaded token, file, or
 // module snapshot.
 func (api *SettingsAPI) Validate(candidate userconfig.Candidate) SettingsValidationResponse {
+	if err := userconfig.ValidateCandidateBounds(candidate); err != nil {
+		envelope := api.store.snapshot()
+		problem := sanitizeProblem(err, envelope.Revision)
+		return settingsValidationResponse(envelope, envelope.Value.settings, &problem)
+	}
 	if err := api.admit(context.Background()); err != nil {
 		envelope := api.store.snapshot()
-		return settingsValidationResponse(envelope, candidate, unavailableSettingsProblem(envelope.Revision))
+		return settingsValidationResponse(envelope, envelope.Value.settings, unavailableSettingsProblem(envelope.Revision))
 	}
 	defer api.releaseAdmission()
 	envelope := api.store.snapshot()
 	if api.backend == nil {
-		return settingsValidationResponse(envelope, candidate, unavailableSettingsProblem(envelope.Revision))
+		return settingsValidationResponse(envelope, envelope.Value.settings, unavailableSettingsProblem(envelope.Revision))
 	}
 	normalized, err := api.backend.Validate(candidate.Clone())
 	if api.closed.Load() {
-		return settingsValidationResponse(envelope, candidate, unavailableSettingsProblem(envelope.Revision))
+		return settingsValidationResponse(envelope, envelope.Value.settings, unavailableSettingsProblem(envelope.Revision))
 	}
 	if err != nil {
 		problem := sanitizeProblem(err, envelope.Revision)
-		return settingsValidationResponse(envelope, candidate, &problem)
+		return settingsValidationResponse(envelope, envelope.Value.settings, &problem)
+	}
+	if err := userconfig.ValidateCandidateBounds(normalized); err != nil {
+		problem := sanitizeProblem(err, envelope.Revision)
+		return settingsValidationResponse(envelope, envelope.Value.settings, &problem)
 	}
 	return settingsValidationResponse(envelope, normalized, nil)
 }
@@ -97,6 +106,11 @@ func (api *SettingsAPI) Validate(candidate userconfig.Candidate) SettingsValidat
 // Save persists a normalized candidate for the next process start. It never
 // reconstructs or mutates the currently running Application.
 func (api *SettingsAPI) Save(expectedRevision uint64, candidate userconfig.Candidate) SettingsSaveResponse {
+	if err := userconfig.ValidateCandidateBounds(candidate); err != nil {
+		envelope := api.store.snapshot()
+		problem := sanitizeProblem(err, envelope.Revision)
+		return settingsSaveResponse(envelope, false, &problem)
+	}
 	if err := api.admit(context.Background()); err != nil {
 		envelope := api.store.snapshot()
 		return settingsSaveResponse(envelope, false, unavailableSettingsProblem(envelope.Revision))
@@ -118,6 +132,10 @@ func (api *SettingsAPI) Save(expectedRevision uint64, candidate userconfig.Candi
 		if api.closed.Load() || ctx.Err() != nil {
 			return settingsSaveResponse(envelope, false, unavailableSettingsProblem(envelope.Revision))
 		}
+		problem := sanitizeProblem(err, envelope.Revision)
+		return settingsSaveResponse(envelope, false, &problem)
+	}
+	if err := validateSettingsLoadedBounds(result.Loaded); err != nil {
 		problem := sanitizeProblem(err, envelope.Revision)
 		return settingsSaveResponse(envelope, false, &problem)
 	}
@@ -148,6 +166,9 @@ func (api *SettingsAPI) loadForStartup(ctx context.Context) (userconfig.Loaded, 
 	loaded, err := api.backend.LoadOrCreate(operationCtx)
 	if err := operationCtx.Err(); err != nil {
 		return userconfig.Loaded{}, err
+	}
+	if err == nil {
+		err = validateSettingsLoadedBounds(loaded)
 	}
 	if err != nil {
 		envelope := api.store.snapshot()
@@ -289,6 +310,18 @@ func settingsSnapshotFromLoaded(loaded userconfig.Loaded) settingsSnapshot {
 	}
 }
 
+func validateSettingsLoadedBounds(loaded userconfig.Loaded) error {
+	if loaded.Settings == nil {
+		return userconfig.ValidateCandidateBounds(loaded.Defaults)
+	}
+	return userconfig.ValidateCandidateBounds(userconfig.Candidate{
+		Avatar:     loaded.Settings.Avatar,
+		Plugins:    loaded.Settings.Plugins,
+		Processing: loaded.Settings.Processing,
+		OSC:        loaded.Settings.OSC,
+	})
+}
+
 func candidateFromLoadedSettings(settings userconfig.Settings) userconfig.Candidate {
 	return userconfig.Candidate{
 		Avatar:     settings.Avatar,
@@ -317,7 +350,7 @@ func settingsResponse(envelope moduleEnvelope[settingsSnapshot], problem *Proble
 		Revision:     envelope.Revision,
 		UpdatedAt:    envelope.UpdatedAt,
 		FileRevision: envelope.Value.fileRevision,
-		Settings:     envelope.Value.settings.Clone(),
+		Settings:     boundedSettingsCandidate(envelope.Value.settings),
 		Problem:      cloneProblem(problem),
 	}
 }
@@ -326,7 +359,7 @@ func settingsValidationResponse(envelope moduleEnvelope[settingsSnapshot], setti
 	return SettingsValidationResponse{
 		Revision:  envelope.Revision,
 		UpdatedAt: envelope.UpdatedAt,
-		Settings:  settings.Clone(),
+		Settings:  boundedSettingsCandidate(settings),
 		Problem:   cloneProblem(problem),
 	}
 }
@@ -336,10 +369,20 @@ func settingsSaveResponse(envelope moduleEnvelope[settingsSnapshot], restartRequ
 		Revision:        envelope.Revision,
 		UpdatedAt:       envelope.UpdatedAt,
 		FileRevision:    envelope.Value.fileRevision,
-		Settings:        envelope.Value.settings.Clone(),
+		Settings:        boundedSettingsCandidate(envelope.Value.settings),
 		RestartRequired: restartRequired,
 		Problem:         cloneProblem(problem),
 	}
+}
+
+// boundedSettingsCandidate is a final response guard for snapshots supplied
+// by an injected backend. Caller candidates are admitted before cloning; this
+// guard also keeps a faulty backend from making a Wails response unbounded.
+func boundedSettingsCandidate(candidate userconfig.Candidate) userconfig.Candidate {
+	if err := userconfig.ValidateCandidateBounds(candidate); err != nil {
+		return userconfig.Candidate{}
+	}
+	return candidate.Clone()
 }
 
 func unavailableSettingsProblem(currentRevision uint64) *Problem {

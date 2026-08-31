@@ -413,6 +413,7 @@ func (c *Controller) runDiscovery() {
 func (c *Controller) connectBest() {
 	c.servicesMu.Lock()
 	var candidates []DiscoveredService
+	preferredPresent := false
 	for _, service := range c.services {
 		if normalizedServiceType(service.Service) != ServiceOSCQuery {
 			continue
@@ -423,18 +424,34 @@ func (c *Controller) connectBest() {
 		if c.config.PreferredVRChatService != "" && service.Instance != c.config.PreferredVRChatService {
 			continue
 		}
+		if c.config.PreferredVRChatService != "" {
+			preferredPresent = true
+		}
 		candidates = append(candidates, service)
 	}
 	c.servicesMu.Unlock()
 	SortServices(candidates)
+	if c.config.PreferredVRChatService != "" && !preferredPresent {
+		c.recordError(errors.New("preferred OSCQuery service is not discovered"))
+		return
+	}
 
+	var probeErr error
 	for _, service := range candidates {
 		active, err := c.probeService(service)
 		if err != nil {
+			probeErr = err
 			continue
 		}
 		c.setActive(active)
 		return
+	}
+	if c.config.PreferredVRChatService != "" {
+		if probeErr != nil {
+			c.recordError(errors.New("preferred OSCQuery service is unusable"))
+			return
+		}
+		c.recordError(errors.New("preferred OSCQuery service is not discovered"))
 	}
 }
 
@@ -515,6 +532,7 @@ func (c *Controller) setActive(active *activeVRChat) {
 	active.cancel = cancel
 	c.active = active
 	c.activeMu.Unlock()
+	c.clearError()
 	if c.config.CatalogMode == CatalogExternal {
 		c.runtime.resetChangeDetection()
 	}
@@ -780,6 +798,12 @@ func (c *Controller) recordError(err error) {
 	}
 	c.statusMu.Lock()
 	c.lastError = message
+	c.statusMu.Unlock()
+}
+
+func (c *Controller) clearError() {
+	c.statusMu.Lock()
+	c.lastError = ""
 	c.statusMu.Unlock()
 }
 

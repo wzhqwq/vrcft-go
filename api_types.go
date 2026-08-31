@@ -1,13 +1,26 @@
 package main
 
 import (
+	"errors"
 	"math"
+	"regexp"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wzhqwq/vrcft-go/internal/plugins"
 	"github.com/wzhqwq/vrcft-go/internal/userconfig"
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
+
+const (
+	maxPublicPluginIDBytes          = 256
+	maxPublicPluginNameBytes        = 256
+	maxPublicPluginDescriptionBytes = 4096
+	maxPublicPluginVersionBytes     = 256
+	maxPublicPluginListEntries      = 1024
+)
+
+var publicPluginIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
 
 const (
 	ProblemValidation          = "validation"
@@ -158,6 +171,37 @@ func pluginDTO(snapshot plugins.RuntimeSnapshot) PluginDTO {
 		NextRestartAt:       optionalTime(snapshot.NextRestartAt),
 		LastError:           boundedMessage(snapshot.LastError),
 	}
+}
+
+func validatePublicPluginID(pluginID string) error {
+	if !validPublicText(pluginID, maxPublicPluginIDBytes) || !publicPluginIDPattern.MatchString(pluginID) {
+		return &userconfig.ValidationError{Field: "pluginId", Err: errors.New("plugin ID is invalid")}
+	}
+	return nil
+}
+
+func validatePublicPluginSnapshot(snapshot plugins.RuntimeSnapshot) error {
+	if err := validatePublicPluginID(snapshot.ID); err != nil {
+		return &userconfig.ValidationError{Field: "plugins", Err: err}
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+		max   int
+	}{
+		{name: "name", value: snapshot.Name, max: maxPublicPluginNameBytes},
+		{name: "description", value: snapshot.Description, max: maxPublicPluginDescriptionBytes},
+		{name: "version", value: snapshot.Version, max: maxPublicPluginVersionBytes},
+	} {
+		if !validPublicText(field.value, field.max) {
+			return &userconfig.ValidationError{Field: "plugins", Err: pluginDataValidation("plugin " + field.name + " violates public bounds")}
+		}
+	}
+	return nil
+}
+
+func validPublicText(value string, maxBytes int) bool {
+	return utf8.ValidString(value) && len(value) <= maxBytes
 }
 
 func capabilityNames(capabilities trackingmodel.Capability) []string {

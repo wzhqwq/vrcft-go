@@ -61,7 +61,7 @@ It does not import Wails, bind frontend methods, start goroutines, construct or 
 
 `ResolvePaths` rejects non-Windows platforms, blank or NUL-containing environment values, and non-absolute executable paths before deriving `%AppData%/vrcft-go/config.json`, `plugins.json`, the executable-relative builtin plugin directory, and the VRChat OSC root. `DefaultCandidate`, `Normalize`, and processing conversion preserve the v1 wire schema while sorting stable lists, rejecting duplicate or unknown channels and Windows paths, validating finite/ranged values, and enforcing disjoint automatic/manual OSC settings. `ApplicationConfig` maps a normalized `Settings` clone plus resolved paths into lower-level configs and calls `application.ValidateConfig`, which performs Application normalization without constructing runtime dependencies.
 
-`Store.LoadOrCreate` uses strict, size-bounded JSON and preserves an existing invalid or unsupported document as diagnostic state. `Store.Save` serializes access, rereads the authoritative file inside its gate, validates caller revision and an unforgeable file token, treats semantic equality as a no-op, rejects revision exhaustion, and publishes only a fully owned `SaveResult` after durable replacement. Repair first atomically installs the complete invalid bytes as `.invalid.bak`; temporary write, sync, close, replacement, and cleanup failures leave the prior authoritative settings file intact.
+`Store.LoadOrCreate` uses strict, size-bounded JSON and preserves an existing invalid or unsupported document as diagnostic state. `Store.Save` serializes access, rereads the authoritative file inside its gate, validates caller revision and an unforgeable file token, treats semantic equality as a no-op, rejects revision exhaustion, and publishes only a fully owned `SaveResult` after durable replacement. The full-file SHA-256 and invalid-file backup streams poll their context before and after every 32 KiB read/write chunk; cancellation closes the source and removes partial temporary files without changing the authoritative document or installing a partial backup. Repair first atomically installs the complete invalid bytes as `.invalid.bak`; temporary write, sync, close, replacement, and cleanup failures leave the prior authoritative settings file intact.
 
 ## Public/internal interfaces
 
@@ -81,11 +81,11 @@ The package starts no goroutine and has no Start/Close lifecycle. Each Store ser
 
 ## Error handling
 
-Strict decoding rejects oversize input, invalid UTF-8, unknown and duplicate fields, required nulls, trailing JSON, invalid schema versions, and malformed field types. Semantic errors identify a stable settings field; missing first-run files are created, while existing invalid files are returned without replacement. Conflicts, revision exhaustion, unsupported platform, invalid environment, and invalid loaded state retain stable `errors.Is` categories, and filesystem failures retain operation context without embedding document contents.
+Strict decoding rejects oversize input, invalid UTF-8, unknown and duplicate fields, required nulls, trailing JSON, invalid schema versions, and malformed field types. `ValidateCandidateBounds` runs before cloning or normalization for Wails candidates: the encoded `SettingsV1` wire value is at most 256 KiB; paths are valid UTF-8 and at most 32 KiB; OSC endpoint strings are at most 255 bytes; target mode, filter mode, and channel names are limited to 16, 32, and 128 bytes; development roots, overrides, mutual-exclusion groups, and members per group are each at most 128. The 32 KiB path bound matches practical Windows extended-path limits; the 128 processing bounds cover the current fixed 85-channel catalog (10 eye plus generated expressions) while leaving controlled growth headroom. Semantic errors identify a stable settings field; missing first-run files are created, while existing invalid files are returned without replacement. Conflicts, revision exhaustion, unsupported platform, invalid environment, and invalid loaded state retain stable `errors.Is` categories, and filesystem failures retain operation context without embedding document contents.
 
 ## Performance constraints
 
-Settings files are bounded to 256 KiB, normalization is bounded by explicit list limits and fixed processing catalogs, and storage work is synchronous low-frequency control-path I/O. No polling, unbounded queue, recursive filesystem scan, or frame-path work is introduced.
+Settings files and Wails candidates are bounded to 256 KiB after JSON encoding. Candidate strings and nested lists use the explicit limits above before clone, normalization, or backend dispatch; normalization is therefore bounded by fixed processing catalogs. Storage work is synchronous low-frequency control-path I/O with cancellation polling per 32 KiB stream chunk. No timer polling, unbounded queue, recursive filesystem scan, or frame-path work is introduced.
 
 ## Security boundaries
 
@@ -93,7 +93,7 @@ Path inputs are required, absolute where applicable, cleaned, and checked for NU
 
 ## Required tests
 
-Normal and race package gates cover strict decoding, exact first-run defaults, clone shape and ownership, Windows path derivation and unsupported environments, processing and target-mode conversion, lower-level validation without construction, no-op/revision/external-file conflicts, file identity, context cancellation, secure atomic writes, fault cleanup, invalid-file preservation, and durable backup-before-replacement repair. `TestStoreRepairInstallsBackupBeforeReplacement` and `TestResolvePathsWindowsDerivesProductPaths` are explicit catalog evidence.
+Normal and race package gates cover strict decoding, exact first-run defaults, clone shape and ownership, exact/max-plus-one candidate field, nested-list, and encoded-size bounds, Windows path derivation and unsupported environments, processing and target-mode conversion, lower-level validation without construction, no-op/revision/external-file conflicts, file identity, deterministic cancellation of blocked read/backup/write chunks, secure atomic writes, fault cleanup, invalid-file preservation, and durable backup-before-replacement repair. `TestStoreRepairInstallsBackupBeforeReplacement` and `TestResolvePathsWindowsDerivesProductPaths` are explicit catalog evidence.
 
 ## Known gaps
 

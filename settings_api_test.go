@@ -119,6 +119,41 @@ func TestSettingsAPIValidateDoesNotWrite(t *testing.T) {
 	}
 }
 
+// The Wails boundary itself must reject an oversized candidate before a
+// replaceable backend can clone, normalize, accept, or reflect it.
+func TestSettingsAPIRejectsUnboundedCandidateBeforeBackendOrEcho(t *testing.T) {
+	settings := settingsAtRevision(1, "C:/osc")
+	backend := &fakeSettingsBackend{loaded: userconfig.Loaded{Settings: &settings}}
+	api := newSettingsAPI(backend, candidate("C:/initial"), nil)
+	if _, err := api.loadForStartup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	oversized := candidate("C:/candidate")
+	oversized.Plugins.DevRoots = make([]string, userconfig.MaxSettingsDevRoots+1)
+
+	validated := api.Validate(oversized)
+	if validated.Problem == nil || validated.Problem.Code != ProblemValidation || validated.Problem.Field != "plugins.devRoots" {
+		t.Fatalf("Validate(oversized) = %+v, want stable dev-roots validation", validated)
+	}
+	if len(validated.Settings.Plugins.DevRoots) != 0 || validated.Settings.Avatar.OSCRoot != "C:/osc" {
+		t.Fatalf("Validate(oversized) echoed caller candidate: %+v", validated.Settings)
+	}
+
+	before := api.Get()
+	saved := api.Save(before.Revision, oversized)
+	if saved.Problem == nil || saved.Problem.Code != ProblemValidation || saved.Problem.Field != "plugins.devRoots" {
+		t.Fatalf("Save(oversized) = %+v, want stable dev-roots validation", saved)
+	}
+	if saved.Revision != before.Revision || saved.Settings.Avatar.OSCRoot != "C:/osc" || len(saved.Settings.Plugins.DevRoots) != 0 {
+		t.Fatalf("Save(oversized) published or echoed caller candidate: %+v", saved)
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if backend.validateCalls != 0 || backend.saveCalls != 0 {
+		t.Fatalf("oversized candidate reached backend: validate=%d save=%d", backend.validateCalls, backend.saveCalls)
+	}
+}
+
 func TestSettingsAPISaveRejectsStaleModuleRevisionWithoutStoreIO(t *testing.T) {
 	settings := settingsAtRevision(3, "C:/osc")
 	backend := &fakeSettingsBackend{loaded: userconfig.Loaded{Settings: &settings}}
