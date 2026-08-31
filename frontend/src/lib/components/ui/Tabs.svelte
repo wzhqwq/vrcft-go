@@ -17,8 +17,13 @@
     children?: Snippet;
   };
 
-  let {items, value = $bindable<T | undefined>(undefined), content, children}: Props = $props();
-  let selectedValue = $derived(value ?? items[0]?.value);
+  let {
+    items,
+    value = $bindable<T>((items.find((item) => !item.disabled) ?? items[0]).value),
+    content,
+    children,
+  }: Props = $props();
+  let selectedValue = $derived(value);
 </script>
 
 <BitsTabs.Root bind:value activationMode="automatic" class="min-w-0">

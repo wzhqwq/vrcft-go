@@ -14,6 +14,14 @@ if (!window.ResizeObserver) {
   window.ResizeObserver = TestResizeObserver;
 }
 
+if (!HTMLElement.prototype.hasPointerCapture) {
+  HTMLElement.prototype.hasPointerCapture = () => false;
+}
+
+if (!HTMLElement.prototype.releasePointerCapture) {
+  HTMLElement.prototype.releasePointerCapture = () => {};
+}
+
 afterEach(() => {
   cleanup();
 });

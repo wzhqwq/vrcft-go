@@ -1,8 +1,9 @@
 <script lang="ts">
   import type {Snippet} from 'svelte';
+  import type {HTMLButtonAttributes} from 'svelte/elements';
 
   type Tone = 'primary' | 'secondary' | 'danger';
-  type Props = {
+  type Props = Omit<HTMLButtonAttributes, 'children' | 'class' | 'disabled' | 'type'> & {
     label: string;
     tone?: Tone;
     type?: 'button' | 'submit' | 'reset';
@@ -10,6 +11,7 @@
     loading?: boolean;
     loadingLabel?: string;
     children?: Snippet;
+    class?: string;
   };
 
   const toneClasses: Record<Tone, string> = {
@@ -26,13 +28,16 @@
     loading = false,
     loadingLabel = '正在处理',
     children,
+    class: className = '',
+    ...rest
   }: Props = $props();
   const statusId = globalThis.crypto?.randomUUID?.() ?? `button-status-${Math.random().toString(36).slice(2)}`;
 </script>
 
 <button
+  {...rest}
   {type}
-  class={`focus-ring inline-flex min-w-0 items-center justify-center gap-2 rounded-lg border px-4 py-2 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${toneClasses[tone]}`}
+  class={`focus-ring inline-flex min-w-0 items-center justify-center gap-2 rounded-lg border px-4 py-2 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${toneClasses[tone]} ${className}`}
   aria-busy={loading || undefined}
   aria-describedby={loading ? statusId : undefined}
   disabled={disabled || loading}

@@ -55,7 +55,7 @@
       <span aria-hidden="true" class="text-text-muted">⌄</span>
     </Select.Trigger>
     <Select.Portal>
-      <Select.Content class="z-50 max-h-72 min-w-[var(--bits-select-anchor-width)] overflow-auto rounded-lg border border-border bg-surface p-1 shadow-lg shadow-black/30">
+      <Select.Content class="z-50 max-h-72 w-[var(--bits-select-anchor-width)] min-w-[var(--bits-select-anchor-width)] overflow-auto rounded-lg border border-border bg-surface p-1 shadow-lg shadow-black/30">
         <Select.Viewport>
           {#each options as option (option.value)}
             <Select.Item
