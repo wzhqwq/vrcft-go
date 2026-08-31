@@ -724,6 +724,48 @@ func TestStoreTemporaryWriteStopsAfterCanceledChunkAndCleansTemporary(t *testing
 	}
 }
 
+func TestStoreReplaceStopsWhenContextCancelsAfterFinalAuthoritativeRead(t *testing.T) {
+	paths := testStorePaths(t)
+	store, loaded := loadedStore(t, paths)
+	temporary, err := os.CreateTemp(paths.SettingsDir, ".replace-cancel-*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporaryPath := temporary.Name()
+	if _, err := temporary.WriteString("replacement"); err != nil {
+		t.Fatal(err)
+	}
+	if err := temporary.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	open := store.ops.open
+	store.ops.open = func(path string) (storeFile, error) {
+		file, err := open(path)
+		if err != nil {
+			return nil, err
+		}
+		return &cancelOnCloseStoreFile{storeFile: file, cancel: cancel}, nil
+	}
+	replaced := false
+	store.ops.replace = func(string, string) error {
+		replaced = true
+		return nil
+	}
+
+	err = store.replaceTemporary(ctx, temporaryPath, paths.SettingsFile, loaded.Token)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("replaceTemporary(canceled after read) error = %v, want context.Canceled", err)
+	}
+	if replaced {
+		t.Fatal("replaceTemporary mutated destination after cancellation")
+	}
+	if _, err := os.Stat(temporaryPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled replacement leaked temporary file: %v", err)
+	}
+}
+
 func waitStoreError(t *testing.T, result <-chan error) error {
 	t.Helper()
 	select {
@@ -800,6 +842,24 @@ type closeSignalStoreFile struct {
 	storeFile
 	closed chan struct{}
 	once   sync.Once
+}
+
+type cancelOnCloseStoreFile struct {
+	storeFile
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (f *cancelOnCloseStoreFile) Close() error {
+	err := f.storeFile.Close()
+	f.once.Do(f.cancel)
+	return err
+}
+
+func (f *cancelOnCloseStoreFile) SyscallConn() (syscall.RawConn, error) {
+	return f.storeFile.(interface {
+		SyscallConn() (syscall.RawConn, error)
+	}).SyscallConn()
 }
 
 func (f *closeSignalStoreFile) Close() error {

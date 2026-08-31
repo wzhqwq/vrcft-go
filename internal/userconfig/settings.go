@@ -173,10 +173,14 @@ func ValidateCandidateBounds(candidate Candidate) error {
 	}
 
 	// json.Marshal sees the exact unnormalized Candidate wire shape without
-	// cloning its lists. A numeric semantic error is left to Normalize, whose
-	// field-specific validation is more useful than an encoding error here.
+	// cloning its lists. Reject encoding failures here so neither caller nor
+	// backend supplied non-finite numbers can reach a Wails response.
 	settings := Settings{SchemaVersion: SchemaVersion, Revision: 1, Avatar: candidate.Avatar, Plugins: candidate.Plugins, Processing: candidate.Processing, OSC: candidate.OSC}
-	if data, err := json.Marshal(settings); err == nil && len(data) > MaxSettingsBytes {
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return validation("settings", errors.New("cannot be encoded as JSON"))
+	}
+	if len(data) > MaxSettingsBytes {
 		return validation("settings", errors.New("encoded settings exceed maximum size"))
 	}
 	return nil

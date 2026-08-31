@@ -197,7 +197,30 @@ func validatePublicPluginSnapshot(snapshot plugins.RuntimeSnapshot) error {
 			return &userconfig.ValidationError{Field: "plugins", Err: pluginDataValidation("plugin " + field.name + " violates public bounds")}
 		}
 	}
+	if !validPublicPluginState(snapshot.State) {
+		return &userconfig.ValidationError{Field: "plugins", Err: pluginDataValidation("plugin state violates public bounds")}
+	}
+	for _, value := range []time.Time{snapshot.StartedAt, snapshot.LastHeartbeatAt, snapshot.LastFrameAt, snapshot.NextRestartAt} {
+		if value.IsZero() {
+			continue
+		}
+		if _, err := value.MarshalJSON(); err != nil {
+			return &userconfig.ValidationError{Field: "plugins", Err: pluginDataValidation("plugin timestamp cannot be encoded")}
+		}
+	}
 	return nil
+}
+
+func validPublicPluginState(state plugins.State) bool {
+	switch state {
+	case "", plugins.StateDisabled, plugins.StateStopped, plugins.StateStarting,
+		plugins.StateHandshaking, plugins.StateRunning, plugins.StateStopping,
+		plugins.StateBackoff, plugins.StateCrashed, plugins.StateUnresponsive,
+		plugins.StateIncompatible:
+		return true
+	default:
+		return false
+	}
 }
 
 func validPublicText(value string, maxBytes int) bool {

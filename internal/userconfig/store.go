@@ -691,6 +691,9 @@ func (s *Store) replaceTemporary(ctx context.Context, temporary, destination str
 	} else if current.token != expected {
 		return ErrConflict
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := s.ops.replace(temporary, destination); err != nil {
 		return fmt.Errorf("userconfig: replace settings: %w", err)
 	}

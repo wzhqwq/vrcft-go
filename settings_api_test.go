@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"runtime"
 	"sync"
 	"testing"
@@ -151,6 +153,49 @@ func TestSettingsAPIRejectsUnboundedCandidateBeforeBackendOrEcho(t *testing.T) {
 	defer backend.mu.Unlock()
 	if backend.validateCalls != 0 || backend.saveCalls != 0 {
 		t.Fatalf("oversized candidate reached backend: validate=%d save=%d", backend.validateCalls, backend.saveCalls)
+	}
+}
+
+func TestSettingsAPIRejectsInvalidBackendDefaultsAndNonJSONResults(t *testing.T) {
+	settings := settingsAtRevision(1, "C:/osc")
+	invalidDefaults := candidate("C:/default")
+	invalidDefaults.Plugins.DevRoots = make([]string, userconfig.MaxSettingsDevRoots+1)
+	backend := &fakeSettingsBackend{loaded: userconfig.Loaded{Settings: &settings, Defaults: invalidDefaults}}
+	api := newSettingsAPI(backend, candidate("C:/initial"), nil)
+	if _, err := api.loadForStartup(context.Background()); err == nil {
+		t.Fatal("loadForStartup accepted unbounded backend defaults")
+	}
+	if got := api.Get(); got.Problem == nil || got.Problem.Code != ProblemValidation || got.Settings.Avatar.OSCRoot != "C:/initial" {
+		t.Fatalf("Get after invalid backend defaults = %+v", got)
+	}
+
+	backend.loaded = userconfig.Loaded{Settings: &settings, Defaults: candidate("C:/default")}
+	if _, err := api.loadForStartup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	current := api.Get()
+	nonJSON := candidate("C:/backend")
+	nonJSON.Processing.DefaultChannel.Calibration.Neutral = float32(math.NaN())
+	backend.validate = nonJSON
+	validated := api.Validate(candidate("C:/candidate"))
+	if validated.Problem == nil || validated.Problem.Code != ProblemValidation || validated.Problem.Field != "settings" || validated.Settings.Avatar.OSCRoot != current.Settings.Avatar.OSCRoot {
+		t.Fatalf("Validate(non-JSON backend result) = %+v", validated)
+	}
+	if _, err := json.Marshal(validated); err != nil {
+		t.Fatalf("safe Validate response cannot be encoded: %v", err)
+	}
+
+	after := settingsAtRevision(2, "C:/after")
+	backend.saveResult = userconfig.SaveResult{Changed: true, Loaded: userconfig.Loaded{Settings: &after, Defaults: nonJSON}}
+	saved := api.Save(current.Revision, candidate("C:/after"))
+	if saved.Problem == nil || saved.Problem.Code != ProblemValidation || saved.Problem.Field != "settings" || saved.Revision != current.Revision || saved.Settings.Avatar.OSCRoot != current.Settings.Avatar.OSCRoot {
+		t.Fatalf("Save(non-JSON backend defaults) = %+v", saved)
+	}
+	if _, err := json.Marshal(saved); err != nil {
+		t.Fatalf("safe Save response cannot be encoded: %v", err)
+	}
+	if got := api.Get(); got.Revision != current.Revision || got.Settings.Avatar.OSCRoot != current.Settings.Avatar.OSCRoot {
+		t.Fatalf("invalid backend Save published %+v", got)
 	}
 }
 

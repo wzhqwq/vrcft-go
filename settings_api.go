@@ -311,8 +311,11 @@ func settingsSnapshotFromLoaded(loaded userconfig.Loaded) settingsSnapshot {
 }
 
 func validateSettingsLoadedBounds(loaded userconfig.Loaded) error {
+	if err := userconfig.ValidateCandidateBounds(loaded.Defaults); err != nil {
+		return err
+	}
 	if loaded.Settings == nil {
-		return userconfig.ValidateCandidateBounds(loaded.Defaults)
+		return nil
 	}
 	return userconfig.ValidateCandidateBounds(userconfig.Candidate{
 		Avatar:     loaded.Settings.Avatar,

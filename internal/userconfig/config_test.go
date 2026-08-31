@@ -3,6 +3,7 @@ package userconfig
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -49,6 +50,16 @@ func TestValidateCandidateBoundsEnforcesExactAndNestedLimits(t *testing.T) {
 				t.Fatalf("ValidateCandidateBounds() error = %v, want field %q", err, test.field)
 			}
 		})
+	}
+}
+
+func TestValidateCandidateBoundsRejectsValuesThatCannotBeEncodedAsJSON(t *testing.T) {
+	candidate := DefaultCandidate(Paths{DefaultOSCRoot: `C:\VRChat\OSC`})
+	candidate.Processing.DefaultChannel.Calibration.Neutral = float32(math.NaN())
+	err := ValidateCandidateBounds(candidate)
+	var validationError *ValidationError
+	if !errors.As(err, &validationError) || validationError.Field != "settings" {
+		t.Fatalf("ValidateCandidateBounds(NaN) error = %v, want settings validation", err)
 	}
 }
 

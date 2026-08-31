@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/heap"
 	"context"
 	"encoding/json"
 	"errors"
@@ -518,16 +519,27 @@ func findPluginSnapshot(snapshots []plugins.RuntimeSnapshot, id string) (plugins
 }
 
 func pluginDTOList(snapshots []plugins.RuntimeSnapshot) ([]PluginDTO, error) {
-	ordered := append([]plugins.RuntimeSnapshot(nil), snapshots...)
-	sort.Slice(ordered, func(left, right int) bool { return ordered[left].ID < ordered[right].ID })
-	result := make([]PluginDTO, 0, min(len(ordered), maxPublicPluginListEntries))
+	ordered := make(pluginSnapshotMaxHeap, 0, min(len(snapshots), maxPublicPluginListEntries))
 	var invalid bool
-	for _, snapshot := range ordered {
-		if len(result) == maxPublicPluginListEntries {
-			invalid = true
-			break
-		}
+	for _, snapshot := range snapshots {
 		if err := validatePublicPluginSnapshot(snapshot); err != nil {
+			invalid = true
+			continue
+		}
+		if len(ordered) < maxPublicPluginListEntries {
+			heap.Push(&ordered, snapshot)
+			continue
+		}
+		invalid = true
+		if snapshot.ID < ordered[0].ID {
+			ordered[0] = snapshot
+			heap.Fix(&ordered, 0)
+		}
+	}
+	sort.Slice(ordered, func(left, right int) bool { return ordered[left].ID < ordered[right].ID })
+	result := make([]PluginDTO, 0, len(ordered))
+	for index, snapshot := range ordered {
+		if (index > 0 && ordered[index-1].ID == snapshot.ID) || (index+1 < len(ordered) && ordered[index+1].ID == snapshot.ID) {
 			invalid = true
 			continue
 		}
@@ -537,6 +549,22 @@ func pluginDTOList(snapshots []plugins.RuntimeSnapshot) ([]PluginDTO, error) {
 		return result, &userconfig.ValidationError{Field: "plugins", Err: errors.New("plugin snapshot exceeds public bounds")}
 	}
 	return result, nil
+}
+
+type pluginSnapshotMaxHeap []plugins.RuntimeSnapshot
+
+func (values pluginSnapshotMaxHeap) Len() int           { return len(values) }
+func (values pluginSnapshotMaxHeap) Less(i, j int) bool { return values[i].ID > values[j].ID }
+func (values pluginSnapshotMaxHeap) Swap(i, j int)      { values[i], values[j] = values[j], values[i] }
+func (values *pluginSnapshotMaxHeap) Push(value any) {
+	*values = append(*values, value.(plugins.RuntimeSnapshot))
+}
+func (values *pluginSnapshotMaxHeap) Pop() any {
+	old := *values
+	last := len(old) - 1
+	value := old[last]
+	*values = old[:last]
+	return value
 }
 
 func clonePluginDTOs(values []PluginDTO) []PluginDTO {

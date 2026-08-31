@@ -125,6 +125,8 @@ func TestPluginListRejectsAllTextBoundariesAndDoesNotChurnIdenticalDiagnostics(t
 		{name: "description plus one", snapshot: plugins.RuntimeSnapshot{ID: "vendor.alpha", Description: strings.Repeat("d", 4097)}},
 		{name: "version plus one", snapshot: plugins.RuntimeSnapshot{ID: "vendor.alpha", Version: strings.Repeat("v", 257)}},
 		{name: "invalid UTF-8", snapshot: plugins.RuntimeSnapshot{ID: "vendor.alpha", Name: invalidUTF8}},
+		{name: "unknown state", snapshot: plugins.RuntimeSnapshot{ID: "vendor.alpha", State: plugins.State("future-state")}},
+		{name: "unencodable time", snapshot: plugins.RuntimeSnapshot{ID: "vendor.alpha", StartedAt: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fake := &fakePluginsBackend{snapshots: []plugins.RuntimeSnapshot{{ID: "vendor.ok"}, test.snapshot}, configs: map[string]pluginapi.Config{}}
@@ -132,6 +134,9 @@ func TestPluginListRejectsAllTextBoundariesAndDoesNotChurnIdenticalDiagnostics(t
 			first := api.List()
 			if first.Problem == nil || first.Problem.Code != ProblemValidation || first.Problem.Field != "plugins" || len(first.Plugins) != 1 {
 				t.Fatalf("bounded snapshot list = %+v", first)
+			}
+			if _, err := json.Marshal(first); err != nil {
+				t.Fatalf("bounded snapshot response cannot be encoded: %v", err)
 			}
 			api.refreshBackend(fake, api.generation, false)
 			if got := api.List(); got.Revision != first.Revision {
