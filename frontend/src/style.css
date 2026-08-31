@@ -1,26 +1,112 @@
-html {
-    background-color: rgba(27, 38, 54, 1);
-    text-align: center;
-    color: white;
-}
-
-body {
-    margin: 0;
-    color: white;
-    font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
-    "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-    sans-serif;
-}
+@import "tailwindcss";
 
 @font-face {
-    font-family: "Nunito";
-    font-style: normal;
-    font-weight: 400;
-    src: local(""),
-    url("assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 400;
+  src: local(""), url("assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
 }
 
-#app {
-    height: 100vh;
-    text-align: center;
+@theme {
+  --color-canvas: #090d14;
+  --color-surface: #111824;
+  --color-surface-raised: #182232;
+  --color-border: #2a3850;
+  --color-text: #f2f6fb;
+  --color-text-muted: #9aa9bc;
+  --color-accent: #62d7c6;
+  --color-danger: #ff7f87;
+  --color-warning: #f4c56a;
+  --breakpoint-nav: 45rem;
+  --font-sans: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+    background:
+      radial-gradient(circle at top, rgb(24 34 50 / 0.9), transparent 48%),
+      linear-gradient(180deg, #111824 0%, #090d14 100%);
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    min-height: 100dvh;
+    background-color: var(--color-canvas);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    overflow-x: hidden;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    min-height: 100dvh;
+    margin: 0;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+
+  #app {
+    min-height: 100dvh;
+    overflow-x: clip;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  img,
+  svg {
+    display: block;
+    max-width: 100%;
+  }
+
+  ::selection {
+    background-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+    color: var(--color-text);
+  }
+}
+
+@layer components {
+  .surface-card {
+    @apply min-w-0 rounded-xl border border-border bg-surface p-4 text-text shadow-lg shadow-black/20;
+  }
+
+  .form-control {
+    @apply w-full min-w-0 rounded-lg border border-border bg-canvas px-3 py-2 text-text placeholder:text-text-muted;
+  }
+
+  .status-pill {
+    @apply inline-flex min-w-0 items-center gap-2 rounded-full border border-border bg-surface-raised px-3 py-1 text-sm text-text;
+  }
+
+  .focus-ring {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-canvas;
+  }
+
+  .page-grid {
+    @apply grid min-w-0 gap-4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
