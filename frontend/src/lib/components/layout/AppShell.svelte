@@ -19,9 +19,9 @@
   data-testid="app-shell"
   class={`grid h-dvh min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] nav:grid-cols-[14rem_minmax(0,1fr)] nav:grid-rows-[minmax(0,1fr)] ${className}`}
 >
-  <aside class="hidden min-w-0 flex-col border-r border-border bg-surface nav:flex">
+  <nav class="hidden min-w-0 flex-col border-r border-border bg-surface nav:flex" aria-label="主导航">
     <NavigationItems items={navigation} {activePage} {onNavigate} orientation="vertical" />
-  </aside>
+  </nav>
   <header class="flex min-w-0 items-center border-b border-border bg-surface px-4 py-3 text-lg font-bold text-text nav:hidden">
     VRCFaceTracking
   </header>

@@ -21,7 +21,7 @@
   };
 
   const orientationClasses: Record<Orientation, string> = {
-    horizontal: 'flex min-w-max items-center gap-2 px-4 py-2',
+    horizontal: 'flex min-w-max w-full items-center gap-2 px-4 py-2',
     vertical: 'flex min-w-0 flex-col gap-2 p-4',
   };
 
@@ -30,7 +30,7 @@
 
 <ul class={`${orientationClasses[orientation]} ${className}`}>
   {#each items as item (item.id)}
-    <li class={orientation === 'vertical' ? 'min-w-0' : 'shrink-0'}>
+    <li class={orientation === 'vertical' ? 'min-w-0' : 'min-w-32 flex-1'}>
       <Button
         label={item.label}
         tone="secondary"
