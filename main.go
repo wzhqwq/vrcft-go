@@ -17,9 +17,11 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "vrcft-go2",
-		Width:  1024,
-		Height: 768,
+		Title:     "vrcft-go2",
+		Width:     1024,
+		Height:    768,
+		MinWidth:  640,
+		MinHeight: 480,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

@@ -65,6 +65,34 @@ func TestMainPreservesFrontendDistEmbedAndRemovesTemplateGreet(t *testing.T) {
 	}
 }
 
+func TestMainWindowUsesDesktopDefaultAndUsableMinimumSize(t *testing.T) {
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), "main.go", source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	optionsLiteral := findWailsOptionsLiteral(t, file)
+
+	for _, want := range []struct {
+		name  string
+		value string
+	}{
+		{name: "Width", value: "1024"},
+		{name: "Height", value: "768"},
+		{name: "MinWidth", value: "640"},
+		{name: "MinHeight", value: "480"},
+	} {
+		value := keyedElement(t, optionsLiteral, want.name)
+		literal, ok := value.(*ast.BasicLit)
+		if !ok || literal.Value != want.value {
+			t.Fatalf("%s = %T(%v), want integer literal %s", want.name, value, value, want.value)
+		}
+	}
+}
+
 func findWailsOptionsLiteral(t *testing.T, file *ast.File) *ast.CompositeLit {
 	t.Helper()
 	var result *ast.CompositeLit
