@@ -99,7 +99,7 @@ export function presentProblem(problem: ProblemWire): ProblemView {
 }
 
 function lookupProblemPreset(code: string): ProblemPreset {
-  return code in knownProblemPresets
+  return Object.hasOwn(knownProblemPresets, code)
     ? knownProblemPresets[code as KnownProblemCode]
     : unknownProblemPreset
 }

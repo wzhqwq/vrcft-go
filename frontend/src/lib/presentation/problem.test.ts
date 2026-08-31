@@ -88,4 +88,19 @@ describe('presentProblem', () => {
   ])('maps %s problems to stable UI presentation', (_, problem, expected) => {
     expect(presentProblem(problem)).toMatchObject(expected)
   })
+
+  it.each(['toString', '__proto__'])(
+    'treats inherited key %s as an unknown problem code',
+    (code) => {
+      expect(
+        presentProblem({code, message: `unexpected:${code}`}),
+      ).toMatchObject({
+        code,
+        tone: 'danger',
+        title: '发生未知错误',
+        detail: `unexpected:${code}`,
+        persistent: true,
+      })
+    },
+  )
 })

@@ -60,3 +60,59 @@ notes: git reported only a CRLF normalization warning for frontend/src/style.css
 - `presentProblem()` is frontend-only and typed against `ProblemWire`, so Task 1 Wails ports and bindings remain unchanged.
 - Conflict details prefer `currentRevision` when present and otherwise fall back to bounded backend text, which matches the stable UI-treatment requirement without inventing extra backend contracts.
 - The accepted Vite 8 experimental support warning still appears during Vitest, `svelte-check`, and `vite build`; it remains baseline noise from the approved toolchain.
+
+## Fix Round 1
+
+### Changed Files
+
+- `frontend/src/lib/presentation/problem.ts`
+- `frontend/src/lib/presentation/problem.test.ts`
+
+### Covering Test Names
+
+- `presentProblem > treats inherited key toString as an unknown problem code`
+- `presentProblem > treats inherited key __proto__ as an unknown problem code`
+
+### RED/GREEN Evidence
+
+RED:
+
+```text
+$ pnpm.cmd --dir frontend test -- src/lib/presentation/problem.test.ts
+RUN  v4.1.11 C:/Users/wzhqwq/Documents/vrcft-go/frontend
+❯ src/lib/presentation/problem.test.ts (10 tests | 2 failed)
+  × treats inherited key toString as an unknown problem code
+  × treats inherited key __proto__ as an unknown problem code
+TypeError: preset.detail is not a function
+❯ presentProblem src/lib/presentation/problem.ts:93:20
+Test Files  1 failed | 2 passed (3)
+Tests  2 failed | 10 passed (12)
+```
+
+GREEN:
+
+```text
+$ pnpm.cmd --dir frontend test -- src/lib/presentation/problem.test.ts
+RUN  v4.1.11 C:/Users/wzhqwq/Documents/vrcft-go/frontend
+Test Files  3 passed (3)
+Tests  12 passed (12)
+```
+
+### Verification Commands
+
+```text
+$ pnpm.cmd --dir frontend check
+svelte-check found 0 errors and 0 warnings
+```
+
+```text
+$ pnpm.cmd --dir frontend build
+vite v8.1.5 building client environment for production...
+✓ built in 354ms
+```
+
+```text
+$ git diff --check
+exit 0
+notes: git reported only CRLF normalization warnings for the touched files; no diff-check whitespace errors
+```
