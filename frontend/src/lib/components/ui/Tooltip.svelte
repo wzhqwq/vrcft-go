@@ -2,15 +2,28 @@
   import type {Snippet} from 'svelte';
   import {Tooltip as BitsTooltip} from 'bits-ui';
 
+  type DefaultTrigger = {
+    triggerLabel: string;
+    trigger?: never;
+  };
+  type CustomTrigger = {
+    trigger: Snippet<[Record<string, unknown>]>;
+    triggerLabel?: never;
+  };
   type Props = {
-    triggerLabel?: string;
     content: string;
     delayDuration?: number;
     disabled?: boolean;
-    trigger?: Snippet<[Record<string, unknown>]>;
-  };
+  } & (DefaultTrigger | CustomTrigger);
+
+  function assertTrigger(trigger: CustomTrigger['trigger'] | undefined, triggerLabel: string | undefined): void {
+    if (!trigger && !triggerLabel?.trim()) {
+      throw new Error('Tooltip requires a non-empty triggerLabel or trigger snippet');
+    }
+  }
 
   let {triggerLabel, content, delayDuration = 700, disabled = false, trigger}: Props = $props();
+  $effect.pre(() => assertTrigger(trigger, triggerLabel));
 </script>
 
 <BitsTooltip.Provider>

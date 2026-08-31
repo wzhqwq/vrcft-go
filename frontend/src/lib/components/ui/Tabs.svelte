@@ -19,26 +19,26 @@
 
   let {
     items,
-    value = $bindable<T>((items.find((item) => !item.disabled) ?? items[0]).value),
+    value = $bindable<T | undefined>(items.find((item) => !item.disabled)?.value),
     content,
     children,
   }: Props = $props();
   let selectedValue = $derived(value);
 </script>
 
-<BitsTabs.Root bind:value activationMode="automatic" class="min-w-0">
-  <BitsTabs.List class="flex min-w-0 gap-1 overflow-x-auto rounded-lg border border-border bg-surface p-1">
-    {#each items as item (item.value)}
-      <BitsTabs.Trigger
-        value={item.value}
-        disabled={item.disabled}
-        class="focus-ring min-w-max rounded-md px-3 py-2 font-semibold text-text-muted transition-colors data-[state=active]:bg-surface-raised data-[state=active]:text-text disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        {item.label}
-      </BitsTabs.Trigger>
-    {/each}
-  </BitsTabs.List>
-  {#if selectedValue}
+{#if selectedValue}
+  <BitsTabs.Root bind:value activationMode="automatic" class="min-w-0">
+    <BitsTabs.List class="flex min-w-0 gap-1 overflow-x-auto rounded-lg border border-border bg-surface p-1">
+      {#each items as item (item.value)}
+        <BitsTabs.Trigger
+          value={item.value}
+          disabled={item.disabled}
+          class="focus-ring min-w-max rounded-md px-3 py-2 font-semibold text-text-muted transition-colors data-[state=active]:bg-surface-raised data-[state=active]:text-text disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {item.label}
+        </BitsTabs.Trigger>
+      {/each}
+    </BitsTabs.List>
     <BitsTabs.Content value={selectedValue} class="min-w-0 pt-3">
       {#if content}
         {@render content(selectedValue)}
@@ -46,5 +46,5 @@
         {@render children()}
       {/if}
     </BitsTabs.Content>
-  {/if}
-</BitsTabs.Root>
+  </BitsTabs.Root>
+{/if}

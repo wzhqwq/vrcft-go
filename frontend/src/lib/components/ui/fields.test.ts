@@ -39,13 +39,13 @@ describe('field controls', () => {
     expect(control).toHaveAttribute('aria-required', 'true');
   });
 
-  it('matches the opened select content width to its trigger with the public Bits UI variable', async () => {
+  it('matches the opened select content width to its trigger with the public floating hook', async () => {
     render(SelectField, {
       props: {label: '模式', value: 'auto', options: [{value: 'auto', label: '自动'}]},
     });
 
     await fireEvent.pointerDown(screen.getByRole('button', {name: '模式'}), {button: 0, ctrlKey: false});
-    expect(screen.getByRole('listbox')).toHaveClass('w-[var(--bits-select-anchor-width)]');
+    expect(screen.getByRole('listbox')).toHaveClass('w-[var(--bits-floating-anchor-width)]');
   });
 
   it('updates the checked switch state when activated', async () => {

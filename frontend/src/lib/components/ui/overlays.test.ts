@@ -35,6 +35,13 @@ describe('interactive controls', () => {
     expect(screen.getByRole('tabpanel')).toBeInTheDocument();
   });
 
+  it('renders no tab tree for an empty item list', () => {
+    render(Tabs, {props: {items: []}});
+
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.queryByRole('tabpanel')).not.toBeInTheDocument();
+  });
+
   it('returns focus to the dialog trigger after Escape closes a controlled dialog', async () => {
     render(Dialog, {props: {triggerLabel: '打开', title: '连接设置'}});
 
@@ -76,5 +83,11 @@ describe('interactive controls', () => {
     expect(screen.getAllByRole('button', {name: '刷新'})).toHaveLength(1);
     await fireEvent.pointerEnter(button);
     expect(await screen.findByRole('tooltip')).toHaveTextContent('重新加载状态');
+  });
+
+  it('rejects a whitespace-only default tooltip label', () => {
+    expect(() => render(Tooltip, {props: {content: '帮助内容', triggerLabel: '  '}})).toThrow(
+      'Tooltip requires a non-empty triggerLabel or trigger snippet',
+    );
   });
 });
