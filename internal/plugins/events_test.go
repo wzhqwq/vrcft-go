@@ -109,37 +109,46 @@ func TestEventHubLogsStayOrderedAndReportDrops(t *testing.T) {
 	}
 }
 
-func TestEventHubOnlyReportsDroppedLogsOnTheNextAcceptedLog(t *testing.T) {
+func TestEventSubscriberOnlyReportsDroppedLogsOnTheNextAcceptedLog(t *testing.T) {
 	// Catches treating discovery/removal entries as logs: their bounded loss
 	// must not contaminate the next actual log's dropped count.
-	hub := newEventHub(2)
-	t.Cleanup(hub.Close)
-	events := hub.Subscribe(context.Background())
-	for _, event := range []Event{
-		{Type: EventPluginDiscovered, PluginID: "one"},
-		{Type: EventPluginRemoved, PluginID: "two"},
-		{Type: EventPluginDiscovered, PluginID: "three"},
-	} {
-		hub.Publish(event)
+	subscriber := &eventSubscriber{states: make(map[string]Event)}
+	next := func() Event {
+		event, ok := subscriber.next()
+		if !ok {
+			t.Fatal("subscriber has no queued event")
+		}
+		subscriber.pop(event)
+		return event
 	}
-	first := receiveEvent(t, events)
-	second := receiveEvent(t, events)
+	for _, event := range []Event{
+		{Sequence: 1, Type: EventPluginDiscovered, PluginID: "one"},
+		{Sequence: 2, Type: EventPluginRemoved, PluginID: "two"},
+		{Sequence: 3, Type: EventPluginDiscovered, PluginID: "three"},
+	} {
+		subscriber.enqueue(event, 2)
+	}
+	first := next()
+	second := next()
 	if first.Type != EventPluginDiscovered || second.Type != EventPluginRemoved {
 		t.Fatalf("non-log order = %s, %s, want discovered then removed", first.Type, second.Type)
 	}
 
-	hub.Publish(Event{Type: EventPluginLog, PluginID: "camera", Log: &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "after non-log loss"}})
-	if event := receiveEvent(t, events); event.Dropped != 0 {
+	subscriber.enqueue(Event{Sequence: 4, Type: EventPluginLog, PluginID: "camera", Log: &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "after non-log loss"}}, 2)
+	event := next()
+	if event.Dropped != 0 {
 		t.Fatalf("log after non-log loss dropped = %d, want 0", event.Dropped)
 	}
 
-	for _, message := range []string{"one", "two", "three"} {
-		hub.Publish(Event{Type: EventPluginLog, PluginID: "camera", Log: &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: message}})
+	for index, message := range []string{"one", "two", "three"} {
+		subscriber.enqueue(Event{Sequence: uint64(index + 5), Type: EventPluginLog, PluginID: "camera", Log: &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: message}}, 2)
 	}
-	_ = receiveEvent(t, events)
-	_ = receiveEvent(t, events)
-	hub.Publish(Event{Type: EventPluginLog, PluginID: "camera", Log: &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "four"}})
-	if event := receiveEvent(t, events); event.Dropped != 1 {
+	for range 2 {
+		next()
+	}
+	subscriber.enqueue(Event{Sequence: 8, Type: EventPluginLog, PluginID: "camera", Log: &pluginapi.LogEntry{Level: pluginapi.LogInfo, Message: "four"}}, 2)
+	event = next()
+	if event.Dropped != 1 {
 		t.Fatalf("next accepted log dropped = %d, want 1", event.Dropped)
 	}
 }
