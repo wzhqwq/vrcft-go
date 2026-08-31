@@ -1,13 +1,13 @@
 export namespace main {
-	
+
 	export class OSCTargetDTO {
 	    host: string;
 	    port: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new OSCTargetDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.host = source["host"];
@@ -19,11 +19,11 @@ export namespace main {
 	    message: string;
 	    field?: string;
 	    currentRevision?: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Problem(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.code = source["code"];
@@ -40,11 +40,11 @@ export namespace main {
 	    configRevision: number;
 	    data: string;
 	    problem?: Problem;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PluginConfigResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.revision = source["revision"];
@@ -54,7 +54,7 @@ export namespace main {
 	        this.data = source["data"];
 	        this.problem = this.convertValues(source["problem"], Problem);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -77,11 +77,11 @@ export namespace main {
 	    pluginId: string;
 	    operation: string;
 	    message: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PluginControlFailureDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.pluginId = source["pluginId"];
@@ -111,11 +111,11 @@ export namespace main {
 	    // Go type: time
 	    nextRestartAt?: any;
 	    lastError?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PluginDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -136,7 +136,7 @@ export namespace main {
 	        this.nextRestartAt = this.convertValues(source["nextRestartAt"], null);
 	        this.lastError = source["lastError"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -161,11 +161,11 @@ export namespace main {
 	    updatedAt: any;
 	    plugins: PluginDTO[];
 	    problem?: Problem;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PluginListResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.revision = source["revision"];
@@ -173,7 +173,7 @@ export namespace main {
 	        this.plugins = this.convertValues(source["plugins"], PluginDTO);
 	        this.problem = this.convertValues(source["problem"], Problem);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -198,11 +198,11 @@ export namespace main {
 	    updatedAt: any;
 	    pluginId: string;
 	    problem?: Problem;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PluginMutationResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.revision = source["revision"];
@@ -210,7 +210,7 @@ export namespace main {
 	        this.pluginId = source["pluginId"];
 	        this.problem = this.convertValues(source["problem"], Problem);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -229,7 +229,7 @@ export namespace main {
 		    return a;
 		}
 	}
-	
+
 	export class RuntimeOSCDTO {
 	    running: boolean;
 	    connected: boolean;
@@ -237,11 +237,11 @@ export namespace main {
 	    targetMode: string;
 	    target: OSCTargetDTO;
 	    lastError?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new RuntimeOSCDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.running = source["running"];
@@ -251,7 +251,7 @@ export namespace main {
 	        this.target = this.convertValues(source["target"], OSCTargetDTO);
 	        this.lastError = source["lastError"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -283,11 +283,11 @@ export namespace main {
 	    pluginFailures: PluginControlFailureDTO[];
 	    planError?: string;
 	    runtimeError?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new RuntimeApplicationDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.lifecycle = source["lifecycle"];
@@ -303,7 +303,7 @@ export namespace main {
 	        this.planError = source["planError"];
 	        this.runtimeError = source["runtimeError"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -322,7 +322,7 @@ export namespace main {
 		    return a;
 		}
 	}
-	
+
 	export class RuntimeResponse {
 	    revision: number;
 	    // Go type: time
@@ -331,11 +331,11 @@ export namespace main {
 	    platformSupported: boolean;
 	    application?: RuntimeApplicationDTO;
 	    problem?: Problem;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new RuntimeResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.revision = source["revision"];
@@ -345,7 +345,7 @@ export namespace main {
 	        this.application = this.convertValues(source["application"], RuntimeApplicationDTO);
 	        this.problem = this.convertValues(source["problem"], Problem);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -371,11 +371,11 @@ export namespace main {
 	    fileRevision: number;
 	    settings: userconfig.Candidate;
 	    problem?: Problem;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SettingsResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.revision = source["revision"];
@@ -384,7 +384,7 @@ export namespace main {
 	        this.settings = this.convertValues(source["settings"], userconfig.Candidate);
 	        this.problem = this.convertValues(source["problem"], Problem);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -411,11 +411,11 @@ export namespace main {
 	    settings: userconfig.Candidate;
 	    restartRequired: boolean;
 	    problem?: Problem;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SettingsSaveResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.revision = source["revision"];
@@ -425,7 +425,7 @@ export namespace main {
 	        this.restartRequired = source["restartRequired"];
 	        this.problem = this.convertValues(source["problem"], Problem);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -450,11 +450,11 @@ export namespace main {
 	    updatedAt: any;
 	    settings: userconfig.Candidate;
 	    problem?: Problem;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SettingsValidationResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.revision = source["revision"];
@@ -462,7 +462,7 @@ export namespace main {
 	        this.settings = this.convertValues(source["settings"], userconfig.Candidate);
 	        this.problem = this.convertValues(source["problem"], Problem);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -485,15 +485,15 @@ export namespace main {
 }
 
 export namespace userconfig {
-	
+
 	export class Avatar {
 	    oscRoot: string;
 	    fallbackPath: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Avatar(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.oscRoot = source["oscRoot"];
@@ -507,11 +507,11 @@ export namespace userconfig {
 	    max: number;
 	    gain: number;
 	    invert: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Calibration(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -527,11 +527,11 @@ export namespace userconfig {
 	    preferredService: string;
 	    manualHost: string;
 	    manualPort: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new OSC(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.targetMode = source["targetMode"];
@@ -543,17 +543,17 @@ export namespace userconfig {
 	export class ProcessingOverride {
 	    name: string;
 	    channel: ProcessingChannel;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ProcessingOverride(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.channel = this.convertValues(source["channel"], ProcessingChannel);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -576,11 +576,11 @@ export namespace userconfig {
 	    holdDurationMs: number;
 	    decayDurationMs: number;
 	    staleAfterMs: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Dropout(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.holdDurationMs = source["holdDurationMs"];
@@ -594,11 +594,11 @@ export namespace userconfig {
 	    minCutoff: number;
 	    beta: number;
 	    derivativeCutoff: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Filter(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mode = source["mode"];
@@ -615,11 +615,11 @@ export namespace userconfig {
 	    clampEnabled: boolean;
 	    clampMin: number;
 	    clampMax: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Tuning(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.deadzone = source["deadzone"];
@@ -635,11 +635,11 @@ export namespace userconfig {
 	    tuning: Tuning;
 	    filter: Filter;
 	    dropout: Dropout;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ProcessingChannel(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.calibration = this.convertValues(source["calibration"], Calibration);
@@ -647,7 +647,7 @@ export namespace userconfig {
 	        this.filter = this.convertValues(source["filter"], Filter);
 	        this.dropout = this.convertValues(source["dropout"], Dropout);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -671,11 +671,11 @@ export namespace userconfig {
 	    overrides: ProcessingOverride[];
 	    activeStaleAfterMs: number;
 	    mutualExclusion: string[][];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Processing(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.defaultChannel = this.convertValues(source["defaultChannel"], ProcessingChannel);
@@ -683,7 +683,7 @@ export namespace userconfig {
 	        this.activeStaleAfterMs = source["activeStaleAfterMs"];
 	        this.mutualExclusion = source["mutualExclusion"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -704,11 +704,11 @@ export namespace userconfig {
 	}
 	export class Plugins {
 	    devRoots: string[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Plugins(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.devRoots = source["devRoots"];
@@ -719,11 +719,11 @@ export namespace userconfig {
 	    plugins: Plugins;
 	    processing: Processing;
 	    osc: OSC;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Candidate(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.avatar = this.convertValues(source["avatar"], Avatar);
@@ -731,7 +731,7 @@ export namespace userconfig {
 	        this.processing = this.convertValues(source["processing"], Processing);
 	        this.osc = this.convertValues(source["osc"], OSC);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -750,13 +750,12 @@ export namespace userconfig {
 		    return a;
 		}
 	}
-	
-	
-	
-	
-	
-	
-	
+
+
+
+
+
+
+
 
 }
-
