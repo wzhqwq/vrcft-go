@@ -1,7 +1,7 @@
 # M7 Frontend Design
 
 **Date:** 2026-08-31
-**Status:** Draft for written-spec review; implementation plan pending
+**Status:** Approved; implementation plan defined
 **Milestone:** M7 — Frontend, operations, and release
 
 ## Context
