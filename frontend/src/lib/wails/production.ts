@@ -39,7 +39,7 @@ export function productionPorts(): WailsPorts {
         return Validate(candidate as Parameters<typeof Validate>[0]) as Promise<SettingsValidationWire>
       },
       save(expectedRevision, candidate) {
-        return Save(expectedRevision, candidate as Parameters<typeof Validate>[0]) as Promise<SettingsSaveWire>
+        return Save(expectedRevision, candidate as Parameters<typeof Save>[1]) as Promise<SettingsSaveWire>
       },
       onChanged(listener) {
         return settingsChanged.onChanged(listener)
@@ -49,11 +49,7 @@ export function productionPorts(): WailsPorts {
 }
 
 function subscribe<T>(eventName: string, emit: (value: T) => void) {
-  EventsOn(eventName, (...values: unknown[]) => {
+  return EventsOn(eventName, (...values: unknown[]) => {
     emit(values[0] as T)
   })
-
-  return () => {
-    EventsOff(eventName)
-  }
 }
