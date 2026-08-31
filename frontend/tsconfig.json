@@ -4,6 +4,7 @@
     "target": "ESNext",
     "useDefineForClassFields": true,
     "module": "ESNext",
+    "moduleResolution": "Bundler",
     "resolveJsonModule": true,
     "baseUrl": ".",
     /**
@@ -20,7 +21,9 @@
     "src/**/*.d.ts",
     "src/**/*.ts",
     "src/**/*.js",
-    "src/**/*.svelte"
+    "src/**/*.svelte",
+    "playwright.config.ts",
+    "vitest.config.ts"
   ],
   "references": [
     {

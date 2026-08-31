@@ -33,8 +33,8 @@ var defaultCommandRegistry = map[string]commandDefinition{
 	"go-test-race":      {executable: "go", prefix: []string{"test", "-race"}},
 	"go-vet":            {executable: "go", prefix: []string{"vet"}},
 	"go-generate-check": {executable: "go", prefix: []string{"generate"}},
-	"frontend-test":     {executable: "npm", prefix: []string{"--prefix", "frontend", "run", "check"}, noArgs: true},
-	"frontend-build":    {executable: "npm", prefix: []string{"--prefix", "frontend", "run", "build"}, noArgs: true},
+	"frontend-test":     {executable: "pnpm", prefix: []string{"--dir", "frontend", "run", "check"}, noArgs: true},
+	"frontend-build":    {executable: "pnpm", prefix: []string{"--dir", "frontend", "run", "build"}, noArgs: true},
 	"git-head":          {executable: "git", prefix: []string{"rev-parse", "HEAD"}, noArgs: true},
 	"git-status":        {executable: "git", prefix: []string{"status", "--porcelain"}, noArgs: true},
 }

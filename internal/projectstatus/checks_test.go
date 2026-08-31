@@ -92,6 +92,30 @@ func TestEvaluatorCachesIdenticalCommands(t *testing.T) {
 	}
 }
 
+func TestDefaultCommandRegistryUsesPnpmForFrontendCommands(t *testing.T) {
+	testCommand, ok := defaultCommandRegistry["frontend-test"]
+	if !ok {
+		t.Fatal("frontend-test command missing")
+	}
+	if testCommand.executable != "pnpm" {
+		t.Fatalf("frontend-test executable = %q, want pnpm", testCommand.executable)
+	}
+	if got, want := strings.Join(testCommand.prefix, " "), "--dir frontend run check"; got != want {
+		t.Fatalf("frontend-test prefix = %q, want %q", got, want)
+	}
+
+	buildCommand, ok := defaultCommandRegistry["frontend-build"]
+	if !ok {
+		t.Fatal("frontend-build command missing")
+	}
+	if buildCommand.executable != "pnpm" {
+		t.Fatalf("frontend-build executable = %q, want pnpm", buildCommand.executable)
+	}
+	if got, want := strings.Join(buildCommand.prefix, " "), "--dir frontend run build"; got != want {
+		t.Fatalf("frontend-build prefix = %q, want %q", got, want)
+	}
+}
+
 func TestProjectStatusHelperProcess(t *testing.T) {
 	separator := -1
 	for index, arg := range os.Args {
