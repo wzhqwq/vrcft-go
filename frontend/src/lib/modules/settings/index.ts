@@ -1,0 +1,5 @@
+export {createSettingsModule} from './module.svelte.js'
+export {cloneCandidate, immutableCandidate, sameCandidate} from './candidate.js'
+export {fieldTargets, isSettingsField, validateCandidate} from './fields.js'
+export type {SettingsField} from './fields.js'
+export type {DeepReadonly, SettingsModule, SettingsModuleState} from './types.js'
