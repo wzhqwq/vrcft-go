@@ -26,7 +26,6 @@ export function createRuntimeModule(port: RuntimePort): RuntimeModule {
   let startPromise: Promise<void> | null = null
   let stop: Stop | null = null
   let nextRequest = 0
-  let latestAcceptedRequest = 0
 
   const refresh = async () => {
     if (disposed) {
@@ -38,7 +37,7 @@ export function createRuntimeModule(port: RuntimePort): RuntimeModule {
 
     try {
       const wire = await port.getStatus()
-      if (disposed || request < latestAcceptedRequest) {
+      if (disposed || request !== nextRequest) {
         return
       }
 
@@ -48,7 +47,6 @@ export function createRuntimeModule(port: RuntimePort): RuntimeModule {
         return
       }
 
-      latestAcceptedRequest = request
       state.snapshot = mapRuntimeWire(wire)
       state.revision = wire.revision
       state.updatedAt = wire.updatedAt
@@ -57,7 +55,7 @@ export function createRuntimeModule(port: RuntimePort): RuntimeModule {
         : presentProblem(wire.problem)
       state.status = state.problem === null ? 'ready' : 'problem'
     } catch {
-      if (disposed || request < latestAcceptedRequest) {
+      if (disposed || request !== nextRequest) {
         return
       }
 
@@ -98,7 +96,7 @@ export function createRuntimeModule(port: RuntimePort): RuntimeModule {
   }
 
   function rejectInvalidRevision(request: number) {
-    if (request < latestAcceptedRequest) {
+    if (request !== nextRequest) {
       return
     }
 

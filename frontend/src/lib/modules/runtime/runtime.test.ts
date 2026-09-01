@@ -117,6 +117,38 @@ describe('Runtime module', () => {
     expect(module.state.revision).toBe(3)
   })
 
+  it('does not mark a valid snapshot stale when a superseded refresh fails first', async () => {
+    const mock = new RuntimeMock()
+    const module = await startWith(mock, runtimeWire(1, 'avtr_initial'))
+    const before = runtimeState(module)
+    const older = module.refresh()
+    const newer = module.refresh()
+
+    mock.rejectPending(1, new Error('older request failed'))
+    await older
+
+    expect(runtimeState(module)).toEqual(before)
+
+    mock.resolvePending(2, runtimeWire(2, 'avtr_newer'))
+    await newer
+  })
+
+  it('does not overwrite a newer refresh failure when its superseded request succeeds', async () => {
+    const mock = new RuntimeMock()
+    const module = await startWith(mock, runtimeWire(1, 'avtr_initial'))
+    const older = module.refresh()
+    const newer = module.refresh()
+
+    mock.rejectPending(2, new Error('newer request failed'))
+    await newer
+    const afterNewerFailure = runtimeState(module)
+
+    mock.resolvePending(1, runtimeWire(2, 'avtr_superseded'))
+    await older
+
+    expect(runtimeState(module)).toEqual(afterNewerFailure)
+  })
+
   it('treats runtime events as invalidation hints and makes one subscription', async () => {
     const mock = new RuntimeMock()
     const module = await startWith(mock, runtimeWire(1, 'avtr_initial'))
@@ -219,5 +251,15 @@ function defaultOscWire(): RuntimeOscWire {
     hasTarget: true,
     targetMode: 'auto',
     target: {host: '192.0.2.5', port: 9001},
+  }
+}
+
+function runtimeState(module: ReturnType<typeof createRuntimeModule>) {
+  return {
+    status: module.state.status,
+    snapshot: module.state.snapshot,
+    revision: module.state.revision,
+    updatedAt: module.state.updatedAt,
+    problem: module.state.problem,
   }
 }
