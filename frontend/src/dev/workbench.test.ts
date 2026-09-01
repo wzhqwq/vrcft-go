@@ -1,13 +1,9 @@
 import {render, screen} from '@testing-library/svelte';
-import {beforeAll, describe, expect, it} from 'vitest';
+import {describe, expect, it} from 'vitest';
 
-let ComponentWorkbench: typeof import('./ComponentWorkbench.svelte').default;
+import ComponentWorkbench from './ComponentWorkbench.svelte';
 
 describe('ComponentWorkbench', () => {
-  beforeAll(async () => {
-    ({default: ComponentWorkbench} = await import('./ComponentWorkbench.svelte'));
-  });
-
   it('catalogues normal, focus, disabled, loading, empty, error, long-text, and narrow fixtures', () => {
     render(ComponentWorkbench);
 
