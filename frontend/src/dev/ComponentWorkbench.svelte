@@ -2,7 +2,10 @@
   import {Button, TextField} from '../lib/components/ui/index.js';
   import {
     AvatarSummary,
+    DetailList,
     EmptyState,
+    FormRow,
+    FormSection,
     OSCSummary,
     PluginCard,
     ProblemBanner,
@@ -54,6 +57,16 @@
   <section class="grid min-w-0 gap-3" aria-labelledby="fixture-error">
     <h2 class="text-lg font-semibold text-text" id="fixture-error">错误</h2>
     <ProblemBanner title="无法保存设置" detail="请检查输入后重试。" tone="danger" diagnosticCode="validation" />
+  </section>
+
+  <section class="grid min-w-0 gap-3" aria-labelledby="fixture-form-patterns">
+    <h2 class="text-lg font-semibold text-text" id="fixture-form-patterns">表单和详细信息</h2>
+    <FormSection title="工作台表单">
+      <FormRow label="本地地址" description="用于本机 OSC 输出。">
+        <TextField label="本地地址" value="127.0.0.1" />
+      </FormRow>
+    </FormSection>
+    <DetailList items={[{label: '输出端口', value: '9000'}]} />
   </section>
 
   <section class="grid min-w-0 gap-3" aria-labelledby="fixture-long-text">

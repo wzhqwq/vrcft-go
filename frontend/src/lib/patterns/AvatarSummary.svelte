@@ -4,17 +4,20 @@
   type Props = {
     name: string;
     id: string;
+    summaryId?: string;
     loading?: boolean;
     error?: string;
     onCopyId?: (id: string) => void;
   };
 
-  let {name, id, loading = false, error, onCopyId}: Props = $props();
+  const generatedSummaryId = globalThis.crypto?.randomUUID?.() ?? `avatar-summary-${Math.random().toString(36).slice(2)}`;
+  let {name, id, summaryId = generatedSummaryId, loading = false, error, onCopyId}: Props = $props();
+  let titleId = $derived(`${summaryId}-title`);
 </script>
 
-<section class="surface-card grid min-w-0 gap-3" aria-labelledby="avatar-summary-title">
+<section class="surface-card grid min-w-0 gap-3" aria-labelledby={titleId}>
   <div class="flex min-w-0 items-center justify-between gap-3">
-    <h2 class="min-w-0 font-semibold text-text" id="avatar-summary-title">当前 Avatar</h2>
+    <h2 class="min-w-0 font-semibold text-text" id={titleId}>当前 Avatar</h2>
     <Button label="复制 Avatar ID" tone="secondary" onclick={() => onCopyId?.(id)} />
   </div>
   {#if loading}

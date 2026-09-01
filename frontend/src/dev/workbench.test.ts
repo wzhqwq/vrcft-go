@@ -5,7 +5,6 @@ let ComponentWorkbench: typeof import('./ComponentWorkbench.svelte').default;
 
 describe('ComponentWorkbench', () => {
   beforeAll(async () => {
-    Object.assign(globalThis, {__COMPONENT_WORKBENCH__: true});
     ({default: ComponentWorkbench} = await import('./ComponentWorkbench.svelte'));
   });
 
@@ -16,5 +15,8 @@ describe('ComponentWorkbench', () => {
       expect(screen.getByRole('heading', {name: fixture})).toBeVisible();
     }
     expect(screen.getByTestId('workbench-320px')).toHaveClass('w-80');
+    expect(screen.getByRole('region', {name: '工作台表单'})).toBeVisible();
+    expect(screen.getByRole('textbox', {name: '本地地址'})).toBeVisible();
+    expect(screen.getByText('输出端口')).toBeVisible();
   });
 });

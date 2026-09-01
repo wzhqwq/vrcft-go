@@ -3,6 +3,7 @@
 
   export interface OSCSummaryProps {
     state: 'not_running' | 'discovering' | 'discovered' | 'manual' | 'error';
+    id?: string;
     host?: string;
     port?: number;
     error?: string;
@@ -23,13 +24,15 @@
     error: 'danger',
   };
 
-  let {state, host, port, error}: OSCSummaryProps = $props();
+  const generatedId = globalThis.crypto?.randomUUID?.() ?? `osc-summary-${Math.random().toString(36).slice(2)}`;
+  let {state, id = generatedId, host, port, error}: OSCSummaryProps = $props();
+  let titleId = $derived(`${id}-title`);
   let target = $derived(host && port !== undefined ? `${host}:${port}` : '未设置输出目标');
 </script>
 
-<section class="surface-card grid min-w-0 gap-3" aria-labelledby="osc-summary-title">
+<section class="surface-card grid min-w-0 gap-3" aria-labelledby={titleId}>
   <div class="flex min-w-0 items-center justify-between gap-3">
-    <h2 class="min-w-0 font-semibold text-text" id="osc-summary-title">OSC 输出</h2>
+    <h2 class="min-w-0 font-semibold text-text" id={titleId}>OSC 输出</h2>
     <Badge label={stateLabels[state]} tone={stateTones[state]} />
   </div>
   <dl class="grid min-w-0 gap-1 text-sm">

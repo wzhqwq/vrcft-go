@@ -82,6 +82,76 @@ describe('shared UI patterns', () => {
     expect(copied[0]).not.toContain('super-secret');
   });
 
+  it('replaces invalid and oversized diagnostic codes before copying', async () => {
+    const copied: string[] = [];
+    const oversizedCode = 'a'.repeat(65);
+    render(ProblemBanner, {
+      props: {
+        title: '操作失败',
+        detail: '安全摘要',
+        tone: 'danger',
+        diagnosticCode: 'invalid code',
+        onCopyDiagnostic: (diagnostic) => copied.push(diagnostic),
+      },
+    });
+    render(ProblemBanner, {
+      props: {
+        title: '操作失败',
+        detail: '安全摘要',
+        tone: 'danger',
+        diagnosticCode: oversizedCode,
+        onCopyDiagnostic: (diagnostic) => copied.push(diagnostic),
+      },
+    });
+
+    for (const button of screen.getAllByRole('button', {name: '复制诊断信息'})) {
+      await fireEvent.click(button);
+    }
+
+    expect(copied).toEqual(['问题代码：unknown', '问题代码：unknown']);
+  });
+
+  it('generates distinct ARIA label targets for repeated pattern instances', () => {
+    const content = createRawSnippet(() => ({render: () => '<span>表单内容</span>'}));
+    const cases = [
+      () => render(AvatarSummary, {props: {name: '一号', id: 'avtr_one'}}),
+      () => render(OSCSummary, {props: {state: 'manual', host: '127.0.0.1', port: 9000}}),
+      () => render(EmptyState, {props: {title: '空状态'}}),
+      () => render(ProblemBanner, {props: {title: '问题', detail: '安全摘要', tone: 'warning'}}),
+      () => render(FormSection, {props: {title: '表单', children: content}}),
+    ];
+
+    for (const createInstance of cases) {
+      const first = createInstance();
+      const second = createInstance();
+      const targets = [
+        first.container.querySelector('section')?.getAttribute('aria-labelledby'),
+        second.container.querySelector('section')?.getAttribute('aria-labelledby'),
+      ];
+      expect(new Set(targets).size).toBe(2);
+    }
+  });
+
+  it('uses caller-supplied IDs as stable ARIA label targets', () => {
+    const content = createRawSnippet(() => ({render: () => '<span>表单内容</span>'}));
+    const avatar = render(AvatarSummary, {props: {name: '一号', id: 'avtr_one', summaryId: 'avatar-summary-one'}});
+    const osc = render(OSCSummary, {props: {id: 'osc-one', state: 'manual', host: '127.0.0.1', port: 9000}});
+    const empty = render(EmptyState, {props: {id: 'empty-one', title: '空状态'}});
+    const problem = render(ProblemBanner, {props: {id: 'problem-one', title: '问题', detail: '安全摘要', tone: 'warning'}});
+    const form = render(FormSection, {props: {id: 'form-one', title: '表单', children: content}});
+
+    const expectStableId = (container: HTMLElement, expected: string) => {
+      expect(container.querySelector('section')).toHaveAttribute('aria-labelledby', expected);
+      expect(container.querySelector(`#${expected}`)).toBeInTheDocument();
+    };
+
+    expectStableId(avatar.container, 'avatar-summary-one-title');
+    expectStableId(osc.container, 'osc-one-title');
+    expectStableId(empty.container, 'empty-one-title');
+    expectStableId(problem.container, 'problem-one-title');
+    expectStableId(form.container, 'form-one-title');
+  });
+
   it('renders empty content, labelled form content, and details without product data dependencies', () => {
     const content = createRawSnippet(() => ({render: () => '<input aria-label="显示名称" />'}));
     render(EmptyState, {props: {title: '没有可用插件', description: '安装插件后会显示在这里。'}});
