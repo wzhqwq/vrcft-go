@@ -150,7 +150,7 @@ export function createPluginsModule(port: PluginsPort): PluginsModule {
       const result = await port.setEnabled(pluginId, enabled)
       if (disposed) return
 
-      if (result.pluginId !== pluginId || !acceptRevision(data.revision ?? -1, result.revision)) {
+      if (result.pluginId !== pluginId || !isSafeRevision(result.revision)) {
         setCommandProblem(pluginId, internalProblem())
         return
       }
@@ -159,8 +159,10 @@ export function createPluginsModule(port: PluginsPort): PluginsModule {
         return
       }
 
-      data.revision = result.revision
-      data.updatedAt = result.updatedAt
+      if (acceptRevision(data.revision ?? -1, result.revision)) {
+        data.revision = result.revision
+        data.updatedAt = result.updatedAt
+      }
       await refresh()
     } catch {
       if (!disposed) setCommandProblem(pluginId, internalProblem())
@@ -195,4 +197,8 @@ function internalProblem(): ProblemView {
 
 function freezeProblem(problem: ProblemView): ProblemView {
   return Object.freeze(problem)
+}
+
+function isSafeRevision(revision: number): boolean {
+  return Number.isSafeInteger(revision) && revision >= 0
 }

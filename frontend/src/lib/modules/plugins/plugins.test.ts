@@ -111,6 +111,21 @@ describe('plugin selection', () => {
     expect(result.items.map((item) => item.id)).toEqual(['crashed', 'backoff', 'healthy', 'healthy-2'])
   })
 
+  it('classifies every public terminal diagnostic state as failed without relying on lastError', () => {
+    const states = [
+      plugin('running', {name: 'A healthy', state: 'running', lastError: undefined}),
+      plugin('backoff', {name: 'A recovery', state: 'backoff', lastError: undefined}),
+      plugin('unresponsive', {name: 'Zulu failed', state: 'unresponsive', lastError: undefined}),
+      plugin('incompatible', {name: 'Alpha failed', state: 'incompatible', lastError: undefined}),
+      plugin('crashed', {name: 'Beta failed', state: 'crashed', lastError: undefined}),
+    ]
+
+    expect(selectPlugins(states, {query: '', filter: 'all', page: 1, pageSize: 24}).items.map((x) => x.id))
+      .toEqual(['incompatible', 'crashed', 'unresponsive', 'backoff', 'running'])
+    expect(selectPlugins(states, {query: '', filter: 'problem', page: 1, pageSize: 24}).items.map((x) => x.id))
+      .toEqual(['incompatible', 'crashed', 'unresponsive', 'backoff'])
+  })
+
   it('searches names and IDs case-insensitively and applies every filter', () => {
     expect(selectPlugins(fixtures, {query: 'ALP', filter: 'all', page: 1, pageSize: 24}).items.map((x) => x.id))
       .toEqual(['backoff'])
@@ -266,17 +281,62 @@ describe('Plugins module', () => {
     expect(module.state.pendingIds.has('eye')).toBe(false)
   })
 
-  it('rejects mismatched or unsafe mutation responses without refreshing', async () => {
+  it('refreshes once for each different-ID success that resolves newer-first and older-later', async () => {
     const mock = new PluginsMock()
-    const module = await startWith(mock, listWire(3, [plugin('eye')]))
+    const module = await startWith(mock, listWire(1, [plugin('eye'), plugin('lip')]))
+    const eye = module.setEnabled('eye', false)
+    const lip = module.setEnabled('lip', false)
+
+    mock.mutationPending[1]?.resolve(mutationWire(3, 'lip'))
+    await vi.waitFor(() => expect(mock.listCalls).toBe(2))
+    mock.listPending[1]?.resolve(listWire(3, [plugin('eye'), plugin('lip', {enabled: false})]))
+    await lip
+
+    mock.mutationPending[0]?.resolve(mutationWire(2, 'eye'))
+    await vi.waitFor(() => expect(mock.listCalls).toBe(3))
+    mock.listPending[2]?.resolve(listWire(4, [plugin('eye', {enabled: false}), plugin('lip', {enabled: false})]))
+    await eye
+
+    expect(mock.listCalls).toBe(3)
+    expect(module.state.revision).toBe(4)
+    expect([...module.state.pendingIds]).toEqual([])
+    expect([...module.state.problems]).toEqual([])
+  })
+
+  it('refreshes once when a valid mutation response is older than an accepted list revision', async () => {
+    const mock = new PluginsMock()
+    const module = await startWith(mock, listWire(5, [plugin('eye')]))
     const command = module.setEnabled('eye', false)
-    mock.mutationPending[0]?.resolve(mutationWire(Number.NaN, 'other'))
+    const newerList = module.refresh()
+
+    mock.listPending[1]?.resolve(listWire(7, [plugin('eye')]))
+    await newerList
+    mock.mutationPending[0]?.resolve(mutationWire(6, 'eye'))
+    await vi.waitFor(() => expect(mock.listCalls).toBe(3))
+    expect(module.state.revision).toBe(7)
+    mock.listPending[2]?.resolve(listWire(8, [plugin('eye', {enabled: false})]))
     await command
 
-    expect(mock.listCalls).toBe(1)
-    expect(module.state.problems.get('eye')).toMatchObject({code: 'internal'})
-    expect(module.state.revision).toBe(3)
+    expect(mock.listCalls).toBe(3)
+    expect(module.state.revision).toBe(8)
+    expect(module.state.problems.has('eye')).toBe(false)
+    expect(module.state.pendingIds.has('eye')).toBe(false)
   })
+
+  it.each([
+    ['mismatched identity', mutationWire(4, 'other')],
+    ['unsafe revision', mutationWire(Number.NaN, 'eye')],
+  ])('rejects a %s mutation response without refreshing', async (_name, response) => {
+      const mock = new PluginsMock()
+      const module = await startWith(mock, listWire(3, [plugin('eye')]))
+      const command = module.setEnabled('eye', false)
+      mock.mutationPending[0]?.resolve(response)
+      await command
+
+      expect(mock.listCalls).toBe(1)
+      expect(module.state.problems.get('eye')).toMatchObject({code: 'internal'})
+      expect(module.state.revision).toBe(3)
+    })
 
   it('does not expose mutable internal arrays, sets, or maps', async () => {
     const mock = new PluginsMock()

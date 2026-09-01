@@ -1,6 +1,6 @@
 import type {PluginFilter, PluginQuery, PluginSelection, PluginSummary, PluginView} from './types.js'
 
-const failedStates = new Set(['crashed', 'error', 'failed'])
+const failedStates = new Set(['crashed', 'error', 'failed', 'unresponsive', 'incompatible'])
 const recoveryStates = new Set(['backoff', 'restarting'])
 
 export function pluginHasProblem(plugin: PluginView): boolean {
