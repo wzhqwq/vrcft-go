@@ -142,6 +142,7 @@ func runtimeApplicationDTO(status application.Status) RuntimeApplicationDTO {
 	result := RuntimeApplicationDTO{
 		Lifecycle:           boundedMessage(string(status.Lifecycle)),
 		AvatarID:            boundedMessage(status.AvatarID),
+		AvatarName:          boundedMessage(status.AvatarName),
 		PlanGeneration:      status.PlanGeneration,
 		PlanStatus:          runtimePlanStatus(status.PlanStatus),
 		PlanSource:          runtimePlanSource(status.PlanSource),

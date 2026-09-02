@@ -20,6 +20,7 @@ const (
 
 type decodedConfig struct {
 	id        string
+	name      string
 	endpoints []osc.Endpoint
 }
 
@@ -84,8 +85,10 @@ func readConfig(path string) (decodedConfig, error) {
 	if err != nil {
 		return decodedConfig{}, err
 	}
+	var name string
 	if len(document.Name) != 0 {
-		if _, err := decodeKnownString(document.Name, "name"); err != nil {
+		name, err = decodeKnownString(document.Name, "name")
+		if err != nil {
 			return decodedConfig{}, err
 		}
 	}
@@ -120,7 +123,7 @@ func readConfig(path string) (decodedConfig, error) {
 		endpoints = append(endpoints, endpoint)
 	}
 
-	return decodedConfig{id: id, endpoints: endpoints}, nil
+	return decodedConfig{id: id, name: name, endpoints: endpoints}, nil
 }
 
 func decodeConfigParameter(raw json.RawMessage, index int) (configEndpoint, bool, error) {

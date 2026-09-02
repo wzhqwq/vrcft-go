@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wzhqwq/vrcft-go/internal/application"
 	"github.com/wzhqwq/vrcft-go/internal/avatar"
@@ -69,6 +70,7 @@ func TestRuntimeAPIApplicationConversionIsBoundedOwnedAndPreservesRootState(t *t
 		UpdatedAt:           time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC),
 		Lifecycle:           application.LifecycleDegraded,
 		AvatarID:            "avtr_demo",
+		AvatarName:          "名称" + strings.Repeat("界", 300) + "\xff",
 		PlanGeneration:      9,
 		PlanStatus:          avatar.StatusReady,
 		PlanSource:          avatar.SourceFallback,
@@ -102,6 +104,9 @@ func TestRuntimeAPIApplicationConversionIsBoundedOwnedAndPreservesRootState(t *t
 	app := got.Application
 	if app == nil || app.Lifecycle != "degraded" || app.PlanStatus != "ready" || app.PlanSource != "fallback" {
 		t.Fatalf("Application enum conversion = %+v", app)
+	}
+	if app.AvatarName == "" || len(app.AvatarName) > 512 || !utf8.ValidString(app.AvatarName) {
+		t.Fatalf("AvatarName = %q, want bounded valid UTF-8 non-empty text", app.AvatarName)
 	}
 	if !app.OSC.Running || app.OSC.Connected || !app.OSC.HasTarget || app.OSC.TargetMode != "manual" || app.OSC.Target.Host != "127.0.0.1" || app.OSC.Target.Port != 9000 {
 		t.Fatalf("manual OSC conversion = %+v", app.OSC)
@@ -152,6 +157,13 @@ func TestRuntimeAPIApplicationConversionIsBoundedOwnedAndPreservesRootState(t *t
 	updates <- application.Status{Lifecycle: application.LifecycleClosed, PlanStatus: avatar.Status(255), PlanSource: avatar.Source(255)}
 	if revision := api.GetStatus().Revision; revision != afterCancel {
 		t.Fatalf("canceled status consumer changed revision: %d -> %d", afterCancel, revision)
+	}
+}
+
+func TestRuntimeAPIAvatarNameAllowsEmptyValue(t *testing.T) {
+	got := runtimeApplicationDTO(application.Status{AvatarName: ""})
+	if got.AvatarName != "" {
+		t.Fatalf("AvatarName = %q, want empty", got.AvatarName)
 	}
 }
 

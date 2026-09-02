@@ -196,6 +196,7 @@ func (c *coordinator) failRuntime(err error) {
 func (c *coordinator) publishInstallStatus(requestedAvatarID string, outcome installOutcome) {
 	c.status.update(func(status *Status) {
 		status.AvatarID = requestedAvatarID
+		status.AvatarName = ""
 		status.PlanGeneration = 0
 		status.PlanStatus = 0
 		status.PlanSource = 0
@@ -203,6 +204,7 @@ func (c *coordinator) publishInstallStatus(requestedAvatarID string, outcome ins
 		status.ConfigID = ""
 		if outcome.plan != nil {
 			status.AvatarID = outcome.plan.AvatarID()
+			status.AvatarName = outcome.plan.AvatarName()
 			status.PlanGeneration = outcome.plan.Generation()
 			status.PlanStatus = outcome.plan.Status()
 			status.PlanSource = outcome.plan.Source()

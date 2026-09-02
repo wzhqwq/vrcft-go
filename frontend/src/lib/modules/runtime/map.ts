@@ -8,7 +8,7 @@ export function mapRuntimeWire(wire: RuntimeWire): RuntimeView {
   return freezeRuntimeView({
     phase: wire.phase,
     platformSupported: wire.platformSupported,
-    avatar: {id: application?.avatarId ?? ''},
+    avatar: {id: application?.avatarId ?? '', name: application?.avatarName ?? ''},
     lifecycle: application?.lifecycle,
     plan: application === undefined ? undefined : {
       generation: application.planGeneration,

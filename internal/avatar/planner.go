@@ -135,6 +135,7 @@ func (p *Planner) Activate(avatarID string) Result {
 	return Result{Plan: newReadyPlan(
 		generation,
 		avatarID,
+		config.name,
 		config.id,
 		resolved.path,
 		resolved.source,

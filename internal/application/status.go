@@ -33,6 +33,7 @@ type Status struct {
 	Lifecycle LifecycleState
 
 	AvatarID            string
+	AvatarName          string
 	PlanGeneration      uint64
 	PlanStatus          avatar.Status
 	PlanSource          avatar.Source

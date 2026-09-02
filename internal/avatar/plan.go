@@ -26,6 +26,7 @@ type Plan struct {
 	generation uint64
 	status     Status
 	avatarID   string
+	avatarName string
 	configID   string
 	configPath string
 	source     Source
@@ -41,6 +42,8 @@ func (p *Plan) Generation() uint64 { return p.generation }
 func (p *Plan) Status() Status { return p.status }
 
 func (p *Plan) AvatarID() string { return p.avatarID }
+
+func (p *Plan) AvatarName() string { return p.avatarName }
 
 func (p *Plan) ConfigID() string { return p.configID }
 
@@ -86,11 +89,12 @@ func (p *Plan) SubscriptionFor(advertised trackingmodel.Capability) (pluginapi.S
 	return subscription.Normalize(), true
 }
 
-func newReadyPlan(generation uint64, avatarID, configID, configPath string, source Source, ids []parameters.ParameterID, catalog *osc.Catalog, evaluatorPlan *evaluator.Plan, inputs parameterdeps.Inputs) *Plan {
+func newReadyPlan(generation uint64, avatarID, avatarName, configID, configPath string, source Source, ids []parameters.ParameterID, catalog *osc.Catalog, evaluatorPlan *evaluator.Plan, inputs parameterdeps.Inputs) *Plan {
 	return &Plan{
 		generation: generation,
 		status:     StatusReady,
 		avatarID:   avatarID,
+		avatarName: avatarName,
 		configID:   configID,
 		configPath: configPath,
 		source:     source,

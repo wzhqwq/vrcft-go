@@ -66,6 +66,7 @@ function runtimeWire(
     application: {
       lifecycle: 'running',
       avatarId: avatarID,
+      avatarName: 'Demo Avatar',
       planGeneration: 4,
       planStatus: 'ready',
       planSource: 'local',
@@ -100,6 +101,13 @@ describe('Runtime module', () => {
     expect(acceptRevision(3, 2)).toBe(false)
     expect(acceptRevision(3, Number.MAX_SAFE_INTEGER + 1)).toBe(false)
     expect(acceptRevision(3, Number.NaN)).toBe(false)
+  })
+
+  it('maps the backend avatar display name without deriving one from its ID', async () => {
+    const mock = new RuntimeMock()
+    const module = await startWith(mock, runtimeWire(1, 'avtr_current', {avatarName: 'Demo Avatar'}))
+
+    expect(module.state.snapshot?.avatar).toEqual({id: 'avtr_current', name: 'Demo Avatar'})
   })
 
   it('keeps the newer accepted snapshot when an older request resolves late', async () => {

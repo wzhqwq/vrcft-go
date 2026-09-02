@@ -17,6 +17,7 @@ export interface RuntimeWire {
 export interface RuntimeApplicationWire {
   lifecycle: string
   avatarId: string
+  avatarName: string
   planGeneration: number
   planStatus: string
   planSource: string

@@ -273,6 +273,7 @@ export namespace main {
 	export class RuntimeApplicationDTO {
 	    lifecycle: string;
 	    avatarId: string;
+	    avatarName: string;
 	    planGeneration: number;
 	    planStatus: string;
 	    planSource: string;
@@ -292,6 +293,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.lifecycle = source["lifecycle"];
 	        this.avatarId = source["avatarId"];
+	        this.avatarName = source["avatarName"];
 	        this.planGeneration = source["planGeneration"];
 	        this.planStatus = source["planStatus"];
 	        this.planSource = source["planSource"];

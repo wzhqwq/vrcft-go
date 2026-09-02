@@ -479,6 +479,7 @@ type fakeInstallPlan struct {
 	generation    uint64
 	status        avatar.Status
 	avatarID      string
+	avatarName    string
 	configID      string
 	configPath    string
 	source        avatar.Source
@@ -491,6 +492,7 @@ type fakeInstallPlan struct {
 func (p *fakeInstallPlan) Generation() uint64         { return p.generation }
 func (p *fakeInstallPlan) Status() avatar.Status      { return p.status }
 func (p *fakeInstallPlan) AvatarID() string           { return p.avatarID }
+func (p *fakeInstallPlan) AvatarName() string         { return p.avatarName }
 func (p *fakeInstallPlan) ConfigID() string           { return p.configID }
 func (p *fakeInstallPlan) ConfigPath() string         { return p.configPath }
 func (p *fakeInstallPlan) Source() avatar.Source      { return p.source }

@@ -52,6 +52,7 @@ type RuntimeResponse struct {
 type RuntimeApplicationDTO struct {
 	Lifecycle           string                    `json:"lifecycle"`
 	AvatarID            string                    `json:"avatarId"`
+	AvatarName          string                    `json:"avatarName"`
 	PlanGeneration      uint64                    `json:"planGeneration"`
 	PlanStatus          string                    `json:"planStatus"`
 	PlanSource          string                    `json:"planSource"`

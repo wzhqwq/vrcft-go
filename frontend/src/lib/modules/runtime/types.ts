@@ -4,7 +4,7 @@ export type OscState = 'not_running' | 'discovering' | 'discovered' | 'manual' |
 
 export interface RuntimeAvatarView {
   readonly id: string
-  readonly name?: string
+  readonly name: string
 }
 
 export interface RuntimeOscTargetView {

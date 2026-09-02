@@ -459,6 +459,25 @@ func TestCoordinatorOSCDiagnosticsUpdateStatusWithoutOwningCatalog(t *testing.T)
 	}
 }
 
+func TestCoordinatorPublishesAvatarDisplayNameOnlyFromInstalledPlan(t *testing.T) {
+	planner := &fixedActivationPlanner{activation: activation{plan: &fakeInstallPlan{
+		generation: 1,
+		status:     avatar.StatusReady,
+		avatarID:   "avtr_demo",
+		avatarName: "Demo Avatar",
+		catalog:    &osc.Catalog{Generation: 1, Bindings: map[parameters.ParameterID]osc.ParameterBinding{}},
+		evaluator:  &evaluator.Plan{},
+	}}}
+	harness := newCoordinatorHarnessWithPlanner(t, planner)
+	before := harness.status.snapshot().Revision
+	harness.avatarChanges <- osc.AvatarChange{Revision: 1, AvatarID: "avtr_demo"}
+	harness.awaitStatusRevision(t, before+1)
+
+	if got := harness.status.snapshot().AvatarName; got != "Demo Avatar" {
+		t.Fatalf("AvatarName = %q, want %q", got, "Demo Avatar")
+	}
+}
+
 func TestCoordinatorCancellationReturnsAndStopsCallbacks(t *testing.T) {
 	harness := newCoordinatorHarness(t)
 	harness.coordinator.current = coordinatorReadyPlan(t, 7)

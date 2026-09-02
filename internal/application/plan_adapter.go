@@ -13,6 +13,7 @@ type planView interface {
 	Generation() uint64
 	Status() avatar.Status
 	AvatarID() string
+	AvatarName() string
 	ConfigID() string
 	ConfigPath() string
 	Source() avatar.Source

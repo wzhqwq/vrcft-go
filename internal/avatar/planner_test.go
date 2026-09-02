@@ -78,6 +78,34 @@ func TestPlannerCompilesAndReplacesReadyPlan(t *testing.T) {
 	}
 }
 
+func TestPlannerPropagatesOptionalDisplayNameWithoutRetainingItOnFailure(t *testing.T) {
+	const avatarID = "avtr_display_name"
+	root := filepath.Join(t.TempDir(), "OSC")
+	path := plannerAvatarPath(root, avatarID)
+	writePlannerConfig(t, path, `{"id":"avtr_display_name","name":"Demo Avatar","parameters":[]}`)
+
+	planner, err := NewPlanner(PlannerConfig{OSCRoot: root})
+	if err != nil {
+		t.Fatalf("NewPlanner() error = %v", err)
+	}
+	ready := planner.Activate(avatarID)
+	if ready.Err != nil {
+		t.Fatalf("Activate() error = %v", ready.Err)
+	}
+	if got := ready.Plan.AvatarName(); got != "Demo Avatar" {
+		t.Fatalf("AvatarName() = %q, want %q", got, "Demo Avatar")
+	}
+
+	writePlannerConfig(t, path, `{"id":`)
+	failed := planner.Activate(avatarID)
+	if !errors.Is(failed.Err, ErrInvalidJSON) {
+		t.Fatalf("failed Activate() error = %v, want ErrInvalidJSON", failed.Err)
+	}
+	if got := failed.Plan.AvatarName(); got != "" {
+		t.Fatalf("failed AvatarName() = %q, want empty", got)
+	}
+}
+
 func TestPlannerFailClosedTransitions(t *testing.T) {
 	const avatarID = "avtr_transitions"
 	root := filepath.Join(t.TempDir(), "OSC")

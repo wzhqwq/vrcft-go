@@ -201,7 +201,7 @@ func TestPlanOwnsConstructorInputsAndAccessorResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	inputs := parameterdeps.Inputs{Eye: parameterdeps.EyeFieldsOf(parameterdeps.EyeFieldLeftGazeX)}
-	plan := newReadyPlan(5, "avtr_demo", "config_demo", "C:/avatar.json", SourceAvatarConfig, ids, catalog, evaluatorPlan, inputs)
+	plan := newReadyPlan(5, "avtr_demo", "", "config_demo", "C:/avatar.json", SourceAvatarConfig, ids, catalog, evaluatorPlan, inputs)
 
 	ids[0] = parameters.ParameterJawOpen
 	catalog.Bindings[parameters.ParameterEyeLeftX] = osc.ParameterBinding{}
@@ -245,7 +245,7 @@ func TestPlanFailedAndEmptyReadyStatesAreInert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	empty := newReadyPlan(10, "avtr_empty", "config-empty", "C:/empty.json", SourceAvatarConfig, nil, &osc.Catalog{}, emptyEvaluator, parameterdeps.Inputs{})
+	empty := newReadyPlan(10, "avtr_empty", "", "config-empty", "C:/empty.json", SourceAvatarConfig, nil, &osc.Catalog{}, emptyEvaluator, parameterdeps.Inputs{})
 	if empty.Status() != StatusReady || empty.Catalog() == nil || empty.Evaluator() == nil {
 		t.Fatalf("empty ready plan = %#v", empty)
 	}

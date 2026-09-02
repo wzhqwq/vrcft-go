@@ -42,8 +42,18 @@ func TestReadConfigDecodesInputEndpoints(t *testing.T) {
 		{Address: "/avatar/parameters/v2/JawX", Type: "i"},
 		{Address: "/avatar/parameters/v2/EyeTrackingActive", Type: "T"},
 	}
-	if got.id != "avtr_demo" || !reflect.DeepEqual(got.endpoints, want) {
+	if got.id != "avtr_demo" || got.name != "Demo" || !reflect.DeepEqual(got.endpoints, want) {
 		t.Fatalf("decoded = %#v", got)
+	}
+}
+
+func TestReadConfigAllowsOmittedName(t *testing.T) {
+	got, err := readConfig(writeConfig(t, `{"id":"avtr_demo","parameters":[]}`))
+	if err != nil {
+		t.Fatalf("readConfig() error = %v", err)
+	}
+	if got.name != "" {
+		t.Fatalf("name = %q, want empty for omitted name", got.name)
 	}
 }
 
