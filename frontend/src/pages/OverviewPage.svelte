@@ -65,6 +65,7 @@
       {/if}
 
       <ResponsiveGrid>
+        <StatusCard title="应用阶段" detail={runtime.state.snapshot.phase} tone="success" />
         <AvatarSummary
           name={runtime.state.snapshot.avatar.name}
           id={runtime.state.snapshot.avatar.id}
@@ -101,7 +102,43 @@
           <StatusCard title="Avatar 计划" detail="尚未生成可用计划。" tone="warning" />
         {/if}
 
-        <StatusCard title="插件概览" detail={pluginSummary()} tone={plugins.state.summary.problem > 0 ? 'warning' : 'success'} />
+        <div class="grid min-w-0 gap-3">
+          {#if plugins.state.status === 'loading'}
+            <StatusCard title="插件概览" loading loadingLabel="正在读取插件概览" />
+          {:else if plugins.state.snapshot === null}
+            {#if plugins.state.problem}
+              <ProblemBanner
+                title={plugins.state.problem.title}
+                detail={plugins.state.problem.detail}
+                tone={plugins.state.problem.tone}
+                diagnosticCode={plugins.state.problem.code}
+              />
+            {/if}
+            <EmptyState title="暂无可显示的插件概览" description="插件列表可用后会在这里显示汇总信息。" />
+          {:else}
+            {#if plugins.state.status === 'stale' && plugins.state.problem}
+              <ProblemBanner
+                title="数据可能已过期"
+                detail={plugins.state.problem.detail}
+                tone="warning"
+                diagnosticCode={plugins.state.problem.code}
+              />
+            {:else if plugins.state.status === 'problem' && plugins.state.problem}
+              <ProblemBanner
+                title={plugins.state.problem.title}
+                detail={plugins.state.problem.detail}
+                tone={plugins.state.problem.tone}
+                diagnosticCode={plugins.state.problem.code}
+              />
+            {/if}
+
+            {#if plugins.state.snapshot.plugins.length === 0}
+              <EmptyState title="没有已发现的插件" description="发现或安装插件后，会在这里显示其状态。" />
+            {:else}
+              <StatusCard title="插件概览" detail={pluginSummary()} tone={plugins.state.summary.problem > 0 ? 'warning' : 'success'} />
+            {/if}
+          {/if}
+        </div>
       </ResponsiveGrid>
 
       {#if runtime.state.snapshot.pluginFailures.length > 0}
