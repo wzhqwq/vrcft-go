@@ -115,6 +115,19 @@ describe('OverviewPage', () => {
     expect(screen.getByText('没有已发现的插件')).toBeVisible()
   })
 
+  it('retains the plugins summary and runtime failures for a current Plugins Problem', async () => {
+    const runtime = createRuntimeFixture(runtimeState())
+    const plugins = pluginsFixture()
+    render(OverviewPage, {props: {runtime: runtime.module, plugins: plugins.module}})
+
+    plugins.setState(pluginsState({status: 'problem', problem: unavailableProblem}))
+    await tick()
+
+    expect(screen.getByText('当前功能暂不可用')).toBeVisible()
+    expect(screen.getByText(/3 个插件/)).toBeVisible()
+    expect(screen.getByText('Eye Tracker 启动失败')).toBeVisible()
+  })
+
   it.each([
     ['not_running', '未启动'], ['discovering', '正在发现'], ['discovered', '自动发现'], ['manual', '手动目标'], ['error', '发现出错'],
   ] as const)('renders the %s OSC discovery label', (state, label) => {

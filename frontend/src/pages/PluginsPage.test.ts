@@ -120,4 +120,23 @@ describe('PluginsPage', () => {
     expect(screen.getByText('Eye Tracker')).toBeVisible()
     expect(screen.getByText(/共 1 个插件/)).toBeVisible()
   })
+
+  it('retains plugin cards and summary for a current Plugins Problem', async () => {
+    const retained = plugin('eye')
+    const injected = fixture(state({
+      snapshot: {plugins: [retained]}, visiblePlugins: [retained], pageCount: 1, filteredTotal: 1,
+      summary: {total: 1, enabled: 1, active: 1, problem: 0},
+    }))
+    render(PluginsPage, {props: {plugins: injected.module}})
+
+    injected.setState(state({
+      status: 'problem', snapshot: {plugins: [retained]}, visiblePlugins: [retained], pageCount: 1, filteredTotal: 1,
+      summary: {total: 1, enabled: 1, active: 1, problem: 0}, problem: unavailableProblem,
+    }))
+    await tick()
+
+    expect(screen.getByText('当前功能暂不可用')).toBeVisible()
+    expect(screen.getByText('Eye Tracker')).toBeVisible()
+    expect(screen.getByText(/共 1 个插件/)).toBeVisible()
+  })
 })
