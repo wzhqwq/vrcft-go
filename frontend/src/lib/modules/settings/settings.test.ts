@@ -229,6 +229,68 @@ describe('Settings module', () => {
     expect(module.state.problem).toMatchObject({detail: 'general', field: 'future.field'})
   })
 
+  it.each([
+    ['absent', {code: 'validation', message: 'general failure'}],
+    ['unknown', {code: 'validation', message: 'future failure', field: 'future.field'}],
+  ] as const)('keeps a backend Problem with an %s field general during field validation', async (_name, problem) => {
+    const mock = new SettingsMock()
+    const module = await startWith(mock, getWire(2))
+    const validating = module.validate('avatar.oscRoot')
+    mock.validationPending[0]?.resolve(validationWire(2, candidate(), problem))
+
+    expect(await validating).toBe(false)
+    expect(module.state.fieldProblems.has('avatar.oscRoot')).toBe(false)
+    expect(module.state.problem).toMatchObject({detail: problem.message, field: 'field' in problem ? problem.field : undefined})
+  })
+
+  it('clears old draft field Problems on clean replacement but preserves them with a dirty draft', async () => {
+    const cleanMock = new SettingsMock()
+    const clean = await startWith(cleanMock, getWire(2))
+    const cleanValidation = clean.validate('avatar.oscRoot')
+    cleanMock.validationPending[0]?.resolve(validationWire(2, candidate(), {
+      code: 'validation', message: 'old clean error', field: 'avatar.oscRoot',
+    }))
+    await cleanValidation
+    expect(clean.state.fieldProblems.has('avatar.oscRoot')).toBe(true)
+    const cleanRefresh = clean.refresh()
+    cleanMock.getPending[1]?.resolve(getWire(3, candidate({avatar: {oscRoot: 'C:\\fresh', fallbackPath: ''}})))
+    await cleanRefresh
+    expect(clean.state.fieldProblems.size).toBe(0)
+
+    const dirtyMock = new SettingsMock()
+    const dirty = await startWith(dirtyMock, getWire(2))
+    dirty.updateDraft((draft) => { draft.avatar.fallbackPath = 'C:\\mine.json' })
+    const dirtyValidation = dirty.validate('avatar.oscRoot')
+    dirtyMock.validationPending[0]?.resolve(validationWire(2, candidate(), {
+      code: 'validation', message: 'draft error', field: 'avatar.oscRoot',
+    }))
+    await dirtyValidation
+    const dirtyRefresh = dirty.refresh()
+    dirtyMock.getPending[1]?.resolve(getWire(3, candidate({avatar: {oscRoot: 'C:\\fresh', fallbackPath: ''}})))
+    await dirtyRefresh
+    expect(dirty.state.fieldProblems.get('avatar.oscRoot')).toMatchObject({detail: 'draft error'})
+    expect(dirty.state.draft?.avatar.fallbackPath).toBe('C:\\mine.json')
+  })
+
+  it('ignores a stale validation response after an authoritative dirty-draft refresh', async () => {
+    const mock = new SettingsMock()
+    const module = await startWith(mock, getWire(2))
+    module.updateDraft((draft) => { draft.avatar.fallbackPath = 'C:\\mine.json' })
+    const validating = module.validate('avatar.oscRoot')
+    mock.emit({})
+    mock.getPending[1]?.resolve(getWire(3, candidate({avatar: {oscRoot: 'C:\\new-server', fallbackPath: ''}})))
+    await vi.waitFor(() => expect(module.state.revision).toBe(3))
+    mock.validationPending[0]?.resolve(validationWire(2, candidate(), {
+      code: 'validation', message: 'stale validation', field: 'avatar.oscRoot',
+    }))
+
+    expect(await validating).toBe(false)
+    expect(module.state).toMatchObject({revision: 3, problem: null, conflict: true})
+    expect(module.state.fieldProblems.size).toBe(0)
+    expect(module.state.server?.avatar.oscRoot).toBe('C:\\new-server')
+    expect(module.state.draft?.avatar.fallbackPath).toBe('C:\\mine.json')
+  })
+
   it('blocks invalid or pending saves and revalidates before saving the exact owned candidate', async () => {
     const mock = new SettingsMock()
     const module = await startWith(mock, getWire(7))
@@ -246,6 +308,22 @@ describe('Settings module', () => {
     mock.savePending[0]?.resolve(saveWire(8, mock.saveCalls[0]!.candidate, true))
     expect(await saving).toBe(true)
     expect(module.state).toMatchObject({dirty: false, saving: false, restartRequired: true})
+  })
+
+  it('does not persist a superseded candidate when the draft changes during save validation', async () => {
+    const mock = new SettingsMock()
+    const module = await startWith(mock, getWire(7))
+    module.updateDraft((draft) => { draft.avatar.fallbackPath = 'C:\\first-edit.json' })
+    const saving = module.save()
+    expect(mock.validateCalls[0]?.avatar.fallbackPath).toBe('C:\\first-edit.json')
+
+    module.updateDraft((draft) => { draft.avatar.fallbackPath = 'C:\\newer-edit.json' })
+    mock.validationPending[0]?.resolve(validationWire(7, mock.validateCalls[0]!))
+
+    expect(await saving).toBe(false)
+    expect(mock.saveCalls).toHaveLength(0)
+    expect(module.state.draft?.avatar.fallbackPath).toBe('C:\\newer-edit.json')
+    expect(module.state).toMatchObject({dirty: true, saving: false})
   })
 
   it('preserves the draft on backend validation/save conflict and on save failure', async () => {

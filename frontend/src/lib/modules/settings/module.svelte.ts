@@ -135,16 +135,18 @@ export function createSettingsModule(port: SettingsPort): SettingsModule {
     data.revision = wire.revision
     data.fileRevision = wire.fileRevision
     data.updatedAt = wire.updatedAt
-    applyBackendProblem(wire.problem)
-    data.status = wire.problem == null ? 'ready' : 'problem'
     if (replaceDraft || data.draft === null || !wasDirty) {
       data.draft = immutableCandidate(wire.settings)
       draftVersion += 1
       data.conflict = false
-      if (replaceDraft) data.fieldProblems = []
+      data.fieldProblems = []
+      data.problem = null
     } else if (changedAuthoritatively) {
       data.conflict = true
     }
+    if (wire.problem != null) applyBackendProblem(wire.problem)
+    else if (!wasDirty || replaceDraft || data.problem?.code !== 'validation') data.problem = null
+    data.status = wire.problem == null ? 'ready' : 'problem'
   }
 
   async function validateDraft(field?: SettingsField): Promise<boolean> {
@@ -161,17 +163,18 @@ export function createSettingsModule(port: SettingsPort): SettingsModule {
     try {
       const response = await port.validate(candidate)
       if (disposed || request !== nextValidation || version !== draftVersion) return false
-      if (!isAcceptableRevision(response.revision)) {
+      if (!isSafeRevision(response.revision)) {
         data.problem = internalProblem()
         return false
       }
+      if (data.revision !== null && response.revision < data.revision) return false
       if (response.problem == null) {
         if (field === undefined) data.fieldProblems = []
         else replaceOneFieldProblem(field, undefined)
         data.problem = null
         return true
       }
-      applyValidationProblem(response.problem, field)
+      applyValidationProblem(response.problem)
       return false
     } catch {
       if (disposed || request !== nextValidation || version !== draftVersion) return false
@@ -191,7 +194,7 @@ export function createSettingsModule(port: SettingsPort): SettingsModule {
     let normalized: SettingsCandidate
     try {
       const response = await port.validate(cloneCandidate(draft))
-      if (disposed || validationRequest !== nextValidation) return false
+      if (disposed || validationRequest !== nextValidation || version !== draftVersion) return false
       if (!isSafeRevision(response.revision) || response.revision !== expectedRevision) {
         data.problem = internalProblem()
         return false
@@ -273,13 +276,10 @@ export function createSettingsModule(port: SettingsPort): SettingsModule {
     if (problem.code === 'conflict') data.conflict = true
   }
 
-  function applyValidationProblem(problem: ProblemWire, requested?: SettingsField) {
+  function applyValidationProblem(problem: ProblemWire) {
     const presented = freezeProblem(presentProblem(problem))
     if (isSettingsField(problem.field)) {
       replaceOneFieldProblem(problem.field, presented)
-      data.problem = null
-    } else if (requested !== undefined) {
-      replaceOneFieldProblem(requested, presented)
       data.problem = null
     } else {
       data.problem = presented
