@@ -45,6 +45,9 @@ export function validateCandidate(candidate: SettingsCandidate): Map<SettingsFie
     add(problems, 'osc.targetMode', 'OSC 目标模式必须是自动或手动。')
   }
   if (candidate.osc.targetMode === 'manual') {
+    if (candidate.osc.preferredService.trim() !== '') {
+      add(problems, 'osc.preferredService', '手动模式不能设置首选发现服务。')
+    }
     if (candidate.osc.manualHost.trim() === '') add(problems, 'osc.manualHost', '手动模式需要目标主机。')
     if (!Number.isInteger(candidate.osc.manualPort) || candidate.osc.manualPort < 1 || candidate.osc.manualPort > 65535) {
       add(problems, 'osc.manualPort', '端口必须是 1 到 65535 之间的整数。')

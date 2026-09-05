@@ -127,13 +127,13 @@ describe('settings candidates and fields', () => {
       avatar: {oscRoot: ' ', fallbackPath: ''},
       plugins: {devRoots: ['C:\\one', ' ']},
       processing: {...candidate().processing, overrides: [{name: 'eye', channel: channel()}, {name: ' eye ', channel: channel()}]},
-      osc: {targetMode: 'manual', preferredService: '', manualHost: ' ', manualPort: 65536},
+      osc: {targetMode: 'manual', preferredService: 'VRChat-Client', manualHost: ' ', manualPort: 65536},
     })
     invalid.processing.defaultChannel.tuning.gain = Number.NaN
     invalid.processing.activeStaleAfterMs = Number.NaN
 
     expect([...validateCandidate(invalid).keys()].sort()).toEqual([
-      'avatar.oscRoot', 'osc.manualHost', 'osc.manualPort', 'plugins.devRoots',
+      'avatar.oscRoot', 'osc.manualHost', 'osc.manualPort', 'osc.preferredService', 'plugins.devRoots',
       'processing.activeStaleAfterMs', 'processing.defaultChannel', 'processing.overrides',
     ])
   })

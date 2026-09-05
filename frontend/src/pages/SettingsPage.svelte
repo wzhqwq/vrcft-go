@@ -197,16 +197,18 @@
               error={error('osc.targetMode')}
               onValueChange={(value) => updateDraft((next) => { next.osc.targetMode = value })}
             />
-            <TextField
-              id="osc-preferred-service"
-              label="首选发现服务"
-              value={draft.osc.preferredService}
-              error={error('osc.preferredService')}
-              disabled={draft.osc.targetMode !== 'auto'}
-              description={draft.osc.targetMode === 'auto' ? '自动模式下优先使用此发现服务。' : '仅自动模式可编辑首选发现服务。'}
-              oninput={(event) => updateDraft((next) => { next.osc.preferredService = event.currentTarget.value })}
-              onblur={() => validate('osc.preferredService')}
-            />
+            <div id="osc-preferred-service" role="group" aria-label="首选发现服务" tabindex="-1">
+              <TextField
+                id="osc-preferred-service-input"
+                label="首选发现服务"
+                value={draft.osc.preferredService}
+                error={error('osc.preferredService')}
+                disabled={draft.osc.targetMode !== 'auto'}
+                description={draft.osc.targetMode === 'auto' ? '自动模式下优先使用此发现服务。' : '仅自动模式可编辑首选发现服务。'}
+                oninput={(event) => updateDraft((next) => { next.osc.preferredService = event.currentTarget.value })}
+                onblur={() => validate('osc.preferredService')}
+              />
+            </div>
             <TextField
               id="osc-manual-host"
               label="手动主机"

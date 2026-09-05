@@ -169,7 +169,7 @@ describe('SettingsPage', () => {
     expect(settings.state.draft?.osc.manualPort).toBe(9001)
   })
 
-  it('renders and routes preferred service Problems while preserving the automatic value through manual mode', async () => {
+  it('validates enabled preferred service on blur and routes its backend Problem to the mapped target', async () => {
     const {port, settings} = await renderReady()
     const validate = vi.spyOn(settings, 'validate')
 
@@ -181,19 +181,29 @@ describe('SettingsPage', () => {
       code: 'validation', message: '首选服务不可用。', field: 'osc.preferredService',
     }))
 
-    await waitFor(() => expect(preferredService).toHaveFocus())
+    await waitFor(() => expect(document.getElementById('osc-preferred-service')).toHaveFocus())
     expect(screen.getByText('首选服务不可用。')).toBeVisible()
+    expect(preferredService).toBeEnabled()
+  })
 
-    settings.updateDraft((draft) => { draft.osc.targetMode = 'manual' })
-    const manualValidation = settings.validate('osc.preferredService')
-    port.validationPending[1]?.resolve(validation(7, candidate(), {
-      code: 'validation', message: '手动模式不能保留首选服务。', field: 'osc.preferredService',
+  it('routes a manual-mode preferred-service client error from another tab to a focusable mapped target', async () => {
+    const {port, settings} = await renderReady(candidate({
+      osc: {targetMode: 'manual', preferredService: 'VRChat-Client', manualHost: '127.0.0.1', manualPort: 9001},
     }))
-    await manualValidation
 
-    expect(screen.getByRole('tab', {name: 'OSC'})).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('textbox', {name: '首选发现服务'})).toBeDisabled()
-    expect(screen.getByText('手动模式不能保留首选服务。')).toBeVisible()
+    const checking = settings.validate('osc.preferredService')
+    expect(port.validationPending).toHaveLength(0)
+    expect(await checking).toBe(false)
+
+    await waitFor(() => expect(screen.getByRole('tab', {name: 'OSC'})).toHaveAttribute('aria-selected', 'true'))
+    const target = document.getElementById('osc-preferred-service')
+    const preferredService = screen.getByRole('textbox', {name: '首选发现服务'})
+    await waitFor(() => expect(target).toHaveFocus())
+    expect(target).toHaveAttribute('tabindex', '-1')
+    expect(preferredService).toHaveAttribute('id', 'osc-preferred-service-input')
+    expect(preferredService).toBeDisabled()
+    expect(preferredService).toHaveValue('VRChat-Client')
+    expect(screen.getByText('手动模式不能设置首选发现服务。')).toBeVisible()
     expect(settings.state.draft?.osc.preferredService).toBe('VRChat-Client')
   })
 
