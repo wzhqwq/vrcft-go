@@ -17,6 +17,7 @@
     error?: string;
     placeholder?: string;
     value?: T;
+    onValueChange?: (value: T) => void;
     id?: string;
     name?: string;
     required?: boolean;
@@ -30,6 +31,7 @@
     error,
     placeholder = '请选择',
     value = $bindable<T | undefined>(undefined),
+    onValueChange,
     id = globalThis.crypto?.randomUUID?.() ?? `field-${Math.random().toString(36).slice(2)}`,
     name,
     required = false,
@@ -43,8 +45,9 @@
 <div class="grid min-w-0 gap-1.5">
   <p class="min-w-0 font-semibold text-text" id={labelId}>{label}{#if required}<span aria-hidden="true" class="ml-1 text-text-muted">（必填）</span>{/if}</p>
   {#if description}<p class="text-sm text-text-muted" id={descriptionId}>{description}</p>{/if}
-  <Select.Root bind:value items={options} type="single" {disabled} {name} {required}>
+  <Select.Root bind:value={() => value, (next) => { value = next; if (next !== undefined) onValueChange?.(next) }} items={options} type="single" {disabled} {name} {required}>
     <Select.Trigger
+      {id}
       aria-describedby={[description && descriptionId, error && errorId].filter(Boolean).join(' ') || undefined}
       aria-invalid={error ? 'true' : undefined}
       aria-labelledby={labelId}
