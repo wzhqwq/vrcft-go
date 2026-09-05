@@ -59,7 +59,13 @@ export function createSettingsModule(port: SettingsPort): SettingsModule {
       if (disposed) return Promise.resolve()
       if (started) return startPromise ?? Promise.resolve()
       started = true
-      stop = port.onChanged(() => { void refresh() })
+      try {
+        stop = port.onChanged(() => { void refresh() })
+      } catch {
+        markLoadFailure()
+        startPromise = Promise.resolve()
+        return startPromise
+      }
       startPromise = refresh()
       return startPromise
     },

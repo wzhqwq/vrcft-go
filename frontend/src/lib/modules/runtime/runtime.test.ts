@@ -189,6 +189,25 @@ describe('Runtime module', () => {
     })
   })
 
+  it('owns a synchronous subscription failure as an idempotent no-data problem', async () => {
+    const mock = new RuntimeMock()
+    vi.spyOn(mock, 'onChanged').mockImplementation(() => {
+      mock.subscriptionCalls += 1
+      throw new Error('subscription unavailable')
+    })
+    const module = createRuntimeModule(mock)
+
+    await expect(module.start()).resolves.toBeUndefined()
+    await module.start()
+    module.dispose()
+    module.dispose()
+
+    expect(mock.subscriptionCalls).toBe(1)
+    expect(mock.getStatusCalls).toBe(0)
+    expect(mock.stopCalls).toBe(0)
+    expect(module.state).toMatchObject({status: 'problem', snapshot: null, problem: {code: 'internal'}})
+  })
+
   it('retains its last snapshot and marks it stale when a later refresh fails', async () => {
     const mock = new RuntimeMock()
     const module = await startWith(mock, runtimeWire(7, 'avtr_kept'))

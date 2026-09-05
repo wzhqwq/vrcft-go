@@ -211,6 +211,25 @@ describe('Plugins module', () => {
     expect(module.state.snapshot?.plugins[0]?.id).toBe('kept')
   })
 
+  it('owns a synchronous subscription failure as an idempotent no-data problem', async () => {
+    const mock = new PluginsMock()
+    vi.spyOn(mock, 'onChanged').mockImplementation(() => {
+      mock.subscriptionCalls += 1
+      throw new Error('subscription unavailable')
+    })
+    const module = createPluginsModule(mock)
+
+    await expect(module.start()).resolves.toBeUndefined()
+    await module.start()
+    module.dispose()
+    module.dispose()
+
+    expect(mock.subscriptionCalls).toBe(1)
+    expect(mock.listCalls).toBe(0)
+    expect(mock.stopCalls).toBe(0)
+    expect(module.state).toMatchObject({status: 'problem', snapshot: null, problem: {code: 'internal'}})
+  })
+
   it('resets page one on query/filter changes and exposes a derived summary', async () => {
     const mock = new PluginsMock()
     const entries = [

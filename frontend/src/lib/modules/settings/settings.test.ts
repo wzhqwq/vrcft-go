@@ -140,6 +140,25 @@ describe('settings candidates and fields', () => {
 })
 
 describe('Settings module', () => {
+  it('owns a synchronous subscription failure as an idempotent no-data problem', async () => {
+    const mock = new SettingsMock()
+    vi.spyOn(mock, 'onChanged').mockImplementation(() => {
+      mock.subscriptionCalls += 1
+      throw new Error('subscription unavailable')
+    })
+    const module = createSettingsModule(mock)
+
+    await expect(module.start()).resolves.toBeUndefined()
+    await module.start()
+    module.dispose()
+    module.dispose()
+
+    expect(mock.subscriptionCalls).toBe(1)
+    expect(mock.getCalls).toBe(0)
+    expect(mock.stopCalls).toBe(0)
+    expect(module.state).toMatchObject({status: 'problem', server: null, draft: null, problem: {code: 'internal'}})
+  })
+
   it('deep-clones immutable server/draft state and computes semantic dirty equality', async () => {
     const mock = new SettingsMock()
     const source = candidate()

@@ -76,9 +76,15 @@ export function createRuntimeModule(port: RuntimePort): RuntimeModule {
       }
 
       started = true
-      stop = port.onChanged(() => {
-        void refresh()
-      })
+      try {
+        stop = port.onChanged(() => {
+          void refresh()
+        })
+      } catch {
+        rejectInvalidRevision(nextRequest)
+        startPromise = Promise.resolve()
+        return startPromise
+      }
       startPromise = refresh()
       return startPromise
     },

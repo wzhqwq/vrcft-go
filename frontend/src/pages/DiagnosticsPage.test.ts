@@ -92,14 +92,26 @@ describe('DiagnosticsPage', () => {
 
   it('keeps loading, no-data, unsupported, and startup-failure states actionable per module', () => {
     renderDiagnostics({
-      runtime: runtimeState({status: 'loading', snapshot: null, revision: null, updatedAt: null, problem: null}),
+      runtime: runtimeState({snapshot: runtimeView({platformSupported: false})}),
       plugins: pluginsState({status: 'problem', snapshot: null, revision: null, updatedAt: null, problem}),
       settings: settingsState({status: 'ready', problem: null}),
     })
 
-    expect(screen.getByText('正在读取 Runtime 状态')).toBeVisible()
+    expect(screen.getByText('当前平台暂不受支持')).toBeVisible()
     expect(screen.getByText('Plugins 启动失败')).toBeVisible()
     expect(screen.getByText('Settings 尚无数据')).toBeVisible()
+  })
+
+  it('shows a generic Avatar plan-error status without exposing or copying its internal detail', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, {clipboard: {writeText}})
+    renderDiagnostics({runtime: runtimeState({snapshot: runtimeView({planError: 'internal plan failure: C:/secret.json'})})})
+
+    expect(screen.getByText('Avatar 计划需要处理')).toBeVisible()
+    expect(screen.queryByText(/internal plan failure|secret\.json/i)).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', {name: '复制诊断信息'}))
+    await waitFor(() => expect(writeText).toHaveBeenCalledOnce())
+    expect(writeText.mock.calls[0]?.[0]).not.toMatch(/internal plan failure|secret\.json/i)
   })
 
   it('copies only a bounded, explicitly constructed safe diagnostics summary', async () => {
@@ -117,5 +129,16 @@ describe('DiagnosticsPage', () => {
     expect(copied).toContain('OSC: manual 127.0.0.1:9000')
     expect(copied).not.toMatch(/sessionId|executablePath|pluginConfig|C:\/Users\/name\/AppData|计划不可用|运行时提示/i)
     expect(copied.length).toBeLessThanOrEqual(2048)
+  })
+
+  it('catches clipboard rejection without rendering a copied raw diagnostic', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard unavailable: sessionId=private'))
+    Object.assign(navigator, {clipboard: {writeText}})
+    renderDiagnostics()
+
+    await fireEvent.click(screen.getByRole('button', {name: '复制诊断信息'}))
+    await waitFor(() => expect(writeText).toHaveBeenCalledOnce())
+    await Promise.resolve()
+    expect(screen.queryByText(/clipboard unavailable|sessionId=private/i)).not.toBeInTheDocument()
   })
 })

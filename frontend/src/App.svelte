@@ -36,7 +36,7 @@
   let settingsPage = $state<SettingsPageHandle | null>(null)
 
   onMount(() => {
-    void Promise.all([runtime.start(), plugins.start(), settings.start()]).catch(() => undefined)
+    void Promise.all([startIndependently(runtime), startIndependently(plugins), startIndependently(settings)])
     return () => {
       runtime.dispose()
       plugins.dispose()
@@ -69,6 +69,14 @@
     pendingPage = null
     confirmationOpen = false
     if (page !== null) activePage = page
+  }
+
+  function startIndependently(module: {start(): Promise<void>}) {
+    try {
+      return Promise.resolve(module.start()).catch(() => undefined)
+    } catch {
+      return Promise.resolve()
+    }
   }
 </script>
 

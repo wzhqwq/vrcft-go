@@ -125,6 +125,9 @@
               {label: '配置', value: safeText(snapshot.plan.configId, '尚未配置')},
               {label: '代数', value: String(snapshot.plan.generation)},
             ]} />
+            {#if snapshot.planError}
+              <p class="min-w-0 break-words text-sm text-warning">Avatar 计划需要处理</p>
+            {/if}
           </section>
         {:else}
           <EmptyState title="尚未生成 Avatar 计划" description="收到 Avatar 变更后，会显示当前计划状态。" />

@@ -5,6 +5,22 @@ import App from './App.svelte'
 import type {WailsPorts} from './lib/wails/ports.js'
 import type {PluginListWire, RuntimeWire, SettingsCandidate, SettingsWire} from './lib/wails/types.js'
 
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve(value: T): void
+  reject(reason: unknown): void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+  return {promise, resolve, reject}
+}
+
 function runtimeWire(): RuntimeWire {
   return {
     revision: 1, updatedAt: '2026-09-01T00:00:00Z', phase: 'running', platformSupported: true,
@@ -59,6 +75,45 @@ async function clickNavigation(name: string) {
 }
 
 describe('App', () => {
+  it('begins all three deferred queries before any startup query resolves', async () => {
+    const {mock} = ports()
+    const runtime = deferred<RuntimeWire>()
+    const plugins = deferred<PluginListWire>()
+    const settings = deferred<SettingsWire>()
+    mock.runtime.getStatus = vi.fn(() => runtime.promise)
+    mock.plugins.list = vi.fn(() => plugins.promise)
+    mock.settings.get = vi.fn(() => settings.promise)
+    render(App, {props: {ports: mock}})
+
+    await waitFor(() => {
+      expect(mock.runtime.getStatus).toHaveBeenCalledOnce()
+      expect(mock.plugins.list).toHaveBeenCalledOnce()
+      expect(mock.settings.get).toHaveBeenCalledOnce()
+    })
+
+    runtime.resolve(runtimeWire())
+    plugins.resolve(pluginWire())
+    settings.resolve(settingsWire())
+  })
+
+  it('attempts all starts after a Runtime synchronous subscription failure and keeps Plugins and Settings usable', async () => {
+    const {mock} = ports()
+    mock.runtime.onChanged = vi.fn(() => { throw new Error('runtime subscription unavailable') })
+    render(App, {props: {ports: mock}})
+
+    await waitFor(() => {
+      expect(mock.runtime.onChanged).toHaveBeenCalledOnce()
+      expect(mock.plugins.onChanged).toHaveBeenCalledOnce()
+      expect(mock.settings.onChanged).toHaveBeenCalledOnce()
+      expect(mock.plugins.list).toHaveBeenCalledOnce()
+      expect(mock.settings.get).toHaveBeenCalledOnce()
+    })
+    await clickNavigation('插件')
+    expect(screen.getByRole('main', {name: '插件'})).toBeVisible()
+    await clickNavigation('设置')
+    expect(await screen.findByRole('textbox', {name: 'Avatar OSC 根目录'})).toBeEnabled()
+  })
+
   it('starts all independent modules concurrently even when Runtime fails', async () => {
     const {mock} = ports()
     const runtime = mock.runtime.getStatus as ReturnType<typeof vi.fn>
@@ -126,6 +181,8 @@ describe('App', () => {
 
   it('blocks beforeunload only while Settings is dirty and disposes every module subscription once', async () => {
     const {mock, stops} = ports()
+    const add = vi.spyOn(window, 'addEventListener')
+    const remove = vi.spyOn(window, 'removeEventListener')
     const view = render(App, {props: {ports: mock}})
     await screen.findByRole('main', {name: '概览'})
     const clean = new Event('beforeunload', {cancelable: true})
@@ -137,6 +194,16 @@ describe('App', () => {
     const dirty = new Event('beforeunload', {cancelable: true})
     window.dispatchEvent(dirty)
     expect(dirty.defaultPrevented).toBe(true)
+    await waitFor(() => expect(add.mock.calls.filter(([name]) => name === 'beforeunload')).toHaveLength(1))
+
+    await fireEvent.input(screen.getByRole('textbox', {name: 'Avatar OSC 根目录'}), {target: {value: 'C:\\VRChat\\OSC'}})
+    await waitFor(() => expect(remove.mock.calls.filter(([name]) => name === 'beforeunload')).toHaveLength(1))
+    const cleanAgain = new Event('beforeunload', {cancelable: true})
+    window.dispatchEvent(cleanAgain)
+    expect(cleanAgain.defaultPrevented).toBe(false)
+
+    await fireEvent.input(screen.getByRole('textbox', {name: 'Avatar OSC 根目录'}), {target: {value: 'C:\\mine-again'}})
+    await waitFor(() => expect(add.mock.calls.filter(([name]) => name === 'beforeunload')).toHaveLength(2))
 
     view.unmount()
     expect(stops.runtime).toHaveBeenCalledOnce()
@@ -145,5 +212,30 @@ describe('App', () => {
     const afterUnmount = new Event('beforeunload', {cancelable: true})
     window.dispatchEvent(afterUnmount)
     expect(afterUnmount.defaultPrevented).toBe(false)
+    expect(remove.mock.calls.filter(([name]) => name === 'beforeunload')).toHaveLength(2)
+  })
+
+  it('disposes pending module work before late query completion without a listener leak', async () => {
+    const {mock, stops} = ports()
+    const runtime = deferred<RuntimeWire>()
+    const plugins = deferred<PluginListWire>()
+    const settings = deferred<SettingsWire>()
+    mock.runtime.getStatus = vi.fn(() => runtime.promise)
+    mock.plugins.list = vi.fn(() => plugins.promise)
+    mock.settings.get = vi.fn(() => settings.promise)
+    const view = render(App, {props: {ports: mock}})
+    await waitFor(() => expect(mock.settings.get).toHaveBeenCalledOnce())
+
+    view.unmount()
+    runtime.resolve(runtimeWire())
+    plugins.reject(new Error('late plugins failure'))
+    settings.resolve(settingsWire())
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(stops.runtime).toHaveBeenCalledOnce()
+    expect(stops.plugins).toHaveBeenCalledOnce()
+    expect(stops.settings).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('main', {name: '概览'})).not.toBeInTheDocument()
   })
 })

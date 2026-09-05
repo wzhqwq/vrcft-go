@@ -115,7 +115,13 @@ export function createPluginsModule(port: PluginsPort): PluginsModule {
       if (disposed) return Promise.resolve()
       if (started) return startPromise ?? Promise.resolve()
       started = true
-      stop = port.onChanged(() => { void refresh() })
+      try {
+        stop = port.onChanged(() => { void refresh() })
+      } catch {
+        markRefreshProblem()
+        startPromise = Promise.resolve()
+        return startPromise
+      }
       startPromise = refresh()
       return startPromise
     },
