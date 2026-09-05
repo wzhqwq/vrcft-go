@@ -1,5 +1,5 @@
 <script module lang="ts">
-  export type PageId = 'overview' | 'tracking' | 'plugins' | 'settings';
+  export type PageId = 'overview' | 'plugins' | 'settings' | 'diagnostics';
 
   export interface NavigationItem {
     id: PageId;

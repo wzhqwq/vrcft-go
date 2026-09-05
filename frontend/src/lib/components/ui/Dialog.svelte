@@ -8,6 +8,7 @@
     description?: string;
     closeLabel?: string;
     open?: boolean;
+    showTrigger?: boolean;
     children?: Snippet;
   };
 
@@ -17,14 +18,17 @@
     description,
     closeLabel = '关闭',
     open = $bindable(false),
+    showTrigger = true,
     children,
   }: Props = $props();
 </script>
 
 <BitsDialog.Root bind:open>
-  <BitsDialog.Trigger class="focus-ring inline-flex min-w-0 items-center justify-center rounded-lg border border-border bg-surface-raised px-4 py-2 font-semibold text-text transition-colors hover:bg-surface">
-    {triggerLabel}
-  </BitsDialog.Trigger>
+  {#if showTrigger}
+    <BitsDialog.Trigger class="focus-ring inline-flex min-w-0 items-center justify-center rounded-lg border border-border bg-surface-raised px-4 py-2 font-semibold text-text transition-colors hover:bg-surface">
+      {triggerLabel}
+    </BitsDialog.Trigger>
+  {/if}
   <BitsDialog.Portal>
     <BitsDialog.Overlay class="fixed inset-0 z-40 bg-black/65 data-[state=closed]:opacity-0 data-[state=open]:opacity-100 motion-safe:transition-opacity" />
     <BitsDialog.Content class="fixed left-1/2 top-1/2 z-50 grid max-h-[calc(100dvh-2rem)] w-[min(32rem,calc(100%-2rem))] min-w-0 -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl border border-border bg-surface p-5 text-text shadow-xl shadow-black/40 data-[state=closed]:opacity-0 data-[state=open]:opacity-100 motion-safe:transition-opacity">
