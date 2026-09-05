@@ -114,9 +114,11 @@ describe('settings candidates and fields', () => {
       'avatar.fallbackPath': {section: 'general', control: 'avatar-fallback-path'},
       'plugins.devRoots': {section: 'general', control: 'plugin-dev-roots'},
       'processing.defaultChannel': {section: 'processing', control: 'default-channel'},
+      'processing.activeStaleAfterMs': {section: 'processing', control: 'active-stale-after'},
       'processing.overrides': {section: 'processing', control: 'channel-overrides'},
       'processing.mutualExclusion': {section: 'processing', control: 'mutual-exclusion'},
       'osc.targetMode': {section: 'osc', control: 'osc-target-mode'},
+      'osc.preferredService': {section: 'osc', control: 'osc-preferred-service'},
       'osc.manualHost': {section: 'osc', control: 'osc-manual-host'},
       'osc.manualPort': {section: 'osc', control: 'osc-manual-port'},
     })
@@ -128,10 +130,11 @@ describe('settings candidates and fields', () => {
       osc: {targetMode: 'manual', preferredService: '', manualHost: ' ', manualPort: 65536},
     })
     invalid.processing.defaultChannel.tuning.gain = Number.NaN
+    invalid.processing.activeStaleAfterMs = Number.NaN
 
     expect([...validateCandidate(invalid).keys()].sort()).toEqual([
       'avatar.oscRoot', 'osc.manualHost', 'osc.manualPort', 'plugins.devRoots',
-      'processing.defaultChannel', 'processing.overrides',
+      'processing.activeStaleAfterMs', 'processing.defaultChannel', 'processing.overrides',
     ])
   })
 })

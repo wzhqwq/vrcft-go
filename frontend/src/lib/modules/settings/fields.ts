@@ -6,9 +6,11 @@ export const fieldTargets = {
   'avatar.fallbackPath': {section: 'general', control: 'avatar-fallback-path'},
   'plugins.devRoots': {section: 'general', control: 'plugin-dev-roots'},
   'processing.defaultChannel': {section: 'processing', control: 'default-channel'},
+  'processing.activeStaleAfterMs': {section: 'processing', control: 'active-stale-after'},
   'processing.overrides': {section: 'processing', control: 'channel-overrides'},
   'processing.mutualExclusion': {section: 'processing', control: 'mutual-exclusion'},
   'osc.targetMode': {section: 'osc', control: 'osc-target-mode'},
+  'osc.preferredService': {section: 'osc', control: 'osc-preferred-service'},
   'osc.manualHost': {section: 'osc', control: 'osc-manual-host'},
   'osc.manualPort': {section: 'osc', control: 'osc-manual-port'},
 } as const
@@ -25,8 +27,11 @@ export function validateCandidate(candidate: SettingsCandidate): Map<SettingsFie
   if (candidate.plugins.devRoots.some((root) => root.trim() === '')) {
     add(problems, 'plugins.devRoots', '插件开发目录不能为空。')
   }
-  if (!finiteNumbers(candidate.processing.defaultChannel) || !Number.isFinite(candidate.processing.activeStaleAfterMs)) {
+  if (!finiteNumbers(candidate.processing.defaultChannel)) {
     add(problems, 'processing.defaultChannel', '处理参数必须是有限数字。')
+  }
+  if (!Number.isFinite(candidate.processing.activeStaleAfterMs)) {
+    add(problems, 'processing.activeStaleAfterMs', '活跃通道过期时长必须是有限数字。')
   }
   const names = candidate.processing.overrides.map((override) => override.name.trim())
   if (names.some((name) => name === '') || new Set(names).size !== names.length

@@ -152,10 +152,11 @@
               id="active-stale-after"
               label="活跃通道过期时长（毫秒）"
               value={draft.processing.activeStaleAfterMs}
+              error={error('processing.activeStaleAfterMs')}
               min={0}
               step={1}
               oninput={(event) => updateDraft((next) => { next.processing.activeStaleAfterMs = event.currentTarget.valueAsNumber })}
-              onblur={() => validate('processing.defaultChannel')}
+              onblur={() => validate('processing.activeStaleAfterMs')}
             />
             <div onfocusout={(event) => validateOnLeave('processing.defaultChannel', event)}>
               <ProcessingChannelFields
@@ -200,9 +201,11 @@
               id="osc-preferred-service"
               label="首选发现服务"
               value={draft.osc.preferredService}
+              error={error('osc.preferredService')}
               disabled={draft.osc.targetMode !== 'auto'}
               description={draft.osc.targetMode === 'auto' ? '自动模式下优先使用此发现服务。' : '仅自动模式可编辑首选发现服务。'}
               oninput={(event) => updateDraft((next) => { next.osc.preferredService = event.currentTarget.value })}
+              onblur={() => validate('osc.preferredService')}
             />
             <TextField
               id="osc-manual-host"

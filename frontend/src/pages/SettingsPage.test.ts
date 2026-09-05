@@ -1,5 +1,5 @@
 import {fireEvent, render, screen, waitFor, within} from '@testing-library/svelte'
-import {describe, expect, it} from 'vitest'
+import {describe, expect, it, vi} from 'vitest'
 
 import SettingsPage from './SettingsPage.svelte'
 import {createSettingsModule} from '../lib/modules/settings/index.js'
@@ -111,6 +111,7 @@ describe('SettingsPage', () => {
 
   it('edits the active-channel stale timeout through the processing draft and validates its owning field', async () => {
     const {port, settings} = await renderReady()
+    const validate = vi.spyOn(settings, 'validate')
 
     await fireEvent.click(screen.getByRole('tab', {name: '处理'}))
     const staleTimeout = screen.getByRole('spinbutton', {name: '活跃通道过期时长（毫秒）'})
@@ -118,7 +119,22 @@ describe('SettingsPage', () => {
     await fireEvent.blur(staleTimeout)
 
     expect(settings.state.draft?.processing.activeStaleAfterMs).toBe(2500)
+    expect(validate).toHaveBeenCalledWith('processing.activeStaleAfterMs')
     expect(port.validations.at(-1)?.processing.activeStaleAfterMs).toBe(2500)
+  })
+
+  it('renders, routes, and focuses an active stale timeout field Problem independently of default channel settings', async () => {
+    const {port, settings} = await renderReady()
+    const checking = settings.validate('processing.activeStaleAfterMs')
+    port.validationPending[0]?.resolve(validation(7, candidate(), {
+      code: 'validation', message: '活跃通道过期时长无效。', field: 'processing.activeStaleAfterMs',
+    }))
+    await checking
+
+    await waitFor(() => expect(screen.getByRole('tab', {name: '处理'})).toHaveAttribute('aria-selected', 'true'))
+    await waitFor(() => expect(screen.getByRole('spinbutton', {name: '活跃通道过期时长（毫秒）'})).toHaveFocus())
+    expect(screen.getByText('活跃通道过期时长无效。')).toBeVisible()
+    expect(document.getElementById('default-channel')).not.toHaveFocus()
   })
 
   it('validates repeated editor fields when focus leaves their owning group', async () => {
@@ -151,6 +167,34 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('textbox', {name: '手动主机'})).toHaveAccessibleDescription('仅手动模式可编辑主机和端口。')
     expect(screen.getByRole('spinbutton', {name: '手动端口'})).toHaveAccessibleDescription('仅手动模式可编辑主机和端口。')
     expect(settings.state.draft?.osc.manualPort).toBe(9001)
+  })
+
+  it('renders and routes preferred service Problems while preserving the automatic value through manual mode', async () => {
+    const {port, settings} = await renderReady()
+    const validate = vi.spyOn(settings, 'validate')
+
+    await fireEvent.click(screen.getByRole('tab', {name: 'OSC'}))
+    const preferredService = screen.getByRole('textbox', {name: '首选发现服务'})
+    await fireEvent.blur(preferredService)
+    expect(validate).toHaveBeenCalledWith('osc.preferredService')
+    port.validationPending[0]?.resolve(validation(7, candidate(), {
+      code: 'validation', message: '首选服务不可用。', field: 'osc.preferredService',
+    }))
+
+    await waitFor(() => expect(preferredService).toHaveFocus())
+    expect(screen.getByText('首选服务不可用。')).toBeVisible()
+
+    settings.updateDraft((draft) => { draft.osc.targetMode = 'manual' })
+    const manualValidation = settings.validate('osc.preferredService')
+    port.validationPending[1]?.resolve(validation(7, candidate(), {
+      code: 'validation', message: '手动模式不能保留首选服务。', field: 'osc.preferredService',
+    }))
+    await manualValidation
+
+    expect(screen.getByRole('tab', {name: 'OSC'})).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('textbox', {name: '首选发现服务'})).toBeDisabled()
+    expect(screen.getByText('手动模式不能保留首选服务。')).toBeVisible()
+    expect(settings.state.draft?.osc.preferredService).toBe('VRChat-Client')
   })
 
   it('routes a backend field Problem to its owning tab and exact focus target without dropping the draft', async () => {
