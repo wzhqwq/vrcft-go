@@ -269,6 +269,29 @@ describe('Runtime module', () => {
     expect(mock.stopCalls).toBe(1)
     expect(mock.getStatusCalls).toBe(1)
   })
+
+  it.each(['success', 'failure'] as const)('does not commit a late %s after disposal', async (outcome) => {
+    const mock = new RuntimeMock()
+    const module = createRuntimeModule(mock)
+    const unhandled = vi.fn((event: PromiseRejectionEvent) => event.preventDefault())
+    window.addEventListener('unhandledrejection', unhandled)
+    try {
+      const starting = module.start()
+      const before = runtimeState(module)
+      module.dispose()
+
+      if (outcome === 'success') mock.resolvePending(0, runtimeWire(1, 'late-avatar'))
+      else mock.rejectPending(0, new Error('late Runtime failure'))
+      await starting
+      await Promise.resolve()
+
+      expect(runtimeState(module)).toEqual(before)
+      expect(mock.stopCalls).toBe(1)
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('unhandledrejection', unhandled)
+    }
+  })
 })
 
 function defaultOscWire(): RuntimeOscWire {

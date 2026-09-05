@@ -110,6 +110,8 @@ describe('App', () => {
     })
     await clickNavigation('插件')
     expect(screen.getByRole('main', {name: '插件'})).toBeVisible()
+    expect(await screen.findByRole('searchbox', {name: '搜索插件'})).toBeVisible()
+    expect(screen.getByText('没有符合条件的插件')).toBeVisible()
     await clickNavigation('设置')
     expect(await screen.findByRole('textbox', {name: 'Avatar OSC 根目录'})).toBeEnabled()
   })

@@ -388,4 +388,35 @@ describe('Settings module', () => {
     expect(module.state.restartRequired).toBe(true)
     expect(module.state.draft?.avatar.fallbackPath).toBe('C:\\newer-edit.json')
   })
+
+  it.each(['success', 'failure'] as const)('does not commit a late %s after disposal', async (outcome) => {
+    const mock = new SettingsMock()
+    const module = createSettingsModule(mock)
+    const unhandled = vi.fn((event: PromiseRejectionEvent) => event.preventDefault())
+    window.addEventListener('unhandledrejection', unhandled)
+    try {
+      const starting = module.start()
+      const before = {
+        status: module.state.status, server: module.state.server, draft: module.state.draft,
+        revision: module.state.revision, fileRevision: module.state.fileRevision,
+        updatedAt: module.state.updatedAt, problem: module.state.problem,
+      }
+      module.dispose()
+
+      if (outcome === 'success') mock.getPending[0]?.resolve(getWire(1))
+      else mock.getPending[0]?.reject(new Error('late Settings failure'))
+      await starting
+      await Promise.resolve()
+
+      expect({
+        status: module.state.status, server: module.state.server, draft: module.state.draft,
+        revision: module.state.revision, fileRevision: module.state.fileRevision,
+        updatedAt: module.state.updatedAt, problem: module.state.problem,
+      }).toEqual(before)
+      expect(mock.stopCalls).toBe(1)
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('unhandledrejection', unhandled)
+    }
+  })
 })

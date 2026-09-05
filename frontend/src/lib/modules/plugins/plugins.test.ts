@@ -375,4 +375,33 @@ describe('Plugins module', () => {
     expect(module.state.pendingIds.has('injected')).toBe(false)
     expect(module.state.problems.has('injected')).toBe(false)
   })
+
+  it.each(['success', 'failure'] as const)('does not commit a late %s after disposal', async (outcome) => {
+    const mock = new PluginsMock()
+    const module = createPluginsModule(mock)
+    const unhandled = vi.fn((event: PromiseRejectionEvent) => event.preventDefault())
+    window.addEventListener('unhandledrejection', unhandled)
+    try {
+      const starting = module.start()
+      const before = {
+        status: module.state.status, snapshot: module.state.snapshot, revision: module.state.revision,
+        updatedAt: module.state.updatedAt, problem: module.state.problem,
+      }
+      module.dispose()
+
+      if (outcome === 'success') mock.listPending[0]?.resolve(listWire(1, [plugin('late')]))
+      else mock.listPending[0]?.reject(new Error('late Plugins failure'))
+      await starting
+      await Promise.resolve()
+
+      expect({
+        status: module.state.status, snapshot: module.state.snapshot, revision: module.state.revision,
+        updatedAt: module.state.updatedAt, problem: module.state.problem,
+      }).toEqual(before)
+      expect(mock.stopCalls).toBe(1)
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('unhandledrejection', unhandled)
+    }
+  })
 })
