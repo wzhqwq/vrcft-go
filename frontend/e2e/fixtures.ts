@@ -18,6 +18,7 @@ export async function installWailsMocks(page: Page): Promise<void> {
     const pendingPluginMutations = new Map<string, (value: unknown) => void>();
     let holdPluginID: string | null = null;
     let nextSaveConflict = false;
+    let copiedText = '';
 
     const channel = {
       calibration: {enabled: true, neutral: 0, min: -1, max: 1, gain: 1, invert: false},
@@ -30,10 +31,10 @@ export async function installWailsMocks(page: Page): Promise<void> {
         revision: 1, updatedAt: '2026-09-01T00:00:00Z', phase: 'running', platformSupported: true,
         application: {
           lifecycle: 'started', avatarId: 'avtr_authoritative', avatarName: 'Authoritative Avatar',
-          planGeneration: 7, planStatus: 'ready', planSource: 'VRChat', configPath: '',
+          planGeneration: 7, planStatus: 'ready', planSource: 'VRChat', configPath: 'C:\\RAW_CONFIG_PATH_DO_NOT_LEAK',
           configId: 'avtr_authoritative', generationExhausted: false,
           osc: {running: true, connected: true, hasTarget: true, targetMode: 'auto', target: {host: '192.168.1.10', port: 9000}},
-          pluginFailures: [],
+          pluginFailures: [], planError: 'RAW_PLAN_ERROR_DO_NOT_LEAK', runtimeError: 'RAW_RUNTIME_ERROR_DO_NOT_LEAK',
         },
       },
       plugins: {
@@ -54,7 +55,7 @@ export async function installWailsMocks(page: Page): Promise<void> {
         revision: 1, fileRevision: 1, updatedAt: '2026-09-01T00:00:00Z',
         settings: {
           avatar: {oscRoot: 'C:\\VRChat\\OSC', fallbackPath: 'C:\\VRChat\\fallback.json'},
-          plugins: {devRoots: ['C:\\plugins']},
+          plugins: {devRoots: ['C:\\RAW_PRIVATE_VALUE_DO_NOT_LEAK']},
           processing: {
             defaultChannel: channel,
             overrides: [{name: 'eye.left_gaze_x', channel}],
@@ -79,6 +80,10 @@ export async function installWailsMocks(page: Page): Promise<void> {
     const emit = (eventName: string, value: unknown) => {
       for (const listener of [...(listeners.get(eventName) ?? [])]) listener(value);
     };
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {writeText: async (text: string) => { copiedText = text; }},
+    });
 
     const runtime = {
       EventsOn: (eventName: string, callback: Listener) => subscribe(eventName, callback),
@@ -119,10 +124,17 @@ export async function installWailsMocks(page: Page): Promise<void> {
             calls.push(['SettingsAPI.Save', expectedRevision, clone(candidate)]);
             if (nextSaveConflict) {
               nextSaveConflict = false;
+              state.settings.revision = 2;
+              state.settings.fileRevision = 2;
+              state.settings.updatedAt = '2026-09-01T00:00:02Z';
+              state.settings.settings = {
+                ...state.settings.settings,
+                avatar: {...state.settings.settings.avatar, oscRoot: 'C:\\Authoritative revision 2'},
+              };
               return {
-                revision: state.settings.revision + 1, fileRevision: state.settings.fileRevision + 1, updatedAt: '2026-09-01T00:00:02Z',
+                revision: state.settings.revision, fileRevision: state.settings.fileRevision, updatedAt: state.settings.updatedAt,
                 settings: clone(state.settings.settings), restartRequired: false,
-                problem: {code: 'conflict', message: 'settings changed elsewhere', currentRevision: state.settings.revision + 1},
+                problem: {code: 'conflict', message: 'settings changed elsewhere', currentRevision: state.settings.revision},
               };
             }
             state.settings.revision += 1;
@@ -137,6 +149,7 @@ export async function installWailsMocks(page: Page): Promise<void> {
     window.runtime = runtime;
     (window as Window & {__vrcftAcceptance: unknown}).__vrcftAcceptance = {
       calls: () => clone(calls),
+      get copiedText() { return copiedText; },
       emit,
       holdPluginMutation: (pluginID: string) => { holdPluginID = pluginID; },
       resolvePluginMutation: (pluginID: string) => {

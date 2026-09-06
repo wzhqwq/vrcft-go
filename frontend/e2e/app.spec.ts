@@ -47,6 +47,16 @@ test('protects a dirty settings draft, restores dialog focus, saves, and shows r
   await page.keyboard.press('Escape');
   await expect(overview).toBeFocused();
   await expect(page.getByRole('heading', {name: '设置', exact: true})).toBeVisible();
+  await expect(oscRoot).toHaveValue('C:\\New OSC');
+  await expect(page.getByRole('region', {name: '未保存的更改'})).toBeVisible();
+
+  await overview.click();
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', {name: '放弃更改'}).click();
+  await expect(page.getByRole('heading', {name: '概览', exact: true})).toBeVisible();
+  await page.getByRole('button', {name: '设置'}).click();
+  await expect(oscRoot).toHaveValue('C:\\New OSC');
+  await expect(page.getByRole('region', {name: '未保存的更改'})).toBeVisible();
 
   await page.getByRole('button', {name: '保存更改'}).click();
   await expect(page.getByRole('status')).toHaveText('已保存，将在重启后生效');
@@ -60,18 +70,37 @@ test('keeps a dirty settings draft on conflict and offers confirmed reload', asy
   await page.evaluate(() => (window as unknown as {__vrcftAcceptance: {conflictNextSave(): void}}).__vrcftAcceptance.conflictNextSave());
   await page.getByRole('button', {name: '保存更改'}).click();
   await expect(page.getByRole('heading', {name: '设置已在其他位置更新'})).toBeVisible();
+  await expect(oscRoot).toHaveValue('C:\\Conflict OSC');
+  await expect(page.getByRole('region', {name: '未保存的更改'})).toBeVisible();
+  const getsBeforeReload = (await calls(page)).filter((call) => call[0] === 'SettingsAPI.Get').length;
   await page.getByRole('button', {name: '重新加载设置'}).click();
   await expect(page.getByRole('heading', {name: '重新加载设置'})).toBeVisible();
   await page.getByRole('button', {name: '确认重新加载'}).click();
-  await expect(oscRoot).toHaveValue('C:\\VRChat\\OSC');
+  await expect(oscRoot).toHaveValue('C:\\Authoritative revision 2');
+  await expect(page.getByRole('heading', {name: '设置已在其他位置更新'})).toBeHidden();
+  await expect(page.getByRole('region', {name: '未保存的更改'})).toBeHidden();
+  await expect.poll(async () => (await calls(page)).filter((call) => call[0] === 'SettingsAPI.Get').length).toBe(getsBeforeReload + 1);
 });
 
-test('renders safe project status and moves internal settings tabs with the keyboard', async ({page}) => {
+test('keeps raw diagnostics input out of the page and copied summary', async ({page}) => {
   await page.getByRole('button', {name: '诊断'}).click();
   await expect(page.getByRole('heading', {name: 'Project Status'})).toBeVisible();
   await expect(page.getByLabel('Runtime')).toContainText('修订 1');
   await expect(page.getByText('192.168.1.10:9000')).toBeVisible();
+  const pageBody = page.locator('body');
+  for (const marker of ['RAW_CONFIG_PATH_DO_NOT_LEAK', 'RAW_PLAN_ERROR_DO_NOT_LEAK', 'RAW_PRIVATE_VALUE_DO_NOT_LEAK']) {
+    await expect(pageBody).not.toContainText(marker);
+  }
 
+  await page.getByRole('button', {name: '复制诊断信息'}).click();
+  const copiedText = () => page.evaluate(() => (window as unknown as {__vrcftAcceptance: {copiedText?: string}}).__vrcftAcceptance.copiedText ?? '');
+  await expect.poll(copiedText).toContain('Runtime: ready');
+  for (const marker of ['RAW_CONFIG_PATH_DO_NOT_LEAK', 'RAW_PLAN_ERROR_DO_NOT_LEAK', 'RAW_PRIVATE_VALUE_DO_NOT_LEAK']) {
+    await expect.poll(copiedText).not.toContain(marker);
+  }
+});
+
+test('moves internal settings tabs with the keyboard', async ({page}) => {
   await page.getByRole('button', {name: '设置'}).click();
   const general = page.getByRole('tab', {name: '常规'});
   await general.focus();
