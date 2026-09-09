@@ -1,11 +1,11 @@
 # Project Status
 
-- Generated: 2026-08-31T02:55:30Z
-- Commit: `91d1160574cd82680bbd60f3a9fcedab24e34e64`
-- Source fingerprint: `f7c1c334b3ff5feaa81958eaf367849ccb02a192a43b5f9c0292d29facd56f26`
-- Dirty: `false`
-- State: `in_progress`
-- Progress: 97.4% (190/195 weight)
+- Generated: 2026-09-09T15:48:32Z
+- Commit: `ce6e1805b416fca4e0985c37ae5f82fe527e1dc3`
+- Source fingerprint: `8274b6451a3fb1d623275b3f058ae4b71189c0c72ea9cb516a2a3bcf100b2495`
+- Dirty: `true`
+- State: `complete`
+- Progress: 100.0% (195/195 weight)
 
 ## Milestones
 
@@ -18,7 +18,7 @@
 | M4 | complete | 100.0% (10/10) |
 | M5 | complete | 100.0% (10/10) |
 | M6 | complete | 100.0% (35/35) |
-| M7 | in_progress | 85.3% (29/34) |
+| M7 | complete | 100.0% (34/34) |
 
 ## Packages and Subsystems
 
@@ -46,15 +46,14 @@
 | M6 | internal-application | internal/application | complete | 100.0% (11/11) |
 | M6 | internal-osc | internal/osc | complete | 100.0% (14/14) |
 | M7 | build-release | build | complete | 100.0% (5/5) |
-| M7 | frontend | frontend | in_progress | 28.6% (2/7) |
+| M7 | frontend | frontend | complete | 100.0% (7/7) |
 | M7 | internal-userconfig | internal/userconfig | complete | 100.0% (9/9) |
 | M7 | root | . | complete | 100.0% (13/13) |
 
 ## Failed Required Checks
 
-- `frontend/project-status-view` (failed): required symbol not found
-- `frontend/type-check` (failed): 10:55:28 [vite-plugin-svelte] !!! Support for vite 8 beta in vite-plugin-svelte is experimental (rolldown: 1.1.5, vite: 8.1.5) !!! See https://github.com/sveltejs/vite-plugin-svelte/issues/1143 for a list of known issues and to report feedb…
+None.
 
 ## Next Action
 
-Address `frontend/project-status-view`: required symbol not found
+All required checks pass.
