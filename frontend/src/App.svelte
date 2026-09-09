@@ -95,12 +95,12 @@
 <AppShell {navigation} {activePage} onNavigate={navigate} {content} />
 
 <Dialog
-  triggerLabel="放弃未保存的更改"
-  title="放弃未保存的更改？"
-  description="离开设置不会保存或清除当前草稿。"
-  closeLabel="取消"
+  triggerLabel={copy.text.leaveTrigger}
+  title={copy.text.leaveTitle}
+  description={copy.text.leaveDescription}
+  closeLabel={copy.actions.cancel}
   bind:open={confirmationOpen}
   showTrigger={false}
 >
-  <Button label="放弃更改" tone="danger" onclick={confirmNavigation} />
+  <Button label={copy.text.discard} tone="danger" onclick={confirmNavigation} />
 </Dialog>

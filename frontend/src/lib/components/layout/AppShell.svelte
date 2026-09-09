@@ -28,5 +28,5 @@
   <nav class="min-w-0 overflow-x-auto border-b border-border bg-surface nav:hidden" aria-label="主导航">
     <NavigationItems items={navigation} {activePage} {onNavigate} orientation="horizontal" />
   </nav>
-  <main class="min-h-0 min-w-0 overflow-y-auto p-4">{@render content()}</main>
+  <div class="min-h-0 min-w-0 overflow-y-auto p-4">{@render content()}</div>
 </div>

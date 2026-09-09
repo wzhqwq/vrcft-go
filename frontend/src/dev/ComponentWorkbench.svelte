@@ -1,5 +1,6 @@
 <script lang="ts">
   import {Button, TextField} from '../lib/components/ui/index.js';
+  import {copyText} from '../lib/presentation/clipboard.js';
   import {
     AvatarSummary,
     DetailList,
@@ -18,6 +19,7 @@
   }
 
   const longId = 'avtr_'.padEnd(180, 'a');
+  let pluginEnabled = $state(false);
 </script>
 
 <main class="mx-auto grid min-w-0 max-w-6xl gap-6 p-4" aria-labelledby="workbench-title">
@@ -28,7 +30,7 @@
 
   <section class="grid min-w-0 gap-3" aria-labelledby="fixture-normal">
     <h2 class="text-lg font-semibold text-text" id="fixture-normal">常规</h2>
-    <StatusCard title="运行状态" detail="所有服务都在等待连接。" />
+    <StatusCard title="运行状态" label="等待连接" tone="neutral" detail="所有服务都在等待连接。" />
     <OSCSummary state="discovered" host="127.0.0.1" port={9000} />
   </section>
 
@@ -45,8 +47,8 @@
 
   <section class="grid min-w-0 gap-3" aria-labelledby="fixture-loading">
     <h2 class="text-lg font-semibold text-text" id="fixture-loading">加载中</h2>
-    <StatusCard title="扫描插件" loading loadingLabel="正在扫描插件" />
-    <PluginCard id="example.loading" name="示例插件" enabled loading />
+    <StatusCard title="扫描插件" label="加载中" tone="neutral" loading loadingLabel="正在扫描插件" />
+    <PluginCard id="example.loading" name="示例插件" enabled active state="running" capabilities={['eyes']} frameRate={60} restartCount={2} loading onCommand={({enabled}) => { pluginEnabled = enabled }} />
   </section>
 
   <section class="grid min-w-0 gap-3" aria-labelledby="fixture-empty">
@@ -56,7 +58,7 @@
 
   <section class="grid min-w-0 gap-3" aria-labelledby="fixture-error">
     <h2 class="text-lg font-semibold text-text" id="fixture-error">错误</h2>
-    <ProblemBanner title="无法保存设置" detail="请检查输入后重试。" tone="danger" diagnosticCode="validation" />
+    <ProblemBanner title="无法保存设置" detail="请检查输入后重试。" tone="danger" diagnosticCode="validation" onCopyDiagnostic={copyText} />
   </section>
 
   <section class="grid min-w-0 gap-3" aria-labelledby="fixture-form-patterns">
@@ -77,7 +79,7 @@
   <section class="grid min-w-0 gap-3" aria-labelledby="fixture-narrow">
     <h2 class="text-lg font-semibold text-text" id="fixture-narrow">320px 容器</h2>
     <div class="w-80 max-w-full min-w-0" data-testid="workbench-320px">
-      <PluginCard id="example.narrow" name="窄容器中的示例插件" description="此卡片用于检查长名称和操作在 320px 容器中的表现。" enabled={false} />
+      <PluginCard id="example.narrow" name="窄容器中的示例插件" description="此卡片用于检查长名称和操作在 320px 容器中的表现。" enabled={pluginEnabled} state="backoff" capabilities={['eyes']} restartCount={2} error="等待重新连接" onCommand={({enabled}) => { pluginEnabled = enabled }} />
       <UnsavedChangesBar onSave={() => {}} onDiscard={() => {}} />
     </div>
   </section>

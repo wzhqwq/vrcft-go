@@ -1,4 +1,4 @@
-import {EventsOff, EventsOn} from '../../../wailsjs/runtime/runtime'
+import {EventsOn} from '../../../wailsjs/runtime/runtime'
 import {List, SetEnabled} from '../../../wailsjs/go/main/PluginsAPI'
 import {GetStatus} from '../../../wailsjs/go/main/RuntimeAPI'
 import {Get, Save, Validate} from '../../../wailsjs/go/main/SettingsAPI'

@@ -1,23 +1,25 @@
-import type {SettingsCandidate} from '../../wails/types.js'
+import type {SettingsCandidate as SettingsCandidateWire} from '../../wails/types.js'
+import type {SettingsCandidate} from './form.js'
+import type {DeepReadonly} from './types.js'
 
-export function cloneCandidate(value: SettingsCandidate): SettingsCandidate {
+export function cloneCandidate(value: DeepReadonly<SettingsCandidateWire>): SettingsCandidate {
   return {
     avatar: {...value.avatar},
-    plugins: {devRoots: [...value.plugins.devRoots]},
+    plugins: {devRoots: [...(value.plugins.devRoots ?? [])]},
     processing: {
       defaultChannel: cloneChannel(value.processing.defaultChannel),
-      overrides: value.processing.overrides.map((override) => ({
+      overrides: (value.processing.overrides ?? []).map((override) => ({
         name: override.name,
         channel: cloneChannel(override.channel),
       })),
       activeStaleAfterMs: value.processing.activeStaleAfterMs,
-      mutualExclusion: value.processing.mutualExclusion.map((group) => [...group]),
+      mutualExclusion: (value.processing.mutualExclusion ?? []).map((group) => [...(group ?? [])]),
     },
     osc: {...value.osc},
   }
 }
 
-export function immutableCandidate(value: SettingsCandidate): Readonly<SettingsCandidate> {
+export function immutableCandidate(value: DeepReadonly<SettingsCandidateWire>): DeepReadonly<SettingsCandidate> {
   return deepFreeze(cloneCandidate(value))
 }
 

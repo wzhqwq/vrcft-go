@@ -14,7 +14,7 @@ const problem: ProblemView = {
 
 function runtimeView(overrides: Partial<RuntimeView> = {}): RuntimeView {
   return {
-    phase: 'running', platformSupported: true, lifecycle: 'started',
+    phase: 'running', platformSupported: true, lifecycle: 'running',
     avatar: {name: 'Demo Avatar', id: 'avtr_demo'},
     plan: {
       status: 'ready', source: 'VRChat', generation: 8,
@@ -42,7 +42,7 @@ function pluginsState(overrides: Partial<PluginsModuleState> = {}): PluginsModul
 
 function settingsState(overrides: Partial<SettingsModuleState> = {}): SettingsModuleState {
   return {
-    status: 'problem', server: null, draft: null, revision: null, fileRevision: null, updatedAt: null, problem,
+    status: 'problem', server: null, draft: null, revision: null, fileRevision: null, updatedAt: null, problem, canSave: false,
     fieldProblems: new Map(), dirty: false, validating: false, saving: false, restartRequired: false, conflict: false,
     ...overrides,
   }
@@ -79,7 +79,7 @@ describe('DiagnosticsPage', () => {
     expect(screen.getByText('数据可能已过期')).toBeVisible()
     expect(screen.getByText('修订 8')).toBeVisible()
     expect(screen.getByText('2026-09-01T10:00:00Z')).toBeVisible()
-    expect(screen.getByText('started')).toBeVisible()
+    expect(screen.getAllByText('运行中')).toHaveLength(2)
     expect(screen.getByText('受支持')).toBeVisible()
     expect(screen.getByText('VRChat')).toBeVisible()
     expect(screen.getByText('avtr_demo')).toBeVisible()

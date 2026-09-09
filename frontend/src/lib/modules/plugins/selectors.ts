@@ -7,6 +7,10 @@ export function pluginHasProblem(plugin: PluginView): boolean {
   return pluginHealthRank(plugin) < 2
 }
 
+export function selectImportantPlugins(plugins: readonly PluginView[]): readonly PluginView[] {
+  return selectPlugins(plugins, {query: '', filter: 'problem', page: 1, pageSize: 24}).items.slice(0, 4)
+}
+
 export function selectPlugins(plugins: readonly PluginView[], query: PluginQuery): PluginSelection {
   const needle = query.query.trim().toLowerCase()
   const filtered = plugins.filter((plugin) => {

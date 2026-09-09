@@ -5,9 +5,9 @@ import ChannelOverridesEditor from './ChannelOverridesEditor.svelte'
 import MutualExclusionEditor from './MutualExclusionEditor.svelte'
 import PathListField from './PathListField.svelte'
 import ProcessingChannelFields from './ProcessingChannelFields.svelte'
-import type {ProcessingChannelWire} from '../../wails/types.js'
+import type {ProcessingChannel} from '../../modules/settings/form.js'
 
-const channel: ProcessingChannelWire = {
+const channel: ProcessingChannel = {
   calibration: {enabled: true, neutral: 0, min: -1, max: 1, gain: 1, invert: false},
   tuning: {deadzone: 0, gain: 1, exponent: 1, clampEnabled: false, clampMin: -1, clampMax: 1},
   filter: {mode: 'ema', emaAlpha: 0.5, minCutoff: 1, beta: 0, derivativeCutoff: 1},
@@ -38,7 +38,7 @@ describe('settings repeated editors', () => {
 
   it('emits cloned nested calibration, tuning, filter, and dropout channel values', async () => {
     const frozen = Object.freeze(structuredClone(channel))
-    const changes: ProcessingChannelWire[] = []
+    const changes: ProcessingChannel[] = []
     render(ProcessingChannelFields, {props: {value: frozen, onChange: (value) => changes.push(value)}})
 
     await fireEvent.click(screen.getByRole('switch', {name: '启用校准'}))
@@ -56,14 +56,14 @@ describe('settings repeated editors', () => {
 
   it('emits cloned channel overrides for add, name edit, nested edit, and removal', async () => {
     const values = Object.freeze([{name: 'Eye', channel: structuredClone(channel)}])
-    const added: Array<{name: string; channel: ProcessingChannelWire}[]> = []
+    const added: Array<{name: string; channel: ProcessingChannel}[]> = []
     const addedView = render(ChannelOverridesEditor, {props: {values, onChange: (value) => added.push(value)}})
     await fireEvent.click(screen.getByRole('button', {name: '添加通道覆盖'}))
     expect(added).toHaveLength(1)
     expect(added[0]).toHaveLength(2)
     addedView.unmount()
 
-    const changed: Array<{name: string; channel: ProcessingChannelWire}[]> = []
+    const changed: Array<{name: string; channel: ProcessingChannel}[]> = []
     const changedView = render(ChannelOverridesEditor, {props: {values, onChange: (value) => changed.push(value)}})
     await fireEvent.input(screen.getByRole('textbox', {name: '覆盖通道名称 0'}), {target: {value: 'Mouth'}})
     expect(changed.at(-1)?.[0].name).toBe('Mouth')
@@ -71,7 +71,7 @@ describe('settings repeated editors', () => {
     expect(changed.at(-1)?.[0].channel.calibration.neutral).toBe(0.4)
     changedView.unmount()
 
-    const removed: Array<{name: string; channel: ProcessingChannelWire}[]> = []
+    const removed: Array<{name: string; channel: ProcessingChannel}[]> = []
     render(ChannelOverridesEditor, {props: {values, onChange: (value) => removed.push(value)}})
     await fireEvent.click(screen.getByRole('button', {name: '删除通道覆盖 0'}))
     expect(removed).toEqual([[]])

@@ -1,6 +1,7 @@
 import {describe, expect, it, vi} from 'vitest'
 
 import {createSettingsModule, fieldTargets, validateCandidate} from './index.js'
+import {cloneCandidate} from './candidate.js'
 import type {SettingsPort, Stop} from '../../wails/ports.js'
 import type {
   ProcessingChannelWire,
@@ -113,6 +114,7 @@ describe('settings candidates and fields', () => {
       'avatar.oscRoot': {section: 'general', control: 'avatar-osc-root'},
       'avatar.fallbackPath': {section: 'general', control: 'avatar-fallback-path'},
       'plugins.devRoots': {section: 'general', control: 'plugin-dev-roots'},
+      'processing': {section: 'processing', control: 'processing-summary'},
       'processing.defaultChannel': {section: 'processing', control: 'default-channel'},
       'processing.activeStaleAfterMs': {section: 'processing', control: 'active-stale-after'},
       'processing.overrides': {section: 'processing', control: 'channel-overrides'},
@@ -132,7 +134,7 @@ describe('settings candidates and fields', () => {
     invalid.processing.defaultChannel.tuning.gain = Number.NaN
     invalid.processing.activeStaleAfterMs = Number.NaN
 
-    expect([...validateCandidate(invalid).keys()].sort()).toEqual([
+    expect([...validateCandidate(cloneCandidate(invalid)).keys()].sort()).toEqual([
       'avatar.oscRoot', 'osc.manualHost', 'osc.manualPort', 'osc.preferredService', 'plugins.devRoots',
       'processing.activeStaleAfterMs', 'processing.defaultChannel', 'processing.overrides',
     ])
@@ -140,6 +142,35 @@ describe('settings candidates and fields', () => {
 })
 
 describe('Settings module', () => {
+  it('normalizes Go nil collections before owning and editing the candidate', async () => {
+    const source = candidate()
+    Object.assign(source.plugins, {devRoots: null})
+    Object.assign(source.processing, {overrides: null, mutualExclusion: null})
+    const mock = new SettingsMock()
+    const module = await startWith(mock, getWire(1, source))
+    expect(module.state.status).toBe('ready')
+    expect(module.state.draft?.plugins.devRoots).toEqual([])
+    expect(module.state.draft?.processing.overrides).toEqual([])
+    expect(module.state.draft?.processing.mutualExclusion).toEqual([])
+    module.updateDraft((draft) => { draft.plugins.devRoots.push('C:\\plugins') })
+    expect(module.state.server?.plugins.devRoots).toEqual([])
+    expect(module.state.dirty).toBe(true)
+    const saving = module.save()
+    mock.validationPending[0]?.resolve(validationWire(1, source))
+    await vi.waitFor(() => expect(mock.saveCalls).toHaveLength(1))
+    expect(mock.saveCalls[0]?.candidate.processing.mutualExclusion).toEqual([])
+    mock.savePending[0]?.resolve(saveWire(2, source, true))
+    expect(await saving).toBe(true)
+    expect(module.state.draft?.processing.mutualExclusion).toEqual([])
+  })
+
+  it('owns nil mutual-exclusion rows as editable empty groups', async () => {
+    const source = candidate()
+    Object.assign(source.processing, {mutualExclusion: [null, ['eye']]})
+    const module = await startWith(new SettingsMock(), getWire(1, source))
+    expect(module.state.draft?.processing.mutualExclusion).toEqual([[], ['eye']])
+  })
+
   it('owns a synchronous subscription failure as an idempotent no-data problem', async () => {
     const mock = new SettingsMock()
     vi.spyOn(mock, 'onChanged').mockImplementation(() => {
@@ -164,7 +195,7 @@ describe('Settings module', () => {
     const source = candidate()
     const module = await startWith(mock, getWire(2, source))
 
-    source.plugins.devRoots[0] = 'mutated upstream'
+    source.plugins.devRoots![0] = 'mutated upstream'
     expect(() => (module.state.server!.plugins.devRoots as string[]).push('injected')).toThrow()
     expect(() => ((module.state.draft!.processing.overrides[0] as {name: string}).name = 'injected')).toThrow()
     expect(module.state.server?.plugins.devRoots).toEqual(['C:\\plugins'])

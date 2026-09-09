@@ -1,11 +1,35 @@
 import {fireEvent, render, screen} from '@testing-library/svelte';
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 
-import {Collapsible, Dialog, Tabs, Tooltip} from './index.js';
+import {Collapsible, Dialog, SelectField, Tabs, Tooltip} from './index.js';
 import DialogHost from './test/DialogHost.svelte';
 import TooltipIconHost from './test/TooltipIconHost.svelte';
+import SelectHost from './test/SelectHost.svelte';
 
 describe('interactive controls', () => {
+  it('calls the direct Select consumer exactly once for one committed value change', async () => {
+    const onValueChange = vi.fn();
+    render(SelectField, {props: {label: '直接选择', value: 'auto', options: [{value: 'auto', label: '自动'}, {value: 'manual', label: '手动'}], onValueChange}});
+    expect(onValueChange).not.toHaveBeenCalled();
+    await fireEvent.pointerDown(screen.getByRole('button', {name: '直接选择'}), {button: 0, ctrlKey: false});
+    const option = screen.getByRole('option', {name: '手动'});
+    await fireEvent.pointerDown(option, {button: 0, ctrlKey: false});
+    await fireEvent.pointerUp(option, {button: 0, ctrlKey: false});
+    expect(onValueChange).toHaveBeenCalledExactlyOnceWith('manual');
+    expect(screen.getByRole('button', {name: '直接选择'})).toHaveTextContent('手动');
+  });
+  it('delivers one callback per selection while updating an external bind:value', async () => {
+    render(SelectHost);
+    expect(screen.getByLabelText('回调次数')).toHaveTextContent('0');
+    for (const [label, value, count] of [['手动', 'manual', '1'], ['自动', 'auto', '2']]) {
+      await fireEvent.pointerDown(screen.getByRole('button', {name: '模式'}), {button: 0, ctrlKey: false});
+      const option = screen.getByRole('option', {name: label});
+      await fireEvent.pointerDown(option, {button: 0, ctrlKey: false});
+      await fireEvent.pointerUp(option, {button: 0, ctrlKey: false});
+      expect(screen.getByLabelText('选择结果')).toHaveTextContent(value!);
+      expect(screen.getByLabelText('回调次数')).toHaveTextContent(count!);
+    }
+  });
   it('moves between tabs with arrow keys', async () => {
     render(Tabs, {
       props: {

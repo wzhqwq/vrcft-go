@@ -91,6 +91,74 @@ async function renderReady(initial = candidate()) {
 }
 
 describe('SettingsPage', () => {
+  it('routes the real aggregate processing backend field to a focusable summary', async () => {
+    const {port, settings} = await renderReady()
+    const checking = settings.validate()
+    port.validationPending[0]?.resolve(validation(7, candidate(), {
+      code: 'validation', field: 'processing', message: '处理配置范围无效。',
+    }))
+    await checking
+    await waitFor(() => expect(screen.getByRole('tab', {name: '处理'})).toHaveAttribute('aria-selected', 'true'))
+    await waitFor(() => expect(document.getElementById('processing-summary')).toHaveFocus())
+    expect(document.getElementById('processing-summary')).toHaveTextContent('处理配置范围无效。')
+  })
+
+  it('disables Save for client errors and standalone validation, then recovers', async () => {
+    const {port, settings} = await renderReady()
+    const root = screen.getByRole('textbox', {name: 'Avatar OSC 根目录'})
+    await fireEvent.input(root, {target: {value: ''}})
+    expect(screen.getByRole('button', {name: '保存更改'})).toBeDisabled()
+    await fireEvent.blur(root)
+    expect(screen.getByRole('alert')).toBeVisible()
+    await fireEvent.input(root, {target: {value: 'C:\\corrected'}})
+    expect(screen.getByRole('button', {name: '保存更改'})).toBeEnabled()
+    const checking = settings.validate()
+    await waitFor(() => expect(screen.getByRole('button', {name: '保存更改'})).toBeDisabled())
+    port.validationPending[0]?.resolve(validation(7, port.validations[0]!))
+    await checking
+    await waitFor(() => expect(screen.getByRole('button', {name: '保存更改'})).toBeEnabled())
+  })
+
+  it('confirms sticky discard on conflict and keeps the draft when canceled', async () => {
+    const {port, settings} = await renderReady()
+    settings.updateDraft((draft) => { draft.avatar.oscRoot = 'C:\\mine' })
+    port.gets.push(wire(8, candidate({avatar: {oscRoot: 'C:\\theirs', fallbackPath: ''}})))
+    await settings.refresh()
+    await fireEvent.click(screen.getByRole('button', {name: '放弃更改'}))
+    expect(screen.getByRole('dialog', {name: '重新加载设置'})).toBeVisible()
+    await fireEvent.click(screen.getByRole('button', {name: '取消'}))
+    expect(settings.state.draft?.avatar.oscRoot).toBe('C:\\mine')
+    port.gets.push(wire(8, candidate({avatar: {oscRoot: 'C:\\theirs', fallbackPath: ''}})))
+    await fireEvent.click(screen.getByRole('button', {name: '放弃更改'}))
+    await fireEvent.click(screen.getByRole('button', {name: '确认重新加载'}))
+    await waitFor(() => expect(settings.state.draft?.avatar.oscRoot).toBe('C:\\theirs'))
+  })
+
+  it('shows retained stale data with its update time after a failed refresh', async () => {
+    const {settings} = await renderReady()
+    settings.updateDraft((draft) => { draft.avatar.oscRoot = 'C:\\mine' })
+    await settings.refresh()
+    expect(await screen.findByText(/显示上次可用设置/)).toHaveTextContent('2026-09-01T00:00:00Z')
+    expect(screen.getByRole('textbox', {name: 'Avatar OSC 根目录'})).toHaveValue('C:\\mine')
+  })
+
+  it.each(['unavailable', 'unsupported_platform'])('shows an owned initial %s Problem', async (code) => {
+    const port = new SettingsPortFixture()
+    const settings = createSettingsModule(port)
+    await settings.start()
+    const state = {...settings.state, problem: {code, title: '设置服务状态', detail: `owned ${code}`, tone: 'warning' as const, persistent: true}}
+    render(SettingsPage, {props: {settings: {...settings, state}}})
+    expect(screen.getByRole('alert')).toHaveTextContent(`owned ${code}`)
+  })
+
+  it('reports clean canLeave without changing the draft or making requests', async () => {
+    const {view, settings, port} = await renderReady()
+    const draft = settings.state.draft
+    expect((view.component as unknown as {canLeave(): boolean}).canLeave()).toBe(true)
+    expect(settings.state.draft).toBe(draft)
+    expect(port.validations).toHaveLength(0)
+  })
+
   it('keeps the draft across tabs, validates on blur, and exposes dirty canLeave state', async () => {
     const {port, settings, view} = await renderReady()
 

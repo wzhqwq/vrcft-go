@@ -1,10 +1,12 @@
+import {copy} from '../../../copy/zh-CN.js'
 import type {ProblemView} from '../../presentation/problem.js'
-import type {SettingsCandidate} from '../../wails/types.js'
+import type {SettingsCandidate} from './form.js'
 
 export const fieldTargets = {
   'avatar.oscRoot': {section: 'general', control: 'avatar-osc-root'},
   'avatar.fallbackPath': {section: 'general', control: 'avatar-fallback-path'},
   'plugins.devRoots': {section: 'general', control: 'plugin-dev-roots'},
+  'processing': {section: 'processing', control: 'processing-summary'},
   'processing.defaultChannel': {section: 'processing', control: 'default-channel'},
   'processing.activeStaleAfterMs': {section: 'processing', control: 'active-stale-after'},
   'processing.overrides': {section: 'processing', control: 'channel-overrides'},
@@ -23,34 +25,34 @@ export function isSettingsField(value: string | undefined): value is SettingsFie
 
 export function validateCandidate(candidate: SettingsCandidate): Map<SettingsField, ProblemView> {
   const problems = new Map<SettingsField, ProblemView>()
-  if (candidate.avatar.oscRoot.trim() === '') add(problems, 'avatar.oscRoot', 'Avatar OSC 根目录不能为空。')
+  if (candidate.avatar.oscRoot.trim() === '') add(problems, 'avatar.oscRoot', copy.text.rootRequired)
   if (candidate.plugins.devRoots.some((root) => root.trim() === '')) {
-    add(problems, 'plugins.devRoots', '插件开发目录不能为空。')
+    add(problems, 'plugins.devRoots', copy.text.devRootRequired)
   }
   if (!finiteNumbers(candidate.processing.defaultChannel)) {
-    add(problems, 'processing.defaultChannel', '处理参数必须是有限数字。')
+    add(problems, 'processing.defaultChannel', copy.text.finiteProcessing)
   }
   if (!Number.isFinite(candidate.processing.activeStaleAfterMs)) {
-    add(problems, 'processing.activeStaleAfterMs', '活跃通道过期时长必须是有限数字。')
+    add(problems, 'processing.activeStaleAfterMs', copy.text.finiteActiveStale)
   }
   const names = candidate.processing.overrides.map((override) => override.name.trim())
   if (names.some((name) => name === '') || new Set(names).size !== names.length
     || candidate.processing.overrides.some((override) => !finiteNumbers(override.channel))) {
-    add(problems, 'processing.overrides', '覆盖名称必须非空且唯一，处理参数必须是有限数字。')
+    add(problems, 'processing.overrides', copy.text.invalidOverrides)
   }
   if (candidate.processing.mutualExclusion.some((group) => group.some((name) => name.trim() === ''))) {
-    add(problems, 'processing.mutualExclusion', '互斥组中的通道名称不能为空。')
+    add(problems, 'processing.mutualExclusion', copy.text.groupNameRequired)
   }
   if (candidate.osc.targetMode !== 'auto' && candidate.osc.targetMode !== 'manual') {
-    add(problems, 'osc.targetMode', 'OSC 目标模式必须是自动或手动。')
+    add(problems, 'osc.targetMode', copy.text.invalidMode)
   }
   if (candidate.osc.targetMode === 'manual') {
     if (candidate.osc.preferredService.trim() !== '') {
-      add(problems, 'osc.preferredService', '手动模式不能设置首选发现服务。')
+      add(problems, 'osc.preferredService', copy.text.invalidPreferred)
     }
-    if (candidate.osc.manualHost.trim() === '') add(problems, 'osc.manualHost', '手动模式需要目标主机。')
+    if (candidate.osc.manualHost.trim() === '') add(problems, 'osc.manualHost', copy.text.hostRequired)
     if (!Number.isInteger(candidate.osc.manualPort) || candidate.osc.manualPort < 1 || candidate.osc.manualPort > 65535) {
-      add(problems, 'osc.manualPort', '端口必须是 1 到 65535 之间的整数。')
+      add(problems, 'osc.manualPort', copy.text.invalidPort)
     }
   }
   return problems
@@ -64,6 +66,6 @@ function finiteNumbers(value: unknown): boolean {
 
 function add(problems: Map<SettingsField, ProblemView>, field: SettingsField, detail: string) {
   problems.set(field, Object.freeze({
-    code: 'validation', title: '请检查输入', detail, tone: 'danger', persistent: false, field,
+    code: 'validation', title: copy.text.checkInput, detail, tone: 'danger', persistent: false, field,
   }))
 }

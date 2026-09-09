@@ -48,6 +48,32 @@ function pluginsFixture(initial = pluginsState()) {
 }
 
 describe('OverviewPage', () => {
+  it('shows at most four important plugin cards independently of runtime failures and list filters', () => {
+    const items = Array.from({length: 8}, (_, index) => ({...plugin(`recovering-${index}`), state: 'backoff', active: false}))
+    const runtime = createRuntimeFixture(runtimeState({snapshot: runtimeSnapshot({pluginFailures: []})}))
+    const plugins = pluginsFixture(pluginsState({snapshot: {plugins: items}, visiblePlugins: [], query: {query: 'hidden', filter: 'disabled', page: 1, pageSize: 24}}))
+    render(OverviewPage, {props: {runtime: runtime.module, plugins: plugins.module}})
+    expect(screen.getAllByRole('article', {name: /recovering-/})).toHaveLength(4)
+    expect(screen.getAllByText('等待重试')).toHaveLength(4)
+  })
+
+  it('copies a bounded diagnostic code from a real page banner', async () => {
+    const copied: string[] = []
+    Object.assign(navigator, {clipboard: {writeText: async (text: string) => { copied.push(text) }}})
+    const runtime = createRuntimeFixture(runtimeState({status: 'problem', snapshot: null, problem: {...unavailableProblem, code: 'internal', detail: 'safe detail'}}))
+    render(OverviewPage, {props: {runtime: runtime.module, plugins: pluginsFixture().module}})
+    await fireEvent.click(screen.getByRole('button', {name: '复制诊断信息'}))
+    expect(copied).toEqual(['问题代码：internal'])
+  })
+
+  it.each([['running', '运行中', 'success'], ['failed', '启动失败', 'danger'], ['starting', '正在启动', 'neutral'], ['diagnostic', '诊断模式', 'warning']] as const)('localizes %s and its severity', (phase, label, tone) => {
+    const runtime = createRuntimeFixture(runtimeState({snapshot: runtimeSnapshot({phase})}))
+    render(OverviewPage, {props: {runtime: runtime.module, plugins: pluginsFixture().module}})
+    const card = screen.getByRole('article', {name: '应用阶段'})
+    expect(card).toHaveTextContent(label)
+    expect(card).not.toHaveTextContent(phase)
+    expect(card.querySelector('[data-tone]')).toHaveAttribute('data-tone', tone)
+  })
   it('renders authoritative runtime phase, avatar, OSC output, plan and plugin failures without discovery ports', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, {clipboard: {writeText}})
@@ -56,7 +82,7 @@ describe('OverviewPage', () => {
     render(OverviewPage, {props: {runtime: runtime.module, plugins: plugins.module}})
 
     expect(screen.getByRole('main', {name: '概览'})).toBeVisible()
-    expect(within(screen.getByRole('article', {name: '应用阶段'})).getByText('running')).toBeVisible()
+    expect(screen.getByRole('article', {name: '应用阶段'})).toHaveTextContent('运行中')
     expect(screen.getByText('Demo Avatar')).toBeVisible()
     expect(within(screen.getByRole('region', {name: '当前 Avatar'})).getByText('avtr_demo')).toBeVisible()
     expect(screen.getByText('自动发现')).toBeVisible()

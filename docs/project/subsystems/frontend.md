@@ -38,7 +38,7 @@ Business rules, hardware and network access, filesystem and process access, avat
 ## Public/internal interfaces
 Pages consume typed module view state and commands. `lib/wails/production.ts` is the direct adapter boundary for generated Wails RuntimeAPI, PluginsAPI, SettingsAPI, and runtime events; the adapters expose typed ports to the modules rather than allowing pages or reusable components to call generated bindings.
 ## Owned data
-Each Runtime, Plugins, and Settings module owns its own immutable snapshot/view state, revision, update time, loading/stale/problem state, event subscription, and disposal lifecycle. Settings additionally owns its independently cloned draft, dirty state, validation state, and save operation; Plugins scopes command state to each plugin.
+Each Runtime, Plugins, and Settings module owns its own immutable snapshot/view state, revision, update time, loading/stale/problem state, event subscription, and disposal lifecycle. Settings normalizes nullable Go collections into an owned non-null form candidate and owns its independently cloned draft, dirty state, validation state, save availability, and save operation; Plugins scopes command state to each plugin. Overview selects at most four important plugin states from the Plugins snapshot independently of the plugin list's filter and Runtime control failures.
 ## Dependencies
 Depends on the three versioned Wails APIs backed by `internal/application` and the generated Wails bindings. Dependency flow is pages and `AppShell`, then project UI/layout components and patterns, then typed modules, then `lib/wails` adapters and generated bindings.
 ## Concurrency and lifecycle
@@ -52,6 +52,6 @@ Only the typed Wails port adapters call generated bindings. Pages and reusable U
 ## Required tests
 Vitest covers Wails ports and DTO mapping, independent module lifecycle/revision behavior, Settings draft and validation behavior, reusable UI/layout/pattern accessibility and interaction contracts, and all four pages. Playwright covers deterministic mocked Wails workflows and responsive behavior at the supported floor and desktop viewports. `pnpm` test, browser, Svelte check, and production-build gates provide frontend evidence; Go tests, vet, and the Wails build verify the integration boundary.
 ## Known gaps
-No known gap remains within the M7 frontend scope; generated project status remains separate, read-only evidence until it is intentionally refreshed through its generator.
+Final source review and the generated-evidence refresh remain separate completion gates. Generated project status stays read-only until the reviewed source is intentionally refreshed through its generator.
 ## Completion definition
 Users can navigate the four pages, inspect runtime and plugin state, make immediate plugin changes, edit and save restart-required settings with dirty-draft protection, and inspect safe project/runtime diagnostics through independently refreshed modules. The UI remains usable from the `640x480` floor: a left navigation rail is used at desktop widths, while narrower windows use a horizontal top tab bar above page content without page-level horizontal overflow.

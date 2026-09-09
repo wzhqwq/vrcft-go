@@ -1,6 +1,7 @@
 import {presentProblem, type ProblemView} from '../../presentation/problem.js'
 import type {SettingsPort, Stop} from '../../wails/ports.js'
-import type {ProblemWire, SettingsCandidate, SettingsWire} from '../../wails/types.js'
+import type {ProblemWire, SettingsWire} from '../../wails/types.js'
+import type {SettingsCandidate} from './form.js'
 import {acceptRevision} from '../shared/revision.js'
 import {cloneCandidate, immutableCandidate, sameCandidate} from './candidate.js'
 import {isSettingsField, validateCandidate, type SettingsField} from './fields.js'
@@ -19,13 +20,14 @@ interface MutableState {
   saving: boolean
   restartRequired: boolean
   conflict: boolean
+  loading: boolean
 }
 
 export function createSettingsModule(port: SettingsPort): SettingsModule {
   const data = $state<MutableState>({
     status: 'loading', server: null, draft: null, revision: null, fileRevision: null,
     updatedAt: null, problem: null, fieldProblems: [], validating: false, saving: false,
-    restartRequired: false, conflict: false,
+    restartRequired: false, conflict: false, loading: false,
   })
   let started = false
   let disposed = false
@@ -48,6 +50,10 @@ export function createSettingsModule(port: SettingsPort): SettingsModule {
     get dirty() { return dirty() },
     get validating() { return data.validating },
     get saving() { return data.saving },
+    get canSave() {
+      return !disposed && !data.loading && !data.validating && !data.saving && data.draft !== null
+        && validateCandidate(data.draft as SettingsCandidate).size === 0
+    },
     get restartRequired() { return data.restartRequired },
     get conflict() { return data.conflict },
   }
@@ -114,6 +120,7 @@ export function createSettingsModule(port: SettingsPort): SettingsModule {
   async function load(replaceDraft: boolean): Promise<boolean> {
     if (disposed) return false
     const request = ++nextLoad
+    data.loading = true
     try {
       const wire = await port.get()
       if (disposed || request !== nextLoad) return false
@@ -127,6 +134,8 @@ export function createSettingsModule(port: SettingsPort): SettingsModule {
       if (disposed || request !== nextLoad) return false
       markLoadFailure()
       return false
+    } finally {
+      if (!disposed && request === nextLoad) data.loading = false
     }
   }
 

@@ -1,65 +1,62 @@
 <script lang="ts">
-  import {Badge, Button, SwitchField, TextField} from '../lib/components/ui/index.js'
+  import {copy} from '../copy/zh-CN.js'
+  import {copyText} from '../lib/presentation/clipboard.js'
+  import {Button, TextField} from '../lib/components/ui/index.js'
   import {Inline, PageHeader, ResponsiveGrid, Stack} from '../lib/components/layout/index.js'
-  import {DetailList, EmptyState, ProblemBanner, StatusCard} from '../lib/patterns/index.js'
-  import type {PluginFilter, PluginsModule, PluginView} from '../lib/modules/plugins/types.js'
+  import {PluginCard, EmptyState, ProblemBanner, StatusCard} from '../lib/patterns/index.js'
+  import type {PluginFilter, PluginsModule} from '../lib/modules/plugins/types.js'
 
   type Props = {plugins: PluginsModule}
 
   const filters: Array<{value: PluginFilter; label: string}> = [
-    {value: 'all', label: '全部'},
-    {value: 'enabled', label: '已启用'},
-    {value: 'disabled', label: '已停用'},
-    {value: 'problem', label: '只看问题'},
+    {value: 'all', label: copy.text.filterAll},
+    {value: 'enabled', label: copy.state.enabled},
+    {value: 'disabled', label: copy.state.disabled},
+    {value: 'problem', label: copy.text.filterProblems},
   ]
 
   let {plugins}: Props = $props()
-
-  function setEnabled(plugin: PluginView, enabled: boolean) {
-    if (plugins.state.pendingIds.has(plugin.id)) return
-    void plugins.setEnabled(plugin.id, enabled)
-  }
 
   function selectFilter(filter: PluginFilter) {
     if (plugins.state.query.filter !== filter) plugins.setFilter(filter)
   }
 </script>
 
-<main class="page-grid min-w-0" aria-label="插件">
-  <PageHeader title="插件" description="搜索、查看并立即管理本地插件。" />
+<main class="page-grid min-w-0" aria-label={copy.navigation.plugins}>
+  <PageHeader title={copy.navigation.plugins} description={copy.text.pluginsDescription} />
 
   {#if plugins.state.status === 'loading'}
-    <StatusCard title="插件列表" loading loadingLabel="正在读取插件列表" />
+    <StatusCard title={copy.text.pluginList} label={copy.state.loading} tone="neutral" loading loadingLabel={copy.text.readPluginList} />
   {:else}
     <Stack gap="lg">
       {#if plugins.state.status === 'stale' && plugins.state.problem}
         <ProblemBanner
-          title="数据可能已过期"
+          title={copy.state.stale}
           detail={plugins.state.problem.detail}
           tone="warning"
-          diagnosticCode={plugins.state.problem.code}
+          diagnosticCode={plugins.state.problem.code} onCopyDiagnostic={copyText}
         />
       {:else if plugins.state.status === 'problem' && plugins.state.problem}
         <ProblemBanner
           title={plugins.state.problem.title}
           detail={plugins.state.problem.detail}
           tone={plugins.state.problem.tone}
-          diagnosticCode={plugins.state.problem.code}
+          diagnosticCode={plugins.state.problem.code} onCopyDiagnostic={copyText}
         />
       {/if}
 
       {#if plugins.state.snapshot === null}
-        <EmptyState title="暂无可显示的插件" description="应用恢复连接后会显示插件列表。" />
+        <EmptyState title={copy.text.noPluginData} description={copy.text.pluginReconnect} />
       {:else}
-        <section class="surface-card grid min-w-0 gap-4" aria-label="插件筛选">
+        <section class="surface-card grid min-w-0 gap-4" aria-label={copy.text.pluginFilters}>
           <TextField
-            label="搜索插件"
+            label={copy.text.pluginSearch}
             role="searchbox"
             value={plugins.state.query.query}
-            placeholder="按名称或 ID 搜索"
+            placeholder={copy.text.pluginSearchPlaceholder}
             oninput={(event) => plugins.setQuery(event.currentTarget.value)}
           />
-          <div aria-label="插件状态筛选">
+          <div aria-label={copy.text.pluginStateFilter}>
             <Inline gap="sm">
               {#each filters as filter (filter.value)}
                 <Button
@@ -71,67 +68,33 @@
               {/each}
             </Inline>
           </div>
-          <p class="text-sm text-text-muted">共 {plugins.state.filteredTotal} 个插件 · 已启用 {plugins.state.summary.enabled} · 活跃 {plugins.state.summary.active} · 问题 {plugins.state.summary.problem}</p>
+          <p class="text-sm text-text-muted">{copy.format.pluginCounts(plugins.state.filteredTotal, plugins.state.summary.enabled, plugins.state.summary.active, plugins.state.summary.problem)}</p>
         </section>
 
         {#if plugins.state.visiblePlugins.length === 0}
-          <EmptyState title="没有符合条件的插件" description="请调整搜索词或状态筛选条件。" />
+          <EmptyState title={copy.text.noMatchingPlugins} description={copy.text.adjustFilters} />
         {:else}
           <ResponsiveGrid columns={3}>
             {#each plugins.state.visiblePlugins as plugin (plugin.id)}
-              {@const pending = plugins.state.pendingIds.has(plugin.id)}
-              {@const problem = plugins.state.problems.get(plugin.id)}
-              <article class="surface-card grid min-w-0 gap-4" aria-labelledby={`plugin-${plugin.id}`}>
-                <div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <h2 class="min-w-0 break-words font-semibold text-text" id={`plugin-${plugin.id}`}>{plugin.name}</h2>
-                    <p class="min-w-0 break-all text-sm text-text-muted">{plugin.id}</p>
-                  </div>
-                  <Badge label={plugin.active ? '活跃' : '未活跃'} tone={plugin.active ? 'success' : 'neutral'} />
-                </div>
-
-                <div aria-label={`${plugin.name} 能力`}>
-                  <Inline gap="sm">
-                    {#each plugin.capabilities as capability (capability)}
-                      <Badge label={capability} />
-                    {/each}
-                  </Inline>
-                </div>
-
-                <DetailList items={[
-                  {label: '生命周期', value: plugin.state},
-                  {label: '帧率', value: `${plugin.frameRate} FPS`},
-                  {label: '重启次数', value: String(plugin.restartCount)},
-                ]} />
-
-                <SwitchField
-                  label={`启用 ${plugin.name}`}
-                  description={pending ? '正在更新此插件。' : undefined}
-                  disabled={pending}
-                  bind:checked={() => plugin.enabled, (enabled) => setEnabled(plugin, enabled)}
-                />
-
-                {#if problem}
-                  <ProblemBanner title={problem.title} detail={problem.detail} tone={problem.tone} diagnosticCode={problem.code} />
-                {:else if plugin.lastError}
-                  <ProblemBanner title="插件运行提示" detail={plugin.lastError} tone="warning" />
-                {/if}
-              </article>
+              <PluginCard {...plugin} loading={plugins.state.pendingIds.has(plugin.id)}
+                error={plugin.lastError} problem={plugins.state.problems.get(plugin.id)}
+                onCommand={({pluginId, enabled}) => { void plugins.setEnabled(pluginId, enabled) }}
+                onCopyDiagnostic={copyText} />
             {/each}
           </ResponsiveGrid>
         {/if}
 
         {#if plugins.state.pageCount > 1}
-          <nav class="flex min-w-0 flex-wrap items-center justify-between gap-3" aria-label="插件分页">
+          <nav class="flex min-w-0 flex-wrap items-center justify-between gap-3" aria-label={copy.text.pagination}>
             <Button
-              label="上一页"
+              label={copy.text.previousPage}
               tone="secondary"
               disabled={plugins.state.query.page <= 1}
               onclick={() => plugins.setPage(plugins.state.query.page - 1)}
             />
-            <p class="text-sm text-text-muted">第 {plugins.state.query.page} 页，共 {plugins.state.pageCount} 页</p>
+            <p class="text-sm text-text-muted">{copy.format.page(plugins.state.query.page, plugins.state.pageCount)}</p>
             <Button
-              label="下一页"
+              label={copy.text.nextPage}
               tone="secondary"
               disabled={plugins.state.query.page >= plugins.state.pageCount}
               onclick={() => plugins.setPage(plugins.state.query.page + 1)}

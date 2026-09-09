@@ -130,14 +130,14 @@ export interface AvatarSettingsWire {
 }
 
 export interface PluginsSettingsWire {
-  devRoots: string[]
+  devRoots: string[] | null
 }
 
 export interface ProcessingSettingsWire {
   defaultChannel: ProcessingChannelWire
-  overrides: ProcessingOverrideWire[]
+  overrides: ProcessingOverrideWire[] | null
   activeStaleAfterMs: number
-  mutualExclusion: string[][]
+  mutualExclusion: (string[] | null)[] | null
 }
 
 export interface ProcessingOverrideWire {

@@ -10,11 +10,13 @@
 
   const columnClasses: Record<ColumnCount, string> = {
     1: 'grid-cols-1',
-    2: 'grid-cols-1 @[32rem]:grid-cols-2',
-    3: 'grid-cols-1 @[32rem]:grid-cols-2 @[52rem]:grid-cols-3',
+    2: 'grid-cols-1 @[40rem]:grid-cols-2',
+    3: 'grid-cols-1 @[40rem]:grid-cols-2 @[52rem]:grid-cols-3',
   };
 
   let {columns = 2, children, class: className = ''}: Props = $props();
 </script>
 
-<div class={`@container grid min-w-0 gap-4 ${columnClasses[columns]} ${className}`}>{@render children()}</div>
+<div class="@container min-w-0">
+  <div class={`grid min-w-0 gap-4 ${columnClasses[columns]} ${className}`}>{@render children()}</div>
+</div>

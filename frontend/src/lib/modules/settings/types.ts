@@ -1,6 +1,6 @@
 import type {ModuleStatus} from '../shared/module-state.js'
 import type {ProblemView} from '../../presentation/problem.js'
-import type {SettingsCandidate} from '../../wails/types.js'
+import type {SettingsCandidate} from './form.js'
 import type {SettingsField} from './fields.js'
 
 export interface SettingsModuleState {
@@ -15,6 +15,7 @@ export interface SettingsModuleState {
   readonly dirty: boolean
   readonly validating: boolean
   readonly saving: boolean
+  readonly canSave: boolean
   readonly restartRequired: boolean
   readonly conflict: boolean
 }

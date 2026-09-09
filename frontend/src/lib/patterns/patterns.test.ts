@@ -16,12 +16,17 @@ import {
 } from './index.js';
 
 describe('shared UI patterns', () => {
+  it('labels the public plugin handshaking state for users', () => {
+    render(PluginCard, {props: {id: 'handshake', name: 'Tracker', enabled: true, state: 'handshaking'}});
+    expect(screen.getByRole('article', {name: 'Tracker'})).toHaveTextContent('正在握手');
+  });
   it('keeps a long Avatar ID shrinkable while retaining an available copy action', () => {
     const longId = 'avtr_'.padEnd(180, 'a');
 
     render(AvatarSummary, {props: {name: '', id: longId}});
 
-    expect(screen.getByText(longId)).toHaveClass('min-w-0');
+    expect(screen.getAllByText(longId)).toHaveLength(2);
+    for (const value of screen.getAllByText(longId)) expect(value).toHaveClass('min-w-0');
     expect(screen.getByRole('button', {name: '复制 Avatar ID'})).toBeEnabled();
   });
 
@@ -51,9 +56,14 @@ describe('shared UI patterns', () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole('button', {name: '停用插件'}));
+    await fireEvent.click(screen.getByRole('switch', {name: '启用 Vendor Tracking'}));
 
     expect(commands).toEqual([{pluginId: 'tracking.vendor', enabled: false}]);
+  });
+
+  it('never exposes an enabled diagnostic action when no copy command is provided', () => {
+    render(ProblemBanner, {props: {title: '问题', detail: '安全摘要', tone: 'danger', diagnosticCode: 'internal'}});
+    expect(screen.queryByRole('button', {name: '复制诊断信息'})).not.toBeInTheDocument();
   });
 
   it('keeps unsaved actions sticky inside the content area', () => {

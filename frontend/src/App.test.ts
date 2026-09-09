@@ -75,6 +75,14 @@ async function clickNavigation(name: string) {
 }
 
 describe('App', () => {
+  it('has exactly one main landmark on each of the four pages', async () => {
+    render(App, {props: {ports: ports().mock}})
+    await screen.findByText('Demo Avatar')
+    for (const name of ['概览', '插件', '设置', '诊断']) {
+      await clickNavigation(name)
+      expect(screen.getAllByRole('main')).toHaveLength(1)
+    }
+  })
   it('begins all three deferred queries before any startup query resolves', async () => {
     const {mock} = ports()
     const runtime = deferred<RuntimeWire>()

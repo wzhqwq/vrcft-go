@@ -40,7 +40,7 @@
       </BitsTooltip.Trigger>
     {/if}
     <BitsTooltip.Portal>
-      <BitsTooltip.Content sideOffset={6} class="z-50 max-w-64 rounded-md border border-border bg-surface-raised px-3 py-2 text-sm text-text shadow-lg shadow-black/30" role="tooltip">
+      <BitsTooltip.Content sideOffset={6} class="z-50 max-w-64 rounded-md border border-border bg-surface-raised px-3 py-2 text-sm text-text shadow-lg shadow-shadow/30" role="tooltip">
         {content}
         <BitsTooltip.Arrow class="fill-surface-raised" />
       </BitsTooltip.Content>

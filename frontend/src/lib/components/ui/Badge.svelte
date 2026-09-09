@@ -4,7 +4,7 @@
 
   const toneClasses: Record<Tone, string> = {
     neutral: 'border-border bg-surface-raised text-text',
-    success: 'border-accent bg-accent/15 text-accent',
+    success: 'border-success bg-success/15 text-success',
     warning: 'border-warning bg-warning/15 text-warning',
     danger: 'border-danger bg-danger/15 text-danger',
   };

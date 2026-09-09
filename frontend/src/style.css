@@ -15,6 +15,9 @@
   --color-text: #f2f6fb;
   --color-text-muted: #9aa9bc;
   --color-accent: #62d7c6;
+  --color-success: #62d7c6;
+  --color-overlay: #000000;
+  --color-shadow: #000000;
   --color-danger: #ff7f87;
   --color-warning: #f4c56a;
   --breakpoint-nav: 45rem;
@@ -25,8 +28,8 @@
   :root {
     color-scheme: dark;
     background:
-      radial-gradient(circle at top, rgb(24 34 50 / 0.9), transparent 48%),
-      linear-gradient(180deg, #111824 0%, #090d14 100%);
+      radial-gradient(circle at top, color-mix(in srgb, var(--color-surface-raised) 90%, transparent), transparent 48%),
+      linear-gradient(180deg, var(--color-surface) 0%, var(--color-canvas) 100%);
   }
 
   *,
@@ -80,7 +83,7 @@
 
 @layer components {
   .surface-card {
-    @apply min-w-0 rounded-xl border border-border bg-surface p-4 text-text shadow-lg shadow-black/20;
+    @apply min-w-0 rounded-xl border border-border bg-surface p-4 text-text shadow-lg shadow-shadow/20;
   }
 
   .form-control {
