@@ -1,4 +1,5 @@
 import type {ModuleState} from '../shared/module-state.js'
+import type {DiagnosticsWire} from '../../wails/types.js'
 
 export type OscState = 'not_running' | 'discovering' | 'discovered' | 'manual' | 'error'
 
@@ -49,6 +50,8 @@ export type RuntimeModuleState = ModuleState<RuntimeView>
 
 export interface RuntimeModule {
   readonly state: RuntimeModuleState
+  readonly diagnostics?: {readonly snapshot: DiagnosticsWire | null; readonly loading: boolean; readonly error: string | null}
+  refreshDiagnostics?(): Promise<void>
   start(): Promise<void>
   refresh(): Promise<void>
   dispose(): void

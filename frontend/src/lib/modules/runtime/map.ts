@@ -21,7 +21,7 @@ export function mapRuntimeWire(wire: RuntimeWire): RuntimeView {
     osc: application === undefined ? undefined : mapOsc(application.osc),
     pluginFailures: application === undefined
       ? []
-      : application.pluginFailures.map((failure) => ({
+      : (application.pluginFailures ?? []).map((failure) => ({
           pluginId: failure.pluginId,
           operation: failure.operation,
           message: failure.message,

@@ -93,11 +93,17 @@ for (const viewport of viewports) {
     await expect(dialog).toBeHidden();
     await page.getByRole('region', {name: '未保存的更改'}).getByRole('button', {name: '放弃更改'}).click();
     await page.getByRole('button', {name: '诊断', exact: true}).click();
-    await expect(page.getByRole('heading', {name: 'Project Status'})).toBeVisible();
+    await expect(page.getByRole('heading', {name: '诊断', exact: true})).toBeVisible();
     const moduleGrid = page.getByRole('article', {name: 'Runtime', exact: true}).locator('..');
-    await expect.poll(() => moduleGrid.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)).toBe(viewport.width >= 1440 ? 3 : viewport.width >= 1024 ? 2 : 1);
+    const rows = moduleGrid.getByRole('article');
+    await expect(rows).toHaveCount(3);
+    const firstRow = await rows.nth(0).boundingBox();
+    const lastRow = await rows.nth(2).boundingBox();
+    expect(lastRow!.y).toBeGreaterThan(firstRow!.y);
+    expect(lastRow!.y + lastRow!.height - firstRow!.y).toBeLessThan(250);
     await page.getByRole('button', {name: '复制诊断信息', exact: true}).click();
     await expectNoHorizontalOverflow(page);
     await expect(page.getByRole('main')).toHaveCount(1);
+    if (viewport.width === 1024) await page.screenshot({path: test.info().outputPath('diagnostics.png'), fullPage: true});
   });
 }

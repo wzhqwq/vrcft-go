@@ -1,3 +1,5 @@
+import {localTime} from '../lib/presentation/time.js'
+
 export const copy = {
   navigation: {
     overview: '概览',
@@ -217,7 +219,7 @@ export const copy = {
     pluginSummary: (total: number, active: number, problem: number) => `${total} 个插件 · ${active} 个活跃 · ${problem} 个问题`,
     pluginCounts: (total: number, enabled: number, active: number, problem: number) => `共 ${total} 个插件 · 已启用 ${enabled} · 活跃 ${active} · 问题 ${problem}`,
     page: (page: number, total: number) => `第 ${page} 页，共 ${total} 页`,
-    staleSettings: (time: string | null) => `显示上次可用设置 · ${time ?? '尚未更新'}`,
+    staleSettings: (time: string | null) => `显示上次可用设置 · ${localTime(time)}`,
     revision: (revision: number) => `修订 ${revision}`,
     diagnostic: (code: string) => `问题代码：${code}`,
     devRoot: (index: number) => `开发目录 ${index}`,

@@ -3,6 +3,7 @@ package application
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 )
 
 type Config struct {
+	Logger               *slog.Logger
 	Avatar               avatar.PlannerConfig
 	PluginCatalog        plugins.DirectoryCatalogConfig
 	PluginStorePath      string
@@ -32,6 +34,7 @@ const (
 var ErrInvalidConfig = errors.New("application: invalid config")
 
 type normalizedConfig struct {
+	logger               *slog.Logger
 	avatar               avatar.PlannerConfig
 	pluginCatalog        plugins.DirectoryCatalogConfig
 	pluginStorePath      string
@@ -52,6 +55,7 @@ func normalizeConfig(config Config) (normalizedConfig, error) {
 	}
 
 	normalized := normalizedConfig{
+		logger:               config.Logger,
 		avatar:               config.Avatar,
 		pluginCatalog:        cloneDirectoryCatalogConfig(config.PluginCatalog),
 		pluginStorePath:      config.PluginStorePath,

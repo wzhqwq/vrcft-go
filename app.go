@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -37,6 +39,7 @@ func productionOwnedBackend(config application.Config) (*application.Application
 }
 
 type appDependencies struct {
+	logDirectory      func() (string, error)
 	goos              string
 	environment       func() (userconfig.Environment, error)
 	resolvePaths      func(userconfig.Environment) (userconfig.Paths, error)
@@ -72,9 +75,11 @@ type rootStartupOperation struct {
 // operations seam used by lifecycle tests. NewApp only creates passive values;
 // startup owns all environment, storage, backend, and goroutine work.
 type App struct {
-	mu        sync.Mutex
-	lifecycle rootLifecycle
-	deps      appDependencies
+	diagnostics  *diagnosticLog
+	startupStage string
+	mu           sync.Mutex
+	lifecycle    rootLifecycle
+	deps         appDependencies
 
 	backend    *application.Application
 	backendOps backendOperations
@@ -109,7 +114,7 @@ func newAppWithDependencies(dependencies appDependencies) *App {
 		dependencies.shutdownTimeout = defaultRootShutdownTimeout
 	}
 	settingsIO := &rootSettingsBackend{}
-	return &App{
+	app := &App{
 		lifecycle:  rootCreated,
 		deps:       dependencies,
 		runtime:    newRuntimeAPI(dependencies.goos == "windows", dependencies.now),
@@ -117,10 +122,16 @@ func newAppWithDependencies(dependencies appDependencies) *App {
 		settings:   newSettingsAPI(settingsIO, userconfig.Candidate{}, dependencies.now),
 		settingsIO: settingsIO,
 	}
+	app.diagnostics = app.runtime.diagnostics
+	return app
 }
 
 func productionAppDependencies() appDependencies {
 	return appDependencies{
+		logDirectory: func() (string, error) {
+			root, err := os.UserConfigDir()
+			return filepath.Join(root, "vrcft-go", "logs"), err
+		},
 		goos: runtime.GOOS,
 		environment: func() (userconfig.Environment, error) {
 			executable, err := os.Executable()
@@ -160,6 +171,17 @@ func (a *App) startup(parent context.Context) {
 		return
 	}
 	defer a.finishStartup(op)
+	if a.deps.logDirectory != nil {
+		directory, err := a.deps.logDirectory()
+		if err != nil {
+			a.diagnostics.mu.Lock()
+			a.diagnostics.diskError = redactDiagnostic(fmt.Sprintf("resolve log directory: %v", err))
+			a.diagnostics.mu.Unlock()
+		} else {
+			a.diagnostics.open(directory, diagnosticFileBytes)
+		}
+	}
+	a.reachStartupBoundary("startup")
 
 	if !a.startupActive(op) {
 		return
@@ -268,6 +290,7 @@ func (a *App) startup(parent context.Context) {
 		a.enterDiagnostic(err, nil)
 		return
 	}
+	config.Logger = a.diagnostics.logger()
 
 	// Factory construction is synchronous and bounded by contract, but it does
 	// not receive a context. Keep it outside the root lock so shutdown can mark
@@ -351,6 +374,10 @@ func (a *App) startupActiveLocked(op *rootStartupOperation) bool {
 }
 
 func (a *App) reachStartupBoundary(boundary string) {
+	a.mu.Lock()
+	a.startupStage = boundary
+	a.mu.Unlock()
+	a.diagnostics.write(slog.LevelInfo, "runtime", boundary, "startup stage entered")
 	if a.deps.startupBoundary != nil {
 		a.deps.startupBoundary(boundary)
 	}
@@ -405,6 +432,7 @@ func (a *App) attachRunningConsumers(op *rootStartupOperation, operations backen
 		return
 	}
 	a.lifecycle = rootRunning
+	a.diagnostics.write(slog.LevelInfo, "runtime", "running", "application started")
 	a.runtime.setRootState(runtimePhaseRunning, nil)
 }
 
@@ -421,6 +449,8 @@ func (a *App) enterDiagnostic(err error, operations backendOperations) {
 	if a.lifecycle != rootStarting {
 		return
 	}
+	entry := a.diagnostics.write(slog.LevelError, "runtime", a.startupStage, err.Error())
+	a.diagnostics.retainFailure(entry)
 	if status != nil {
 		a.runtime.setApplicationStatus(*status)
 	}
@@ -461,6 +491,7 @@ func (a *App) shutdown(context.Context) {
 	if startupOp != nil {
 		<-startupOp.done
 	}
+	a.diagnostics.write(slog.LevelInfo, "runtime", "shutdown", "application stopping")
 	a.mu.Lock()
 	consumerCancel := a.consumerCancel
 	forwarders := a.forwarders
@@ -485,10 +516,13 @@ func (a *App) shutdown(context.Context) {
 	}
 	var problem *Problem
 	if closeErr != nil {
+		a.diagnostics.write(slog.LevelError, "runtime", "shutdown", closeErr.Error())
 		mapped := sanitizeProblem(closeErr, a.runtime.GetStatus().Revision)
 		problem = &mapped
 	}
 	a.runtime.setRootState(runtimePhaseClosed, problem)
+	a.diagnostics.write(slog.LevelInfo, "runtime", "closed", "application closed")
+	a.diagnostics.close()
 
 	a.mu.Lock()
 	a.lifecycle = rootClosed

@@ -14,6 +14,22 @@ export interface RuntimeWire {
   problem?: ProblemWire | null
 }
 
+export interface DiagnosticEntryWire {
+  id: string
+  time: string
+  level: string
+  component: string
+  stage: string
+  message: string
+}
+
+export interface DiagnosticsWire {
+  entries: DiagnosticEntryWire[]
+  failure?: DiagnosticEntryWire | null
+  logPath: string
+  diskError: string
+}
+
 export interface RuntimeApplicationWire {
   lifecycle: string
   avatarId: string
@@ -25,7 +41,7 @@ export interface RuntimeApplicationWire {
   configId: string
   generationExhausted: boolean
   osc: RuntimeOscWire
-  pluginFailures: PluginControlFailureWire[]
+  pluginFailures: PluginControlFailureWire[] | null
   planError?: string
   runtimeError?: string
 }

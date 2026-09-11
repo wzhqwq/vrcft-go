@@ -1,4 +1,5 @@
 import type {
+  DiagnosticsWire,
   PluginListWire,
   PluginMutationWire,
   RuntimeWire,
@@ -12,6 +13,8 @@ export type Stop = () => void
 
 export interface RuntimePort {
   getStatus(): Promise<RuntimeWire>
+  getDiagnostics?(): Promise<DiagnosticsWire>
+  reportFrontendError?(stage: string, message: string): Promise<void>
   onChanged(listener: (value: unknown) => void): Stop
 }
 

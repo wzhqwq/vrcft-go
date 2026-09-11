@@ -1,10 +1,10 @@
 import {EventsOn} from '../../../wailsjs/runtime/runtime'
 import {List, SetEnabled} from '../../../wailsjs/go/main/PluginsAPI'
-import {GetStatus} from '../../../wailsjs/go/main/RuntimeAPI'
+import {GetStatus, GetDiagnostics, ReportFrontendError} from '../../../wailsjs/go/main/RuntimeAPI'
 import {Get, Save, Validate} from '../../../wailsjs/go/main/SettingsAPI'
 
 import {createListenerPort, type WailsPorts} from './ports'
-import type {PluginListWire, PluginMutationWire, RuntimeWire, SettingsCandidate, SettingsSaveWire, SettingsValidationWire, SettingsWire} from './types'
+import type {DiagnosticsWire, PluginListWire, PluginMutationWire, RuntimeWire, SettingsCandidate, SettingsSaveWire, SettingsValidationWire, SettingsWire} from './types'
 
 const runtimeChanged = createListenerPort<unknown>((emit) => subscribe('vrcft:v1:runtime-status', emit))
 const pluginsChanged = createListenerPort<unknown>((emit) => subscribe('vrcft:v1:plugins-changed', emit))
@@ -13,6 +13,8 @@ const settingsChanged = createListenerPort<unknown>((emit) => subscribe('vrcft:v
 export function productionPorts(): WailsPorts {
   return {
     runtime: {
+      getDiagnostics() { return GetDiagnostics() as Promise<DiagnosticsWire> },
+      reportFrontendError(stage, message) { return ReportFrontendError(stage, message) },
       getStatus() {
         return GetStatus() as Promise<RuntimeWire>
       },

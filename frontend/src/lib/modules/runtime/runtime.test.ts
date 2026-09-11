@@ -95,6 +95,42 @@ async function startWith(mock: RuntimeMock, wire: RuntimeWire) {
 }
 
 describe('Runtime module', () => {
+  it('accepts legacy null plugin failure lists without losing the runtime revision', async () => {
+    const module = await startWith(new RuntimeMock(), runtimeWire(1, 'avtr_current', {pluginFailures: null as unknown as []}))
+    expect(module.state.status).toBe('ready')
+    expect(module.state.revision).toBe(1)
+    expect(module.state.snapshot?.pluginFailures).toEqual([])
+  })
+
+  it('reads diagnostics independently when status parsing fails and reports the parsing stage', async () => {
+    const mock = new RuntimeMock()
+    const reportFrontendError = vi.fn().mockResolvedValue(undefined)
+    const module = createRuntimeModule(Object.assign(mock, {
+      getDiagnostics: async () => ({entries: [], logPath: 'logs', diskError: ''}), reportFrontendError,
+    }))
+    const started = module.start()
+    mock.resolvePending(0, runtimeWire(1, 'avtr_current', {osc: null as unknown as RuntimeOscWire}))
+    await started
+    await module.refreshDiagnostics?.()
+    expect(module.state.problem?.detail).toContain('parse_status')
+    expect(reportFrontendError).toHaveBeenCalledWith('parse_status', expect.any(String))
+    expect(module.diagnostics?.snapshot?.logPath).toBe('logs')
+  })
+  it('distinguishes status requests and invalid revisions in diagnostic reports', async () => {
+    const mock = new RuntimeMock()
+    const reportFrontendError = vi.fn().mockResolvedValue(undefined)
+    const module = createRuntimeModule(Object.assign(mock, {reportFrontendError}))
+    const started = module.start()
+    mock.rejectPending(0, new Error('transport failed token=private'))
+    await started
+    expect(module.state.problem?.detail).toContain('get_status')
+    expect(reportFrontendError).toHaveBeenLastCalledWith('get_status', 'transport failed token=[REDACTED]')
+    const refreshed = module.refresh()
+    mock.resolvePending(1, runtimeWire(Number.NaN))
+    await refreshed
+    expect(module.state.problem?.detail).toContain('revision')
+    expect(reportFrontendError).toHaveBeenLastCalledWith('revision', expect.any(String))
+  })
   it('rejects unsafe and older revisions', () => {
     expect(acceptRevision(3, 3)).toBe(true)
     expect(acceptRevision(3, 4)).toBe(true)

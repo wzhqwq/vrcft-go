@@ -24,11 +24,13 @@ func TestRuntimeAPIRootPhasesAndExactPublicSurface(t *testing.T) {
 	if initial.Revision != 1 || initial.Phase != "created" || !initial.PlatformSupported || initial.Application != nil || initial.Problem != nil {
 		t.Fatalf("initial runtime response = %+v", initial)
 	}
-	if methods := reflect.TypeOf(api).NumMethod(); methods != 1 {
-		t.Fatalf("RuntimeAPI exported method count = %d, want exactly GetStatus", methods)
+	if methods := reflect.TypeOf(api).NumMethod(); methods != 3 {
+		t.Fatalf("RuntimeAPI exported method count = %d, want GetStatus, GetDiagnostics and ReportFrontendError", methods)
 	}
-	if _, ok := reflect.TypeOf(api).MethodByName("GetStatus"); !ok {
-		t.Fatal("RuntimeAPI does not expose GetStatus")
+	for _, name := range []string{"GetStatus", "GetDiagnostics", "ReportFrontendError"} {
+		if _, ok := reflect.TypeOf(api).MethodByName(name); !ok {
+			t.Fatalf("RuntimeAPI does not expose %s", name)
+		}
 	}
 
 	before := initial

@@ -18,5 +18,5 @@
 </script>
 
 <div class="@container min-w-0">
-  <div class={`grid min-w-0 gap-4 ${columnClasses[columns]} ${className}`}>{@render children()}</div>
+  <div class={`grid min-w-0 gap-3 ${columnClasses[columns]} ${className}`}>{@render children()}</div>
 </div>

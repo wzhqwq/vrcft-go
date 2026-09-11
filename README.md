@@ -29,3 +29,17 @@ to this in your browser, and you can call your Go code from devtools.
 ## Building
 
 To build a redistributable, production mode package, use `wails build`.
+
+## Diagnostics and logs
+
+The 诊断 page shows module errors, the failed startup stage and correlation ID,
+and recent logs with level filtering. Update times use the system timezone and
+Chinese date/time formatting. Copy diagnostic information when reporting a
+startup problem; status decoding failures do not prevent querying logs.
+
+Windows writes redacted JSON-line logs to
+`%APPDATA%\vrcft-go\logs\application.jsonl`. Rotation retains this file and four
+backups, up to 5 MiB each. The page retains the latest 200 records for the current
+process and the startup failure. If disk logging fails, recent memory logs remain
+available and the page reports the disk error. High-volume logging uses a bounded
+disk queue and reports omitted records rather than blocking frame processing.

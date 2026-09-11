@@ -34,7 +34,7 @@ export async function installWailsMocks(page: Page): Promise<void> {
           planGeneration: 7, planStatus: 'ready', planSource: 'VRChat', configPath: 'C:\\RAW_CONFIG_PATH_DO_NOT_LEAK',
           configId: 'avtr_authoritative', generationExhausted: false,
           osc: {running: true, connected: true, hasTarget: true, targetMode: 'auto', target: {host: '192.168.1.10', port: 9000}},
-          pluginFailures: [], planError: 'RAW_PLAN_ERROR_DO_NOT_LEAK', runtimeError: 'RAW_RUNTIME_ERROR_DO_NOT_LEAK',
+          pluginFailures: [], planError: 'Avatar plan unavailable: token=RAW_PLAN_ERROR_DO_NOT_LEAK', runtimeError: 'Runtime warning: password=RAW_RUNTIME_ERROR_DO_NOT_LEAK',
         },
       },
       plugins: {
@@ -98,6 +98,11 @@ export async function installWailsMocks(page: Page): Promise<void> {
       main: {
         RuntimeAPI: {
           GetStatus: async () => { calls.push(['RuntimeAPI.GetStatus']); return clone(state.runtime); },
+          GetDiagnostics: async () => {
+            calls.push(['RuntimeAPI.GetDiagnostics']);
+            return {entries: [{id: 'log-1', time: '2026-09-01T00:00:00Z', level: 'INFO', component: 'runtime', stage: 'running', message: 'application started'}], logPath: 'C:\\Users\\Test\\AppData\\Roaming\\vrcft-go\\logs\\application.jsonl', diskError: ''};
+          },
+          ReportFrontendError: async (stage: string, message: string) => { calls.push(['RuntimeAPI.ReportFrontendError', stage, message]); },
         },
         PluginsAPI: {
           GetConfig: async (pluginID: string) => { calls.push(['PluginsAPI.GetConfig', pluginID]); return {revision: 1, updatedAt: state.plugins.updatedAt, pluginId: pluginID, configRevision: 1, data: ''}; },

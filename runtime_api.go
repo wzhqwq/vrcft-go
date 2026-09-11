@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"reflect"
 	"sync"
 	"time"
@@ -30,9 +31,10 @@ type runtimeSnapshot struct {
 }
 
 // RuntimeAPI owns the Wails-safe runtime module snapshot. Root lifecycle
-// setters and Application consumers stay unexported so GetStatus is the only
-// bound method.
+// setters and Application consumers stay unexported. Diagnostics uses a separate
+// bounded snapshot so status decoding failures do not hide operational records.
 type RuntimeAPI struct {
+	diagnostics *diagnosticLog
 	mu          sync.Mutex
 	store       *moduleStore[runtimeSnapshot]
 	subscribers map[chan RuntimeResponse]struct{}
@@ -40,6 +42,7 @@ type RuntimeAPI struct {
 
 func newRuntimeAPI(platformSupported bool, now func() time.Time) *RuntimeAPI {
 	return &RuntimeAPI{
+		diagnostics: newDiagnosticLog(),
 		store: newModuleStore(runtimeSnapshot{
 			phase:             runtimePhaseCreated,
 			platformSupported: platformSupported,
@@ -51,6 +54,14 @@ func newRuntimeAPI(platformSupported bool, now func() time.Time) *RuntimeAPI {
 // GetStatus returns the latest complete owned runtime snapshot.
 func (api *RuntimeAPI) GetStatus() RuntimeResponse {
 	return runtimeResponse(api.store.snapshot())
+}
+
+// GetDiagnostics remains usable even if a caller cannot decode GetStatus.
+func (api *RuntimeAPI) GetDiagnostics() DiagnosticsResponse { return api.diagnostics.snapshot() }
+
+// ReportFrontendError accepts only bounded, rate-limited diagnostic messages.
+func (api *RuntimeAPI) ReportFrontendError(stage, message string) {
+	api.diagnostics.reportFrontend(stage, message)
 }
 
 func (api *RuntimeAPI) setPhase(phase runtimePhase) {
@@ -84,6 +95,7 @@ func (api *RuntimeAPI) setApplicationStatus(status application.Status) {
 	envelope := api.store.snapshot()
 	next := cloneRuntimeSnapshot(envelope.Value)
 	converted := runtimeApplicationDTO(status)
+	api.logStatusChange(next.application, &converted)
 	next.application = &converted
 	api.updateLocked(envelope, next, envelope.Problem)
 }
@@ -213,8 +225,46 @@ func cloneRuntimeSnapshot(value runtimeSnapshot) runtimeSnapshot {
 }
 
 func cloneRuntimeApplicationDTO(value RuntimeApplicationDTO) RuntimeApplicationDTO {
-	value.PluginFailures = append([]PluginControlFailureDTO(nil), value.PluginFailures...)
+	value.PluginFailures = append([]PluginControlFailureDTO{}, value.PluginFailures...)
 	return value
+}
+
+func (api *RuntimeAPI) logStatusChange(previous, next *RuntimeApplicationDTO) {
+	if previous == nil || previous.Lifecycle != next.Lifecycle {
+		api.diagnostics.write(slog.LevelInfo, "runtime", "lifecycle", next.Lifecycle)
+	}
+	for _, item := range []struct{ stage, current, old string }{
+		{"runtime", next.RuntimeError, runtimePreviousError(previous, "runtime")},
+		{"avatar_plan", next.PlanError, runtimePreviousError(previous, "avatar_plan")},
+		{"osc", next.OSC.LastError, runtimePreviousError(previous, "osc")},
+	} {
+		if item.current != item.old {
+			if item.current != "" {
+				api.diagnostics.write(slog.LevelError, "runtime", item.stage, item.current)
+			} else {
+				api.diagnostics.write(slog.LevelInfo, "runtime", item.stage, "previous error cleared")
+			}
+		}
+	}
+	if previous == nil || !reflect.DeepEqual(previous.PluginFailures, next.PluginFailures) {
+		for _, failure := range next.PluginFailures {
+			api.diagnostics.write(slog.LevelError, "plugin", failure.Operation, failure.PluginID+": "+failure.Message)
+		}
+	}
+}
+
+func runtimePreviousError(value *RuntimeApplicationDTO, stage string) string {
+	if value == nil {
+		return ""
+	}
+	switch stage {
+	case "runtime":
+		return value.RuntimeError
+	case "avatar_plan":
+		return value.PlanError
+	default:
+		return value.OSC.LastError
+	}
 }
 
 func runtimeResponse(envelope moduleEnvelope[runtimeSnapshot]) RuntimeResponse {

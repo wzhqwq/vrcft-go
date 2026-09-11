@@ -138,7 +138,7 @@ describe('SettingsPage', () => {
     const {settings} = await renderReady()
     settings.updateDraft((draft) => { draft.avatar.oscRoot = 'C:\\mine' })
     await settings.refresh()
-    expect(await screen.findByText(/显示上次可用设置/)).toHaveTextContent('2026-09-01T00:00:00Z')
+    expect(await screen.findByText(/显示上次可用设置/)).toHaveTextContent(new Intl.DateTimeFormat('zh-CN', {dateStyle: 'short', timeStyle: 'medium'}).format(new Date('2026-09-01T00:00:00Z')))
     expect(screen.getByRole('textbox', {name: 'Avatar OSC 根目录'})).toHaveValue('C:\\mine')
   })
 

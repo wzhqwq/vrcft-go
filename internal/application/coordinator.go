@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 )
 
 type coordinatorInputs struct {
+	logger        *slog.Logger
 	avatarChanges <-chan osc.AvatarChange
 	oscEvents     <-chan osc.ControllerEvent
 	pluginEvents  <-chan plugins.Event
@@ -95,6 +97,7 @@ func (c *coordinator) run(ctx context.Context, inputs coordinatorInputs, ready c
 				pluginEvents = nil
 				continue
 			}
+			logPluginEvent(inputs.logger, event)
 			c.observePlugin(event)
 		case frame, ok := <-merged:
 			if !ok {

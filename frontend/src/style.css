@@ -83,7 +83,7 @@
 
 @layer components {
   .surface-card {
-    @apply min-w-0 rounded-xl border border-border bg-surface p-4 text-text shadow-lg shadow-shadow/20;
+    @apply min-w-0 rounded-xl border border-border bg-surface p-3 text-text shadow-lg shadow-shadow/20;
   }
 
   .form-control {
@@ -99,7 +99,7 @@
   }
 
   .page-grid {
-    @apply grid min-w-0 gap-4;
+    @apply grid min-w-0 gap-3;
   }
 }
 

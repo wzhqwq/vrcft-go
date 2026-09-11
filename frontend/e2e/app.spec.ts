@@ -84,7 +84,7 @@ test('keeps a dirty settings draft on conflict and offers confirmed reload', asy
 
 test('keeps raw diagnostics input out of the page and copied summary', async ({page}) => {
   await page.getByRole('button', {name: '诊断'}).click();
-  await expect(page.getByRole('heading', {name: 'Project Status'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: '诊断', exact: true})).toBeVisible();
   await expect(page.getByLabel('Runtime')).toContainText('修订 1');
   await expect(page.getByText('192.168.1.10:9000')).toBeVisible();
   const pageBody = page.locator('body');
@@ -95,9 +95,32 @@ test('keeps raw diagnostics input out of the page and copied summary', async ({p
   await page.getByRole('button', {name: '复制诊断信息'}).click();
   const copiedText = () => page.evaluate(() => (window as unknown as {__vrcftAcceptance: {copiedText?: string}}).__vrcftAcceptance.copiedText ?? '');
   await expect.poll(copiedText).toContain('Runtime: ready');
+  await expect.poll(copiedText).toContain('Avatar plan unavailable');
   for (const marker of ['RAW_CONFIG_PATH_DO_NOT_LEAK', 'RAW_PLAN_ERROR_DO_NOT_LEAK', 'RAW_PRIVATE_VALUE_DO_NOT_LEAK']) {
     await expect.poll(copiedText).not.toContain(marker);
   }
+});
+
+test('retains detailed startup diagnostics when runtime status decoding fails', async ({page}) => {
+  await page.evaluate(() => {
+    const api = window.go.main.RuntimeAPI;
+    api.GetStatus = async () => ({revision: 2, updatedAt: '2026-09-01T00:00:00Z', application: {osc: null}});
+    api.GetDiagnostics = async () => {
+      const failure = {id: 'startup-42', time: '2026-09-01T00:00:00Z', level: 'ERROR', component: 'runtime', stage: 'backend_start', message: 'listen udp :9001: address already in use; token=PRIVATE_CREDENTIAL'};
+      return {entries: [failure], failure, logPath: 'C:\\Users\\Tester\\AppData\\Roaming\\vrcft-go\\logs\\application.jsonl', diskError: ''};
+    };
+  });
+  await emit(page, 'vrcft:v1:runtime-status');
+  await page.getByRole('button', {name: '诊断', exact: true}).click();
+  await expect(page.getByRole('heading', {name: '启动错误'})).toBeVisible();
+  await expect(page.getByRole('region', {name: '最近日志内容'})).toContainText('address already in use');
+  await expect(page.locator('body')).not.toContainText('PRIVATE_CREDENTIAL');
+  await expect(page.getByRole('article', {name: 'Runtime', exact: true})).toContainText('解析');
+  await page.getByRole('button', {name: '复制诊断信息'}).click();
+  const copied = () => page.evaluate(() => (window as unknown as {__vrcftAcceptance: {copiedText: string}}).__vrcftAcceptance.copiedText);
+  await expect.poll(copied).toContain('startup-42');
+  await expect.poll(copied).toContain('backend_start');
+  await expect.poll(copied).not.toContain('PRIVATE_CREDENTIAL');
 });
 
 test('moves internal settings tabs with the keyboard', async ({page}) => {

@@ -44,6 +44,8 @@ Depends on the three versioned Wails APIs backed by `internal/application` and t
 ## Concurrency and lifecycle
 The three modules start independently and each owns one invalidation subscription. An event refreshes only its owning module; modules reject stale revisions, retain the last valid snapshot after refresh failure, and dispose their subscriptions when the application unmounts.
 ## Error handling
+Runtime distinguishes request, parsing, revision and subscription failures. Null legacy plugin-failure arrays normalize to empty arrays. Diagnostics fetches recent logs independently of Runtime status decoding and polls only while the page is mounted. The compact module rows show problem details; retained startup failure and bounded filtered logs can be copied. Displayed and copied error text is redacted, and timestamps use Chinese formatting in the system timezone.
+
 Initial module failures render no-data problem states, while later failures retain and label the last valid state as stale. Settings surfaces field, validation, conflict, and save outcomes without discarding a dirty draft; plugin failures remain isolated to the affected card; diagnostics exposes bounded sanitized problems and empty or unsupported states.
 ## Performance constraints
 The UI renders bounded status snapshots rather than tracking frames, paginates plugin lists, and keeps module refreshes independent so one event does not trigger a global refresh.

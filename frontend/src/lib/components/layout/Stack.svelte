@@ -10,8 +10,8 @@
 
   const gapClasses: Record<Gap, string> = {
     sm: 'gap-2',
-    md: 'gap-4',
-    lg: 'gap-6',
+    md: 'gap-3',
+    lg: 'gap-4',
   };
 
   let {gap = 'md', children, class: className = ''}: Props = $props();

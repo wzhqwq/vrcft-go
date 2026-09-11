@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -83,6 +84,7 @@ const (
 )
 
 type Application struct {
+	logger      *slog.Logger
 	plugins     applicationPluginManager
 	tracking    applicationTracking
 	osc         applicationOSC
@@ -168,6 +170,7 @@ func newApplication(config Config, dependencies applicationDependencies) (*Appli
 	lifecycleOperation := make(chan struct{}, 1)
 	lifecycleOperation <- struct{}{}
 	return &Application{
+		logger:             normalized.logger,
 		plugins:            manager,
 		tracking:           trackingService,
 		osc:                oscService,
@@ -278,6 +281,7 @@ func (a *Application) Start(ctx context.Context) error {
 		avatarChanges: a.osc.AvatarChanges(runCtx),
 		oscEvents:     a.osc.Events(),
 		pluginEvents:  a.plugins.Subscribe(runCtx),
+		logger:        a.logger,
 		merged:        a.tracking.SubscribeMerged(runCtx),
 		ticks:         ticker.C(),
 	}
