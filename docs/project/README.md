@@ -6,6 +6,7 @@ The product has a control path and a frame path. The control path turns VRChat a
 
 - [Milestones](milestones.md) defines dependency order and product completion.
 - [Generated status](status.md) reports current evidence and blockers.
+- [Issue tracker](issues.md) tracks development findings and community reports, with manual entry templates and monthly archives.
 - `packages/` specifies every Go package returned by `go list ./...`.
 - `subsystems/` specifies frontend, parameter definitions, release, and end-to-end behavior.
 
