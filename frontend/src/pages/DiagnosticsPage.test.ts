@@ -2,6 +2,7 @@ import {fireEvent, render, screen, waitFor} from '@testing-library/svelte'
 import {describe, expect, it, vi} from 'vitest'
 
 import DiagnosticsPage from './DiagnosticsPage.svelte'
+import {copy} from '../copy/zh-CN.js'
 import {createPluginsFixture, createRuntimeFixture} from './page-test-fixtures.svelte.js'
 import type {PluginsModule, PluginsModuleState} from '../lib/modules/plugins/types.js'
 import type {RuntimeModuleState, RuntimeView} from '../lib/modules/runtime/types.js'
@@ -73,7 +74,7 @@ function renderDiagnostics(options: {
 }
 
 describe('DiagnosticsPage', () => {
-  it('presents independent module health and bounded runtime diagnostics without private data', () => {
+  it('presents independent module health and bounded runtime diagnostics without private data', async () => {
     renderDiagnostics()
 
     expect(screen.getByRole('heading', {name: '诊断'})).toBeVisible()
@@ -89,8 +90,19 @@ describe('DiagnosticsPage', () => {
     expect(screen.getByText('avtr_demo')).toBeVisible()
     expect(screen.getByText('127.0.0.1:9000')).toBeVisible()
     expect(screen.getByText('Eye Tracker 启动失败')).toBeVisible()
-    expect(screen.getAllByText('当前功能暂不可用').length).toBeGreaterThan(0)
-    expect(screen.getByText('没有已发现的插件')).toBeVisible()
+    expect(screen.queryByText(/：当前功能暂不可用/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: '查看 Plugins 报错'})).not.toBeInTheDocument()
+    const runtimeError = screen.getByRole('button', {name: '查看 Runtime 报错'})
+    const settingsError = screen.getByRole('button', {name: '查看 Settings 报错'})
+    await fireEvent.click(runtimeError)
+    expect(runtimeError).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('Runtime：当前功能暂不可用')).toBeVisible()
+    await fireEvent.click(settingsError)
+    expect(runtimeError).toHaveAttribute('aria-pressed', 'false')
+    expect(settingsError).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByText('Runtime：当前功能暂不可用')).not.toBeInTheDocument()
+    expect(screen.getByText('Settings：当前功能暂不可用')).toBeVisible()
+    expect(screen.getByText(copy.text.noPlugins)).toBeVisible()
     expect(screen.queryByText(/sessionId|executablePath|pluginConfig|C:\/Users\/name\/AppData/i)).not.toBeInTheDocument()
   })
 

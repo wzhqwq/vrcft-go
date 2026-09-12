@@ -33,9 +33,9 @@
     <li class={orientation === 'vertical' ? 'min-w-0' : 'min-w-32 flex-1'}>
       <Button
         label={item.label}
-        tone="secondary"
+        tone={item.id === activePage ? "primary" : "secondary"}
         aria-current={item.id === activePage ? 'page' : undefined}
-        class={`w-full ${item.id === activePage ? 'border-accent bg-surface text-text' : ''}`}
+        class="w-full"
         onclick={() => onNavigate(item.id)}
       />
     </li>
