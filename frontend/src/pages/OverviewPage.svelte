@@ -57,6 +57,14 @@
         />
       {/if}
 
+      {#if runtime.state.snapshot.avatar.id && runtime.state.snapshot.plan?.status === 'failed' && !runtime.state.snapshot.plan.configPath}
+        <ProblemBanner
+          title={copy.text.missingAvatarConfig}
+          detail={copy.text.missingAvatarConfigDescription}
+          tone="warning"
+        />
+      {/if}
+
       <StatusCard title={copy.text.phase} label={phasePresentation(runtime.state.snapshot.phase).label} tone={phasePresentation(runtime.state.snapshot.phase).tone} />
       <ResponsiveGrid>
         <AvatarSummary

@@ -59,6 +59,8 @@ export const copy = {
     configState: '配置状态',
     unconfigured: '尚未配置',
     noPlan: '尚未生成可用计划。',
+    missingAvatarConfig: '未找到当前 Avatar 的配置',
+    missingAvatarConfigDescription: '请在设置中选择 Fallback Avatar 配置文件，以便为未识别的 Avatar 绑定参数。',
     pluginOverview: '插件概览',
     readPluginOverview: '正在读取插件概览',
     noPluginOverview: '暂无可显示的插件概览',

@@ -138,7 +138,7 @@ describe('OverviewPage', () => {
 
     plugins.setState(pluginsState({snapshot: {plugins: []}, visiblePlugins: [], filteredTotal: 0, summary: {total: 0, enabled: 0, active: 0, problem: 0}}))
     await tick()
-    expect(screen.getByText('没有已发现的插件')).toBeVisible()
+    expect(screen.getByText('未发现插件')).toBeVisible()
   })
 
   it('retains the plugins summary and runtime failures for a current Plugins Problem', async () => {
@@ -169,5 +169,18 @@ describe('OverviewPage', () => {
 
     expect(screen.getByText('尚未提供 OSC 输出状态。')).toBeVisible()
     expect(screen.getByText('尚未生成可用计划。')).toBeVisible()
+  })
+
+  it('prompts for a fallback configuration when the current avatar has no configuration', () => {
+    const runtime = createRuntimeFixture(runtimeState({snapshot: runtimeSnapshot({
+      avatar: {name: '', id: 'local:sdk_test'},
+      plan: {status: 'failed', source: '', generation: 9, configPath: '', configId: '', generationExhausted: false},
+      planError: 'avatar: configuration not found',
+      pluginFailures: [],
+    })}))
+    render(OverviewPage, {props: {runtime: runtime.module, plugins: pluginsFixture().module}})
+
+    expect(screen.getByRole('alert')).toHaveTextContent('未找到当前 Avatar 的配置')
+    expect(screen.getByRole('alert')).toHaveTextContent('请在设置中选择 Fallback Avatar 配置文件')
   })
 })
