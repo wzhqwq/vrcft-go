@@ -53,36 +53,54 @@ Copy the entire entry and replace the angle-bracket placeholders. Use `COM` inst
 
 ### DEV-0001 · Notify user about setting fallback avatar configuration file when unrecognized avatar is used
 
-- Status: open
+- Status: resolved
 - Discovered: 2026-09-12
-- Updated: 2026-09-12
+- Updated: 2026-09-13
 - Owner: wzhqwq
 - Affected scope: frontend - overview - avatar plan
-- Source/links: Not yet recorded
+- Source/links: `frontend/src/pages/OverviewPage.svelte`, `frontend/src/pages/OverviewPage.test.ts`
 - Description: When the user uses an unrecognized avatar (especially for local testing avatar, which has a prefix "local:sdk_"), the system should notify the user about setting the fallback avatar configuration file to make parameter binding work correctly. This will help users understand how to manage their avatar settings and ensure a better user experience.
-- Next action: Implement notification feature for unrecognized avatars.
+- Next action: None.
+- End date: 2026-09-13
+- Resolution/closure reason: Overview now shows a fallback configuration prompt when an avatar has a failed plan with no resolved configuration path.
+- Verification evidence: `pnpm.cmd exec vitest run src/pages/OverviewPage.test.ts -t "prompts for a fallback configuration"` passed.
+- History:
+  - 2026-09-12: Recorded.
+  - 2026-09-13: Added and verified the Overview notification.
 
 ### DEV-0002 · Set OSC output to stopped when the active OSC server refused our connection
 
-- Status: open
+- Status: resolved
 - Discovered: 2026-09-12
-- Updated: 2026-09-12
+- Updated: 2026-09-13
 - Owner: wzhqwq
 - Affected scope: osc - OSCStatus
-- Source/links: internal/osc/
+- Source/links: `frontend/src/lib/modules/runtime/map.ts`, `frontend/src/lib/modules/runtime/runtime.test.ts`
 - Description: When the active OSC server refuses our connection, the system should set the OSC output to stopped, instead of showing the connection error, which may confuse users. This will help users understand the current state of the OSC output and avoid confusion.
-- Next action: Implement logic to set OSC output to stopped when connection is refused or halted.
+- Next action: None.
+- End date: 2026-09-13
+- Resolution/closure reason: OSC discovery failures with no active connection or target now map to stopped and omit the low-level connection error; connected output failures remain errors.
+- Verification evidence: `pnpm.cmd exec vitest run src/lib/modules/runtime/runtime.test.ts -t "maps bounded OSC status"` passed.
+- History:
+  - 2026-09-12: Recorded.
+  - 2026-09-13: Added and verified stopped-state mapping for refused discovery connections.
 
 ### DEV-0003 · Support UTF-8 with BOM encoding when loading avatar configuration
 
-- Status: open
+- Status: resolved
 - Discovered: 2026-09-12
-- Updated: 2026-09-12
+- Updated: 2026-09-13
 - Owner: wzhqwq
 - Affected scope: avatar - readConfig
-- Source/links: internal/avatar/config.go
+- Source/links: `internal/avatar/config.go`, `internal/avatar/config_test.go`
 - Description: The system should support UTF-8 with BOM encoding when loading avatar configuration files. VRChat generates avatar configuration files with UTF-8 with BOM encoding, which may cause issues when loading these files. By supporting this encoding, the system can ensure compatibility with VRChat and other applications that use this encoding.
-- Next action: Implement support for UTF-8 with BOM encoding when loading avatar configuration files.
+- Next action: None.
+- End date: 2026-09-13
+- Resolution/closure reason: The bounded decoder now removes one standard UTF-8 BOM at the beginning of a configuration file before JSON decoding.
+- Verification evidence: `go test ./internal/avatar -run 'TestReadConfig(AcceptsUTF8BOM|DecodesInputEndpoints|EnforcesBounds)' -count=1` passed.
+- History:
+  - 2026-09-12: Recorded.
+  - 2026-09-13: Added and verified UTF-8 BOM decoding support.
 
 ## Active Issues: Open-Source Community
 

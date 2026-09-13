@@ -61,7 +61,7 @@ This package does not receive OSC events, run an application lifecycle, atomical
 
 `NewPlanner(PlannerConfig)` normalizes a required OSC root and optional fallback path, then constructs the VRCFT parameter catalog. `(*Planner).Activate(string)` serially resolves, reads, validates, and compiles the selected file. Successful results are `StatusReady`; ordinary failures return `StatusFailed` with a non-nil empty operational plan. Only exhausted generations return a nil plan.
 
-Normal avatar configurations must have a matching root `id`; fallback configurations may use another ID. The decoder accepts unknown JSON fields but limits a file to 4 MiB, parameters to 4096 entries, IDs to 256 bytes, and input addresses to 1024 bytes. It accepts only absolute `Int`, `Bool`, and `Float` input endpoints. Invalid/unsafe IDs, links, directories, special files, malformed known fields, trailing JSON, oversized input, invalid endpoints, conflicting recognized bindings, and evaluator/dependency failures fail closed without reusing the prior plan.
+Normal avatar configurations must have a matching root `id`; fallback configurations may use another ID. The decoder accepts UTF-8 JSON with an optional leading BOM and unknown JSON fields, but limits a file to 4 MiB, parameters to 4096 entries, IDs to 256 bytes, and input addresses to 1024 bytes. It accepts only absolute `Int`, `Bool`, and `Float` input endpoints. Invalid/unsafe IDs, links, directories, special files, malformed known fields, trailing JSON, oversized input, invalid endpoints, conflicting recognized bindings, and evaluator/dependency failures fail closed without reusing the prior plan.
 
 ## Public/internal interfaces
 
@@ -95,7 +95,7 @@ Avatar IDs reject traversal and Windows-reserved path characters. Candidate path
 
 ## Required tests
 
-Avatar package and race checks cover bounded JSON decoding, input-only endpoint handling, deterministic discovery, traversal/link rejection, missing-only fallback, ready and fail-closed generation transitions, generation exhaustion, concurrent activation, requirement masks, capability projection, plan-accessor ownership, and an external evaluator-to-`osc.ValueSource` compatibility fixture. `internal/osc` catalog and race checks cover endpoint/OSCQuery compiler parity and catalog deep-clone ownership. The named fallback and subscription tests are catalog evidence for this package.
+Avatar package and race checks cover bounded JSON decoding with optional UTF-8 BOM input, input-only endpoint handling, deterministic discovery, traversal/link rejection, missing-only fallback, ready and fail-closed generation transitions, generation exhaustion, concurrent activation, requirement masks, capability projection, plan-accessor ownership, and an external evaluator-to-`osc.ValueSource` compatibility fixture. `internal/osc` catalog and race checks cover endpoint/OSCQuery compiler parity and catalog deep-clone ownership. The named fallback and subscription tests are catalog evidence for this package.
 
 ## Known gaps
 
