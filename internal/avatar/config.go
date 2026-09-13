@@ -60,6 +60,7 @@ func readConfig(path string) (decodedConfig, error) {
 	if len(data) > maxConfigBytes {
 		return decodedConfig{}, fmt.Errorf("%w: %q exceeds %d bytes", ErrConfigTooLarge, path, maxConfigBytes)
 	}
+	data = bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	var root json.RawMessage

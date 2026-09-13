@@ -57,6 +57,17 @@ func TestReadConfigAllowsOmittedName(t *testing.T) {
 	}
 }
 
+func TestReadConfigAcceptsUTF8BOM(t *testing.T) {
+	content := "\xef\xbb\xbf" + `{"id":"avtr_demo","parameters":[]}`
+	got, err := readConfig(writeConfig(t, content))
+	if err != nil {
+		t.Fatalf("readConfig() error = %v", err)
+	}
+	if got.id != "avtr_demo" {
+		t.Fatalf("ID = %q, want avtr_demo", got.id)
+	}
+}
+
 func TestReadConfigRejectsInvalidInputs(t *testing.T) {
 	tests := []struct {
 		name    string
