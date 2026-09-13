@@ -7,3 +7,4 @@ frontend/wailsjs/go
 .*-gocache/
 .superpowers/
 .tmp/
+/.worktrees/
