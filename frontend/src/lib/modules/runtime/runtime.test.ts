@@ -267,6 +267,7 @@ describe('Runtime module', () => {
     [{running: true, connected: true, hasTarget: true, targetMode: 'auto'}, 'discovered'],
     [{running: true, connected: true, hasTarget: true, targetMode: 'manual'}, 'manual'],
     [{running: true, connected: true, hasTarget: true, lastError: 'discovery unavailable'}, 'error'],
+    [{running: true, connected: false, hasTarget: false, lastError: 'connect: connection refused'}, 'not_running'],
   ]
 
   it.each(oscCases)('maps bounded OSC status to %s without inventing listener ports', async (osc, state) => {
@@ -286,7 +287,7 @@ describe('Runtime module', () => {
     expect(view.osc).toEqual({
       state,
       target: osc.hasTarget === false ? undefined : {host: '192.0.2.5', port: 9001},
-      error: osc.lastError,
+      error: state === 'error' ? osc.lastError : undefined,
     })
     expect(Object.isFrozen(view)).toBe(true)
     if (osc.hasTarget !== false) {

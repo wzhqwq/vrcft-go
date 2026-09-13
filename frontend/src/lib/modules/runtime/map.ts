@@ -32,15 +32,20 @@ export function mapRuntimeWire(wire: RuntimeWire): RuntimeView {
 }
 
 export function mapOsc(osc: RuntimeOscWire): RuntimeOscView {
+  const state = classifyOsc(osc)
   return {
-    state: classifyOsc(osc),
+    state,
     target: osc.hasTarget ? {host: osc.target.host, port: osc.target.port} : undefined,
-    error: osc.lastError || undefined,
+    error: state === 'error' ? osc.lastError || undefined : undefined,
   }
 }
 
 export function classifyOsc(osc: RuntimeOscWire): OscState {
   if (!osc.running) {
+    return 'not_running'
+  }
+
+  if (osc.lastError && !osc.connected && !osc.hasTarget) {
     return 'not_running'
   }
 
