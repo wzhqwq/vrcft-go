@@ -48,6 +48,18 @@ describe('field controls', () => {
     expect(screen.getByRole('listbox')).toHaveClass('w-[var(--bits-floating-anchor-width)]');
   });
 
+  it('uses a decorative chevron icon for the select indicator', () => {
+    render(SelectField, {
+      props: {label: '模式', value: 'auto', options: [{value: 'auto', label: '自动'}]},
+    });
+
+    const control = screen.getByRole('button', {name: '模式'});
+    const icon = control.querySelector('svg');
+    expect(icon).toHaveAttribute('aria-hidden', 'true');
+    expect(icon).toHaveClass('size-4', 'transition-transform', 'group-data-[state=open]:rotate-180');
+    expect(control).not.toHaveTextContent('⌄');
+  });
+
   it('updates the checked switch state when activated', async () => {
     render(SwitchField, {props: {label: '启用 OSC', checked: false, required: true}});
 

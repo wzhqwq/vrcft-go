@@ -9,6 +9,7 @@
 
 <script lang="ts" generics="T extends string">
   import {Select} from 'bits-ui';
+  import {ChevronDown} from 'lucide-svelte';
 
   type Props = {
     label: string;
@@ -52,10 +53,10 @@
       aria-invalid={error ? 'true' : undefined}
       aria-labelledby={labelId}
       aria-required={required || undefined}
-      class="form-control focus-ring flex items-center justify-between gap-3 text-left data-[placeholder]:text-text-muted disabled:cursor-not-allowed disabled:opacity-60"
+      class="group form-control focus-ring flex items-center justify-between gap-3 text-left data-[placeholder]:text-text-muted disabled:cursor-not-allowed disabled:opacity-60"
     >
       <Select.Value {placeholder} />
-      <span aria-hidden="true" class="text-text-muted">⌄</span>
+      <ChevronDown aria-hidden="true" class="size-4 shrink-0 text-text-muted transition-transform group-data-[state=open]:rotate-180" />
     </Select.Trigger>
     <Select.Portal>
       <Select.Content class="z-50 max-h-72 w-[var(--bits-floating-anchor-width)] min-w-[var(--bits-floating-anchor-width)] overflow-auto rounded-lg border border-border bg-surface p-1 shadow-lg shadow-shadow/30">
