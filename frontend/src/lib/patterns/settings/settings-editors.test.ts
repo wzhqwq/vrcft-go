@@ -41,39 +41,65 @@ describe('settings repeated editors', () => {
     const changes: ProcessingChannel[] = []
     render(ProcessingChannelFields, {props: {value: frozen, onChange: (value) => changes.push(value)}})
 
-    await fireEvent.click(screen.getByRole('switch', {name: '启用校准'}))
+    await fireEvent.click(screen.getByRole('switch', {name: '启用输入校准'}))
     expect(changes.at(-1)?.calibration.enabled).toBe(false)
-    await fireEvent.input(screen.getByRole('spinbutton', {name: '中立值'}), {target: {value: '0.25'}})
+    await fireEvent.input(screen.getByRole('spinbutton', {name: '静止基准值'}), {target: {value: '0.25'}})
     expect(changes.at(-1)?.calibration.neutral).toBe(0.25)
-    await fireEvent.input(screen.getByRole('spinbutton', {name: '死区'}), {target: {value: '0.1'}})
+    await fireEvent.click(screen.getByRole('tab', {name: '响应调节'}))
+    await fireEvent.input(screen.getByRole('spinbutton', {name: '忽略微小输入'}), {target: {value: '0.1'}})
     expect(changes.at(-1)?.tuning.deadzone).toBe(0.1)
-    await fireEvent.input(screen.getByRole('spinbutton', {name: 'EMA 系数'}), {target: {value: '0.2'}})
+    await fireEvent.click(screen.getByRole('tab', {name: '平滑处理'}))
+    await fireEvent.input(screen.getByRole('spinbutton', {name: 'EMA 响应速度'}), {target: {value: '0.2'}})
     expect(changes.at(-1)?.filter.emaAlpha).toBe(0.2)
-    await fireEvent.input(screen.getByRole('spinbutton', {name: '保持时长（毫秒）'}), {target: {value: '11'}})
+    await fireEvent.click(screen.getByRole('tab', {name: '信号丢失处理'}))
+    await fireEvent.input(screen.getByRole('spinbutton', {name: '保持最后值时长（毫秒）'}), {target: {value: '11'}})
     expect(changes.at(-1)?.dropout.holdDurationMs).toBe(11)
     expect(frozen).toEqual(channel)
+  })
+
+  it('uses vertical tabs to show one processing stage at a time', async () => {
+    render(ProcessingChannelFields, {props: {value: channel, onChange: () => {}}})
+
+    expect(screen.getByRole('tablist')).toHaveAttribute('aria-orientation', 'vertical')
+    expect(screen.getByRole('tab', {name: '输入校准'})).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('spinbutton', {name: '静止基准值'})).toBeVisible()
+    expect(screen.queryByRole('spinbutton', {name: '忽略微小输入'})).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('tab', {name: '响应调节'}))
+    expect(screen.getByRole('spinbutton', {name: '忽略微小输入'})).toBeVisible()
+    expect(screen.queryByRole('spinbutton', {name: '静止基准值'})).not.toBeInTheDocument()
   })
 
   it('emits cloned channel overrides for add, name edit, nested edit, and removal', async () => {
     const values = Object.freeze([{name: 'Eye', channel: structuredClone(channel)}])
     const added: Array<{name: string; channel: ProcessingChannel}[]> = []
-    const addedView = render(ChannelOverridesEditor, {props: {values, onChange: (value) => added.push(value)}})
-    await fireEvent.click(screen.getByRole('button', {name: '添加通道覆盖'}))
+    const addedView = render(ChannelOverridesEditor, {props: {defaultChannel: channel, values, onDefaultChange: () => {}, onChange: (value) => added.push(value)}})
+    await fireEvent.click(screen.getByRole('button', {name: '添加自定义处理'}))
     expect(added).toHaveLength(1)
     expect(added[0]).toHaveLength(2)
     addedView.unmount()
 
     const changed: Array<{name: string; channel: ProcessingChannel}[]> = []
-    const changedView = render(ChannelOverridesEditor, {props: {values, onChange: (value) => changed.push(value)}})
-    await fireEvent.input(screen.getByRole('textbox', {name: '覆盖通道名称 0'}), {target: {value: 'Mouth'}})
+    const changedView = render(ChannelOverridesEditor, {props: {defaultChannel: channel, values, onDefaultChange: () => {}, onChange: (value) => changed.push(value)}})
+    const changedSelector = screen.getByRole('button', {name: '处理配置'})
+    await fireEvent.pointerDown(changedSelector, {button: 0, ctrlKey: false})
+    const changedOption = screen.getByRole('option', {name: '自定义：Eye'})
+    await fireEvent.pointerDown(changedOption, {button: 0, ctrlKey: false})
+    await fireEvent.pointerUp(changedOption, {button: 0, ctrlKey: false})
+    await fireEvent.input(screen.getByRole('textbox', {name: '覆盖通道名称'}), {target: {value: 'Mouth'}})
     expect(changed.at(-1)?.[0].name).toBe('Mouth')
-    await fireEvent.input(screen.getByRole('spinbutton', {name: '中立值'}), {target: {value: '0.4'}})
+    await fireEvent.input(screen.getByRole('spinbutton', {name: '静止基准值'}), {target: {value: '0.4'}})
     expect(changed.at(-1)?.[0].channel.calibration.neutral).toBe(0.4)
     changedView.unmount()
 
     const removed: Array<{name: string; channel: ProcessingChannel}[]> = []
-    render(ChannelOverridesEditor, {props: {values, onChange: (value) => removed.push(value)}})
-    await fireEvent.click(screen.getByRole('button', {name: '删除通道覆盖 0'}))
+    render(ChannelOverridesEditor, {props: {defaultChannel: channel, values, onDefaultChange: () => {}, onChange: (value) => removed.push(value)}})
+    const removedSelector = screen.getByRole('button', {name: '处理配置'})
+    await fireEvent.pointerDown(removedSelector, {button: 0, ctrlKey: false})
+    const removedOption = screen.getByRole('option', {name: '自定义：Eye'})
+    await fireEvent.pointerDown(removedOption, {button: 0, ctrlKey: false})
+    await fireEvent.pointerUp(removedOption, {button: 0, ctrlKey: false})
+    await fireEvent.click(screen.getByRole('button', {name: '删除自定义处理'}))
     expect(removed).toEqual([[]])
     expect(values[0].channel.calibration.neutral).toBe(0)
   })
@@ -112,7 +138,7 @@ describe('settings repeated editors', () => {
     expect(channelTarget).toHaveFocus()
     channelFields.unmount()
 
-    const overrides = render(ChannelOverridesEditor, {props: {id: 'channel-overrides', values: [], onChange: () => {}}})
+    const overrides = render(ChannelOverridesEditor, {props: {id: 'channel-overrides', defaultChannel: channel, values: [], onDefaultChange: () => {}, onChange: () => {}}})
     const overrideTarget = overrides.container.querySelector('#channel-overrides') as HTMLElement
     overrideTarget.focus()
     expect(overrideTarget).toHaveFocus()

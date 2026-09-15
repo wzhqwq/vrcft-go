@@ -14,7 +14,6 @@
   import ChannelOverridesEditor from '../lib/patterns/settings/ChannelOverridesEditor.svelte'
   import MutualExclusionEditor from '../lib/patterns/settings/MutualExclusionEditor.svelte'
   import PathListField from '../lib/patterns/settings/PathListField.svelte'
-  import ProcessingChannelFields from '../lib/patterns/settings/ProcessingChannelFields.svelte'
   import {fieldTargets, type SettingsField} from '../lib/modules/settings/index.js'
   import type {SettingsModule} from '../lib/modules/settings/types.js'
 
@@ -159,7 +158,7 @@
           <div id="processing-summary" tabindex="-1" role="group" aria-label={copy.text.processingProblems} class="focus-ring min-w-0">
             {#if error('processing')}<p role="alert" class="text-danger">{error('processing')}</p>{/if}
           </div>
-          <FormSection title={copy.text.defaultChannel} description={copy.text.defaultChannelDescription}>
+          <FormSection title={copy.text.processingProfiles} description={copy.text.processingProfilesDescription}>
             <NumberField
               id="active-stale-after"
               label={copy.text.activeStale}
@@ -170,24 +169,18 @@
               oninput={(event) => updateDraft((next) => { next.processing.activeStaleAfterMs = event.currentTarget.valueAsNumber })}
               onblur={() => validate('processing.activeStaleAfterMs')}
             />
-            <div onfocusout={(event) => validateOnLeave('processing.defaultChannel', event)}>
-              <ProcessingChannelFields
-                id="default-channel"
-                value={draft.processing.defaultChannel}
-                onChange={(value) => updateDraft((next) => { next.processing.defaultChannel = value })}
-              />
-            </div>
-            {#if error('processing.defaultChannel')}<p class="text-sm text-danger" role="alert">{error('processing.defaultChannel')}</p>{/if}
-          </FormSection>
-          <FormSection title={copy.text.overrides} description={copy.text.overridesDescription}>
-            <div onfocusout={(event) => validateOnLeave('processing.overrides', event)}>
+            <div onfocusout={(event) => validateOnLeave('processing', event)}>
               <ChannelOverridesEditor
                 id="channel-overrides"
+                defaultId="default-channel"
+                defaultChannel={draft.processing.defaultChannel}
                 values={draft.processing.overrides}
                 error={error('processing.overrides')}
+                onDefaultChange={(value) => updateDraft((next) => { next.processing.defaultChannel = value })}
                 onChange={(values) => updateDraft((next) => { next.processing.overrides = values })}
               />
             </div>
+            {#if error('processing.defaultChannel')}<p class="text-sm text-danger" role="alert">{error('processing.defaultChannel')}</p>{/if}
           </FormSection>
           <FormSection title={copy.text.mutualExclusion} description={copy.text.mutualDescription}>
             <div onfocusout={(event) => validateOnLeave('processing.mutualExclusion', event)}>

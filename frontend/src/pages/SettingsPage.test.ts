@@ -169,7 +169,7 @@ describe('SettingsPage', () => {
     port.validationPending[0]?.resolve(validation(7, port.validations[0]!))
 
     await fireEvent.click(screen.getByRole('tab', {name: '处理'}))
-    expect(within(document.getElementById('default-channel')!).getByRole('spinbutton', {name: '中立值'})).toHaveValue(0)
+    expect(within(document.getElementById('default-channel')!).getByRole('spinbutton', {name: '静止基准值'})).toHaveValue(0)
     await fireEvent.click(screen.getByRole('tab', {name: '常规'}))
     expect(screen.getByRole('textbox', {name: 'Avatar OSC 根目录'})).toHaveValue('C:\\New OSC')
     expect(screen.getByRole('region', {name: '未保存的更改'})).toHaveTextContent('有未保存的更改')
@@ -189,6 +189,34 @@ describe('SettingsPage', () => {
     expect(settings.state.draft?.processing.activeStaleAfterMs).toBe(2500)
     expect(validate).toHaveBeenCalledWith('processing.activeStaleAfterMs')
     expect(port.validations.at(-1)?.processing.activeStaleAfterMs).toBe(2500)
+  })
+
+  it('edits default and custom processing through one selector with contextual icon actions', async () => {
+    const {settings} = await renderReady()
+    await fireEvent.click(screen.getByRole('tab', {name: '处理'}))
+
+    const selector = screen.getByRole('button', {name: '处理配置'})
+    expect(screen.getByRole('button', {name: '添加自定义处理'})).toBeVisible()
+    expect(screen.queryByRole('button', {name: '删除自定义处理'})).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', {name: '覆盖通道名称'})).not.toBeInTheDocument()
+
+    await fireEvent.pointerDown(selector, {button: 0, ctrlKey: false})
+    const custom = screen.getByRole('option', {name: '自定义：eye.left_gaze_x'})
+    await fireEvent.pointerDown(custom, {button: 0, ctrlKey: false})
+    await fireEvent.pointerUp(custom, {button: 0, ctrlKey: false})
+
+    expect(screen.getByRole('button', {name: '删除自定义处理'})).toBeVisible()
+    await fireEvent.input(screen.getByRole('textbox', {name: '覆盖通道名称'}), {target: {value: 'mouth.smile'}})
+    expect(settings.state.draft?.processing.overrides[0]?.name).toBe('mouth.smile')
+
+    await fireEvent.click(screen.getByRole('button', {name: '删除自定义处理'}))
+    expect(settings.state.draft?.processing.overrides).toEqual([])
+    expect(screen.queryByRole('button', {name: '删除自定义处理'})).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', {name: '添加自定义处理'}))
+    expect(settings.state.draft?.processing.overrides).toHaveLength(1)
+    expect(settings.state.draft?.processing.overrides[0]?.channel).toEqual(settings.state.draft?.processing.defaultChannel)
+    expect(screen.getByRole('textbox', {name: '覆盖通道名称'})).toBeVisible()
   })
 
   it('renders, routes, and focuses an active stale timeout field Problem independently of default channel settings', async () => {
