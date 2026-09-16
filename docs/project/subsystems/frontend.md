@@ -17,11 +17,11 @@ checks:
     command: frontend-build
     weight: 2
     required: true
-  - id: project-status-view
-    description: UI exposes project and runtime status
+  - id: runtime-diagnostics-view
+    description: UI exposes module status and bounded runtime diagnostics
     type: symbol
     path: frontend/src/pages/DiagnosticsPage.svelte
-    pattern: 'Project Status|projectStatus'
+    pattern: 'refreshDiagnostics'
     weight: 2
     required: true
 ---
@@ -30,11 +30,11 @@ checks:
 ## Purpose
 Provide the accessible desktop control center for runtime status, plugin operations, restart-required settings, and safe diagnostics.
 ## Responsibilities
-Own the Overview, Plugins, Settings, and Diagnostics pages; present bounded Runtime, Plugins, and Settings module state; collect typed settings drafts; and render safe runtime, avatar-plan, OSC, plugin, and project-status information.
+Own the Overview, Plugins, Settings, and Diagnostics pages; present bounded Runtime, Plugins, and Settings module state; collect typed settings drafts; and render safe runtime, avatar-plan, OSC, plugin, and operational diagnostic information.
 ## Non-responsibilities
 Business rules, hardware and network access, filesystem and process access, avatar planning, plugin-private configuration editing, and persistence remain in the bound Go services.
 ## Current implementation
-`App.svelte` creates and independently starts/disposes Runtime, Plugins, and Settings modules, owns the active page, and protects a dirty Settings draft before top-level navigation. `OverviewPage.svelte` presents runtime, avatar, OSC, and plugin summaries and directs users to configure a fallback file when the current avatar has no configuration; `PluginsPage.svelte` filters, paginates, and controls plugins; `SettingsPage.svelte` owns the explicit settings form and restart-required save flow; and `DiagnosticsPage.svelte` owns `Project Status`, module readiness/revision/problem summaries, runtime diagnostics, and bounded safe-copy output. Processing settings use one selector for the default profile and channel-specific profiles, clone the default profile when adding an override, and present calibration, response, smoothing, and signal-loss controls as vertical tabs.
+`App.svelte` creates and independently starts/disposes Runtime, Plugins, and Settings modules, owns the active page, and protects a dirty Settings draft before top-level navigation. `OverviewPage.svelte` presents runtime, avatar, OSC, and plugin summaries and directs users to configure a fallback file when the current avatar has no configuration; `PluginsPage.svelte` filters, paginates, and controls plugins; `SettingsPage.svelte` owns the explicit settings form and restart-required save flow; and `DiagnosticsPage.svelte` owns recent runtime logs, startup failures, module readiness/revision/problem summaries, and bounded safe-copy output. Processing settings use one selector for the default profile and channel-specific profiles, clone the default profile when adding an override, and present calibration, response, smoothing, and signal-loss controls as vertical tabs.
 ## Public/internal interfaces
 Pages consume typed module view state and commands. `lib/wails/production.ts` is the direct adapter boundary for generated Wails RuntimeAPI, PluginsAPI, SettingsAPI, and runtime events; the adapters expose typed ports to the modules rather than allowing pages or reusable components to call generated bindings.
 ## Owned data
@@ -56,4 +56,4 @@ Vitest covers Wails ports and DTO mapping, independent module lifecycle/revision
 ## Known gaps
 Final source review and the generated-evidence refresh remain separate completion gates. Generated project status stays read-only until the reviewed source is intentionally refreshed through its generator.
 ## Completion definition
-Users can navigate the four pages, inspect runtime and plugin state, make immediate plugin changes, edit and save restart-required settings with dirty-draft protection, and inspect safe project/runtime diagnostics through independently refreshed modules. The UI remains usable from the `640x480` floor: a left navigation rail is used at desktop widths, while narrower windows use a horizontal top tab bar above page content without page-level horizontal overflow.
+Users can navigate the four pages, inspect runtime and plugin state, make immediate plugin changes, edit and save restart-required settings with dirty-draft protection, and inspect safe runtime diagnostics and module health through independently refreshed modules. The UI remains usable from the `640x480` floor: a left navigation rail is used at desktop widths, while narrower windows use a horizontal top tab bar above page content without page-level horizontal overflow.
