@@ -13,7 +13,7 @@
   let {message = copy.text.unsavedDescription, saving = false, canSave = true, onSave, onDiscard}: Props = $props();
 </script>
 
-<aside class="sticky bottom-0 z-10 flex min-w-0 flex-wrap items-center justify-between gap-3 border-t border-border bg-surface/95 px-4 py-3 backdrop-blur" role="region" aria-label={copy.text.unsaved}>
+<aside class="surface-sticky-footer items-center">
   <p class="min-w-0 break-words text-sm text-text">{message}</p>
   <div class="flex min-w-0 flex-wrap gap-2">
     <Button label={copy.text.discard} tone="secondary" disabled={saving} onclick={onDiscard} />
