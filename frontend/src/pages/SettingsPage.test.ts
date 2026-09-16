@@ -242,15 +242,14 @@ describe('SettingsPage', () => {
     expect(port.validations[0]?.plugins.devRoots).toEqual(['C:\\plugins'])
   })
 
-  it('disables the irrelevant OSC mode controls with explanations while preserving their draft values', async () => {
+  it('shows only the controls for the selected OSC mode while preserving hidden draft values', async () => {
     const {settings} = await renderReady(candidate({
       osc: {targetMode: 'manual', preferredService: 'VRChat-Client', manualHost: '127.0.0.1', manualPort: 9001},
     }))
 
     await fireEvent.click(screen.getByRole('tab', {name: 'OSC'}))
     expect(screen.getByRole('button', {name: '目标模式'})).toHaveAttribute('id', 'osc-target-mode')
-    expect(screen.getByRole('textbox', {name: '首选发现服务'})).toBeDisabled()
-    expect(screen.getByText('仅自动模式可编辑首选发现服务。')).toBeVisible()
+    expect(screen.queryByRole('textbox', {name: '首选发现服务'})).not.toBeInTheDocument()
     expect(screen.getByRole('textbox', {name: '手动主机'})).toBeEnabled()
     expect(screen.getByRole('spinbutton', {name: '手动端口'})).toHaveValue(9001)
 
@@ -260,8 +259,8 @@ describe('SettingsPage', () => {
     await fireEvent.pointerUp(automatic, {button: 0, ctrlKey: false})
 
     expect(screen.getByRole('textbox', {name: '首选发现服务'})).toBeEnabled()
-    expect(screen.getByRole('textbox', {name: '手动主机'})).toHaveAccessibleDescription('仅手动模式可编辑主机和端口。')
-    expect(screen.getByRole('spinbutton', {name: '手动端口'})).toHaveAccessibleDescription('仅手动模式可编辑主机和端口。')
+    expect(screen.queryByRole('textbox', {name: '手动主机'})).not.toBeInTheDocument()
+    expect(screen.queryByRole('spinbutton', {name: '手动端口'})).not.toBeInTheDocument()
     expect(settings.state.draft?.osc.manualPort).toBe(9001)
   })
 
@@ -297,7 +296,7 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(target).toHaveFocus())
     expect(target).toHaveAttribute('tabindex', '-1')
     expect(preferredService).toHaveAttribute('id', 'osc-preferred-service-input')
-    expect(preferredService).toBeDisabled()
+    expect(preferredService).toBeEnabled()
     expect(preferredService).toHaveValue('VRChat-Client')
     expect(screen.getByText('手动模式不能设置首选发现服务。')).toBeVisible()
     expect(settings.state.draft?.osc.preferredService).toBe('VRChat-Client')

@@ -202,41 +202,44 @@
               error={error('osc.targetMode')}
               onValueChange={(value) => updateDraft((next) => { next.osc.targetMode = value })}
             />
-            <div id="osc-preferred-service" role="group" aria-label={copy.text.preferredService} tabindex="-1">
+            {#if draft.osc.targetMode === 'auto' || error('osc.preferredService')}
+              <div id="osc-preferred-service" role="group" aria-label={copy.text.preferredService} tabindex="-1">
+                <TextField
+                  id="osc-preferred-service-input"
+                  label={copy.text.preferredService}
+                  value={draft.osc.preferredService}
+                  error={error('osc.preferredService')}
+                  description={copy.text.preferredDescription}
+                  oninput={(event) => updateDraft((next) => { next.osc.preferredService = event.currentTarget.value })}
+                  onblur={() => validate('osc.preferredService')}
+                />
+              </div>
+            {/if}
+            {#if draft.osc.targetMode === 'manual' || error('osc.manualHost')}
               <TextField
-                id="osc-preferred-service-input"
-                label={copy.text.preferredService}
-                value={draft.osc.preferredService}
-                error={error('osc.preferredService')}
-                disabled={draft.osc.targetMode !== 'auto'}
-                description={draft.osc.targetMode === 'auto' ? copy.text.preferredDescription : copy.text.preferredDisabled}
-                oninput={(event) => updateDraft((next) => { next.osc.preferredService = event.currentTarget.value })}
-                onblur={() => validate('osc.preferredService')}
+                id="osc-manual-host"
+                label={copy.text.manualHost}
+                value={draft.osc.manualHost}
+                error={error('osc.manualHost')}
+                description={copy.text.manualHostDescription}
+                oninput={(event) => updateDraft((next) => { next.osc.manualHost = event.currentTarget.value })}
+                onblur={() => validate('osc.manualHost')}
               />
-            </div>
-            <TextField
-              id="osc-manual-host"
-              label={copy.text.manualHost}
-              value={draft.osc.manualHost}
-              error={error('osc.manualHost')}
-              disabled={draft.osc.targetMode !== 'manual'}
-              description={draft.osc.targetMode === 'manual' ? copy.text.manualHostDescription : copy.text.manualDisabled}
-              oninput={(event) => updateDraft((next) => { next.osc.manualHost = event.currentTarget.value })}
-              onblur={() => validate('osc.manualHost')}
-            />
-            <NumberField
-              id="osc-manual-port"
-              label={copy.text.manualPort}
-              value={draft.osc.manualPort}
-              error={error('osc.manualPort')}
-              min={1}
-              max={65535}
-              step={1}
-              disabled={draft.osc.targetMode !== 'manual'}
-              description={draft.osc.targetMode === 'manual' ? copy.text.manualPortDescription : copy.text.manualDisabled}
-              oninput={(event) => updateDraft((next) => { next.osc.manualPort = event.currentTarget.valueAsNumber })}
-              onblur={() => validate('osc.manualPort')}
-            />
+            {/if}
+            {#if draft.osc.targetMode === 'manual' || error('osc.manualPort')}
+              <NumberField
+                id="osc-manual-port"
+                label={copy.text.manualPort}
+                value={draft.osc.manualPort}
+                error={error('osc.manualPort')}
+                min={1}
+                max={65535}
+                step={1}
+                description={copy.text.manualPortDescription}
+                oninput={(event) => updateDraft((next) => { next.osc.manualPort = event.currentTarget.valueAsNumber })}
+                onblur={() => validate('osc.manualPort')}
+              />
+            {/if}
           </FormSection>
         {/if}
       </Tabs>

@@ -70,6 +70,47 @@ describe('settings repeated editors', () => {
     expect(screen.queryByRole('spinbutton', {name: '静止基准值'})).not.toBeInTheDocument()
   })
 
+  it('shows only the settings used by each processing mode', async () => {
+    const disabledCalibration = structuredClone(channel)
+    disabledCalibration.calibration.enabled = false
+    const calibrationView = render(ProcessingChannelFields, {props: {value: disabledCalibration, onChange: () => {}}})
+    expect(screen.getByRole('switch', {name: '启用输入校准'})).toBeVisible()
+    expect(screen.queryByRole('spinbutton', {name: '静止基准值'})).not.toBeInTheDocument()
+    calibrationView.unmount()
+
+    const unclamped = structuredClone(channel)
+    unclamped.tuning.clampEnabled = false
+    const tuningView = render(ProcessingChannelFields, {props: {value: unclamped, onChange: () => {}}})
+    await fireEvent.click(screen.getByRole('tab', {name: '响应调节'}))
+    expect(screen.getByRole('spinbutton', {name: '忽略微小输入'})).toBeVisible()
+    expect(screen.queryByRole('spinbutton', {name: '输出下限'})).not.toBeInTheDocument()
+    expect(screen.queryByRole('spinbutton', {name: '输出上限'})).not.toBeInTheDocument()
+    tuningView.unmount()
+
+    const noFilter = structuredClone(channel)
+    noFilter.filter.mode = 'none'
+    const noFilterView = render(ProcessingChannelFields, {props: {value: noFilter, onChange: () => {}}})
+    await fireEvent.click(screen.getByRole('tab', {name: '平滑处理'}))
+    expect(screen.getByRole('button', {name: '平滑方式'})).toBeVisible()
+    expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument()
+    noFilterView.unmount()
+
+    const emaView = render(ProcessingChannelFields, {props: {value: channel, onChange: () => {}}})
+    await fireEvent.click(screen.getByRole('tab', {name: '平滑处理'}))
+    expect(screen.getByRole('spinbutton', {name: 'EMA 响应速度'})).toBeVisible()
+    expect(screen.queryByRole('spinbutton', {name: '基础响应速度'})).not.toBeInTheDocument()
+    emaView.unmount()
+
+    const oneEuro = structuredClone(channel)
+    oneEuro.filter.mode = 'one_euro'
+    render(ProcessingChannelFields, {props: {value: oneEuro, onChange: () => {}}})
+    await fireEvent.click(screen.getByRole('tab', {name: '平滑处理'}))
+    expect(screen.queryByRole('spinbutton', {name: 'EMA 响应速度'})).not.toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', {name: '基础响应速度'})).toBeVisible()
+    expect(screen.getByRole('spinbutton', {name: '动态响应系数'})).toBeVisible()
+    expect(screen.getByRole('spinbutton', {name: '速度变化平滑度'})).toBeVisible()
+  })
+
   it('emits cloned channel overrides for add, name edit, nested edit, and removal', async () => {
     const values = Object.freeze([{name: 'Eye', channel: structuredClone(channel)}])
     const added: Array<{name: string; channel: ProcessingChannel}[]> = []

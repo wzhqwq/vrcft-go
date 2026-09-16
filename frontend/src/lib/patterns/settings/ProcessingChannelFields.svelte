@@ -69,11 +69,13 @@
       {#if stage === 'calibration'}
         <ResponsiveGrid>
           <div class="col-span-full"><SwitchField label={copy.text.enableCalibration} description={copy.text.enableCalibrationDescription} bind:checked={() => value.calibration.enabled, (next) => calibration('enabled', next)} /></div>
-          <NumberField label={copy.text.neutral} description={copy.text.neutralDescription} value={value.calibration.neutral} step="any" oninput={(event) => calibration('neutral', event.currentTarget.valueAsNumber)} />
-          <NumberField label={copy.text.min} description={copy.text.minDescription} value={value.calibration.min} step="any" oninput={(event) => calibration('min', event.currentTarget.valueAsNumber)} />
-          <NumberField label={copy.text.max} description={copy.text.maxDescription} value={value.calibration.max} step="any" oninput={(event) => calibration('max', event.currentTarget.valueAsNumber)} />
-          <NumberField label={copy.text.calibrationGain} description={copy.text.calibrationGainDescription} value={value.calibration.gain} step="any" oninput={(event) => calibration('gain', event.currentTarget.valueAsNumber)} />
-          <div class="col-span-full"><SwitchField label={copy.text.invertCalibration} description={copy.text.invertCalibrationDescription} bind:checked={() => value.calibration.invert, (next) => calibration('invert', next)} /></div>
+          {#if value.calibration.enabled}
+            <NumberField label={copy.text.neutral} description={copy.text.neutralDescription} value={value.calibration.neutral} step="any" oninput={(event) => calibration('neutral', event.currentTarget.valueAsNumber)} />
+            <NumberField label={copy.text.min} description={copy.text.minDescription} value={value.calibration.min} step="any" oninput={(event) => calibration('min', event.currentTarget.valueAsNumber)} />
+            <NumberField label={copy.text.max} description={copy.text.maxDescription} value={value.calibration.max} step="any" oninput={(event) => calibration('max', event.currentTarget.valueAsNumber)} />
+            <NumberField label={copy.text.calibrationGain} description={copy.text.calibrationGainDescription} value={value.calibration.gain} step="any" oninput={(event) => calibration('gain', event.currentTarget.valueAsNumber)} />
+            <div class="col-span-full"><SwitchField label={copy.text.invertCalibration} description={copy.text.invertCalibrationDescription} bind:checked={() => value.calibration.invert, (next) => calibration('invert', next)} /></div>
+          {/if}
         </ResponsiveGrid>
       {:else if stage === 'tuning'}
         <ResponsiveGrid>
@@ -81,16 +83,21 @@
           <NumberField label={copy.text.tuningGain} description={copy.text.tuningGainDescription} value={value.tuning.gain} step="any" oninput={(event) => tuning('gain', event.currentTarget.valueAsNumber)} />
           <NumberField label={copy.text.exponent} description={copy.text.exponentDescription} value={value.tuning.exponent} step="any" oninput={(event) => tuning('exponent', event.currentTarget.valueAsNumber)} />
           <div class="col-span-full"><SwitchField label={copy.text.enableClamp} description={copy.text.enableClampDescription} bind:checked={() => value.tuning.clampEnabled, (next) => tuning('clampEnabled', next)} /></div>
-          <NumberField label={copy.text.clampMin} value={value.tuning.clampMin} step="any" oninput={(event) => tuning('clampMin', event.currentTarget.valueAsNumber)} />
-          <NumberField label={copy.text.clampMax} value={value.tuning.clampMax} step="any" oninput={(event) => tuning('clampMax', event.currentTarget.valueAsNumber)} />
+          {#if value.tuning.clampEnabled}
+            <NumberField label={copy.text.clampMin} value={value.tuning.clampMin} step="any" oninput={(event) => tuning('clampMin', event.currentTarget.valueAsNumber)} />
+            <NumberField label={copy.text.clampMax} value={value.tuning.clampMax} step="any" oninput={(event) => tuning('clampMax', event.currentTarget.valueAsNumber)} />
+          {/if}
         </ResponsiveGrid>
       {:else if stage === 'filter'}
         <ResponsiveGrid>
           <SelectField label={copy.text.filterMode} description={copy.text.filterModeDescription} value={value.filter.mode} options={filterModes} onValueChange={(next) => filter('mode', next)} />
-          <NumberField label={copy.text.emaAlpha} description={copy.text.emaAlphaDescription} value={value.filter.emaAlpha} step="any" oninput={(event) => filter('emaAlpha', event.currentTarget.valueAsNumber)} />
-          <NumberField label={copy.text.minCutoff} description={copy.text.minCutoffDescription} value={value.filter.minCutoff} step="any" oninput={(event) => filter('minCutoff', event.currentTarget.valueAsNumber)} />
-          <NumberField label={copy.text.filterBeta} description={copy.text.filterBetaDescription} value={value.filter.beta} step="any" oninput={(event) => filter('beta', event.currentTarget.valueAsNumber)} />
-          <NumberField label={copy.text.derivativeCutoff} description={copy.text.derivativeCutoffDescription} value={value.filter.derivativeCutoff} step="any" oninput={(event) => filter('derivativeCutoff', event.currentTarget.valueAsNumber)} />
+          {#if value.filter.mode === 'ema'}
+            <NumberField label={copy.text.emaAlpha} description={copy.text.emaAlphaDescription} value={value.filter.emaAlpha} step="any" oninput={(event) => filter('emaAlpha', event.currentTarget.valueAsNumber)} />
+          {:else if value.filter.mode === 'one_euro'}
+            <NumberField label={copy.text.minCutoff} description={copy.text.minCutoffDescription} value={value.filter.minCutoff} step="any" oninput={(event) => filter('minCutoff', event.currentTarget.valueAsNumber)} />
+            <NumberField label={copy.text.filterBeta} description={copy.text.filterBetaDescription} value={value.filter.beta} step="any" oninput={(event) => filter('beta', event.currentTarget.valueAsNumber)} />
+            <NumberField label={copy.text.derivativeCutoff} description={copy.text.derivativeCutoffDescription} value={value.filter.derivativeCutoff} step="any" oninput={(event) => filter('derivativeCutoff', event.currentTarget.valueAsNumber)} />
+          {/if}
         </ResponsiveGrid>
       {:else}
         <ResponsiveGrid>
