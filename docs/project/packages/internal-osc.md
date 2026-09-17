@@ -3,7 +3,7 @@ id: internal-osc
 kind: go-package
 path: internal/osc
 milestone: M6
-depends_on: [internal-parameters]
+depends_on: [internal-parameters, pkg-osc]
 checks:
   - id: package-tests
     description: OSC tests pass
@@ -58,19 +58,19 @@ checks:
 # Package: internal/osc
 
 ## Purpose
-Integrate VRChat OSC and OSCQuery with compiled VRCFT output bindings.
+Integrate host-specific VRChat OSC and OSCQuery behavior with compiled VRCFT output bindings while consuming the public `pkg/osc` codec and UDP server.
 ## Responsibilities
-Discover VRChat, receive `/avatar/change`, query paths, compile bindings from OSCQuery or validated endpoints, suppress changes, encode bundles, and send UDP. Own an explicit construction-time automatic/manual target policy. In Application-owned external-catalog mode, retain discovery and target selection while accepting only the explicitly installed avatar-plan catalog and same-generation evaluator source.
+Retain VRChat discovery, OSCQuery, `/avatar/change` routing, target policy, parameter compilation, change suppression, optimized VRCFT parameter sending, generation-fenced runtime, and Controller lifecycle. Adapt `pkg/osc.Server` to the host's mutable target policy. Own an explicit construction-time automatic/manual target policy. In Application-owned external-catalog mode, retain discovery and target selection while accepting only the explicitly installed avatar-plan catalog and same-generation evaluator source.
 ## Non-responsibilities
-Avatar JSON discovery/decoding and avatar-plan construction belong to `internal/avatar`; tracking merge and parameter evaluation belong upstream.
+Public OSC wire encoding/decoding and socket-level receive/send behavior belong to `pkg/osc`. Avatar JSON discovery/decoding and avatar-plan construction belong to `internal/avatar`; tracking merge and parameter evaluation belong upstream.
 ## Current implementation
-Discovery, OSCQuery, packet parsing, compiled scalar sending, retries, and benchmarks are implemented. `BuildCatalog` flattens writable supported OSCQuery methods and delegates to `BuildCatalogFromEndpoints`, so OSCQuery and avatar JSON inputs use one deterministic binding compiler. Catalogs deep-clone bindings, raw endpoints, and output plans for ownership-safe consumers. Automatic target mode retains deterministic discovery; an exact preferred service stays targetless with a bounded diagnostic when it is undiscovered or unusable instead of selecting another instance. When the exact service later becomes usable, it alone installs the target and clears that diagnostic. Manual mode validates and installs one explicit unicast IP/port at startup; OSCQuery connect, disconnect, and reconnect events cannot replace or clear it, while receive and avatar-change facilities remain active. `OSCStatus` reports target mode, discovery connection, and installed-target state independently. The default OSCQuery catalog mode remains available for standalone Controller behavior. External-catalog mode does not compile, refresh, or overwrite the catalog from OSCQuery; its generation-fenced runtime couples an installed cloned catalog with a same-generation source, and its capacity-one avatar mailbox publishes the newest control notification independently of diagnostic events.
+The public package supplies packet parsing and raw UDP receive/send; the host adapter retains the mutable default target and delegates socket operations to it. Discovery, OSCQuery, compiled scalar sending, retries, and benchmarks are implemented. `BuildCatalog` flattens writable supported OSCQuery methods and delegates to `BuildCatalogFromEndpoints`, so OSCQuery and avatar JSON inputs use one deterministic binding compiler. Catalogs deep-clone bindings, raw endpoints, and output plans for ownership-safe consumers. Automatic target mode retains deterministic discovery; an exact preferred service stays targetless with a bounded diagnostic when it is undiscovered or unusable instead of selecting another instance. When the exact service later becomes usable, it alone installs the target and clears that diagnostic. Manual mode validates and installs one explicit unicast IP/port at startup; OSCQuery connect, disconnect, and reconnect events cannot replace or clear it, while receive and avatar-change facilities remain active. `OSCStatus` reports target mode, discovery connection, and installed-target state independently. The default OSCQuery catalog mode remains available for standalone Controller behavior. External-catalog mode does not compile, refresh, or overwrite the catalog from OSCQuery; its generation-fenced runtime couples an installed cloned catalog with a same-generation source, and its capacity-one avatar mailbox publishes the newest control notification independently of diagnostic events.
 ## Public/internal interfaces
-`TargetModeAuto`, `TargetModeManual`, `OSCTarget`, target fields in `ControllerConfig`/`OSCStatus`, `OSCService`, `Controller`, `ParameterSender`, `ValueSource`, and packet APIs.
+`TargetModeAuto`, `TargetModeManual`, `OSCTarget`, target fields in `ControllerConfig`/`OSCStatus`, `OSCService`, `Controller`, `ParameterSender`, and `ValueSource`. Public OSC wire and server interfaces are consumed from `pkg/osc`.
 ## Owned data
-VRChat discovery connection state, normalized target policy, installed send target, query catalog, send plan, change cache, packet buffers, and compiled output-binding semantics.
+VRChat discovery connection state, normalized target policy, installed send target, query catalog, send plan, change cache, generation runtime, Controller lifecycle, and compiled output-binding semantics. `pkg/osc` owns raw packet decoding and socket-level server state.
 ## Dependencies
-Depends on generated parameter definitions.
+Depends on generated parameter definitions and the public OSC codec/server package.
 ## Concurrency and lifecycle
 Controller workers share cancellable context; send plan/cache transitions are synchronized. In auto mode discovery owns target transitions; in manual mode the validated configured address owns them for the controller lifetime. External-runtime clear/install/publish operations fence generations so clearing waits for an old send and a stale evaluator source cannot start a new one.
 ## Error handling

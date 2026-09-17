@@ -6,7 +6,7 @@ Every package and subsystem is registered, checks run safely, and deterministic 
 
 ## M1 — Shared data contracts
 
-Tracking frames, plugin APIs, IPC messages, parameter identities, YAML parsing, and generated artifacts have stable compatibility tests.
+Tracking frames, plugin APIs, IPC messages, parameter identities, the public OSC wire/server contract, YAML parsing, and generated artifacts have stable compatibility tests.
 
 ## M2 — Plugin runtime and IPC
 
