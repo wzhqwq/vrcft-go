@@ -3,60 +3,54 @@ package osc
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"sync"
-	"time"
+
+	pkgosc "github.com/wzhqwq/vrcft-go/pkg/osc"
 )
 
 type UDPTransport struct {
-	conn *net.UDPConn
+	server *pkgosc.Server
 
 	targetMu sync.RWMutex
 	target   *net.UDPAddr
 }
 
 func ListenUDP(address string) (*UDPTransport, error) {
-	addr, err := net.ResolveUDPAddr("udp", address)
+	server, err := pkgosc.ListenUDP(address)
 	if err != nil {
-		return nil, fmt.Errorf("resolve OSC UDP bind address: %w", err)
+		return nil, err
 	}
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("listen OSC UDP: %w", err)
-	}
-	return &UDPTransport{conn: conn}, nil
+	return &UDPTransport{server: server}, nil
 }
 
 func (t *UDPTransport) LocalAddr() *net.UDPAddr {
-	if t == nil || t.conn == nil {
+	if t == nil || t.server == nil {
 		return nil
 	}
-	addr, _ := t.conn.LocalAddr().(*net.UDPAddr)
-	return addr
+	return t.server.LocalAddr()
 }
 
 func (t *UDPTransport) SetTarget(addr *net.UDPAddr) {
+	if t == nil {
+		return
+	}
 	t.targetMu.Lock()
 	if addr == nil {
 		t.target = nil
 	} else {
-		copyAddr := *addr
-		copyAddr.IP = append(net.IP(nil), addr.IP...)
-		t.target = &copyAddr
+		t.target = cloneUDPAddr(addr)
 	}
 	t.targetMu.Unlock()
 }
 
 func (t *UDPTransport) Target() *net.UDPAddr {
-	t.targetMu.RLock()
-	defer t.targetMu.RUnlock()
-	if t.target == nil {
+	if t == nil {
 		return nil
 	}
-	copyAddr := *t.target
-	copyAddr.IP = append(net.IP(nil), t.target.IP...)
-	return &copyAddr
+	t.targetMu.RLock()
+	defer t.targetMu.RUnlock()
+	return cloneUDPAddr(t.target)
 }
 
 func (t *UDPTransport) Send(packet []byte) error {
@@ -67,51 +61,31 @@ func (t *UDPTransport) Send(packet []byte) error {
 	if target == nil {
 		return errors.New("OSC target is not configured")
 	}
-	_, err := t.conn.WriteToUDP(packet, target)
-	if err != nil {
-		return fmt.Errorf("send OSC UDP packet: %w", err)
+	if t == nil || t.server == nil {
+		return errors.New("OSC UDP transport is not started")
 	}
-	return nil
+	return t.server.SendTo(packet, target)
 }
 
 func (t *UDPTransport) Serve(ctx context.Context, handler func(Message, *net.UDPAddr)) error {
-	if handler == nil {
-		return errors.New("OSC UDP handler is nil")
+	if t == nil || t.server == nil {
+		return errors.New("OSC UDP transport is not started")
 	}
-
-	buffer := make([]byte, 64*1024)
-	for {
-		if deadline, ok := ctx.Deadline(); ok {
-			_ = t.conn.SetReadDeadline(deadline)
-		} else {
-			_ = t.conn.SetReadDeadline(time.Now().Add(time.Second))
-		}
-
-		n, remote, err := t.conn.ReadFromUDP(buffer)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				continue
-			}
-			return fmt.Errorf("read OSC UDP packet: %w", err)
-		}
-		messages, err := UnmarshalPacket(buffer[:n])
-		if err != nil {
-			// Malformed or unsupported datagrams must not terminate the receiver.
-			continue
-		}
-		for _, message := range messages {
-			handler(message, remote)
-		}
-	}
+	return t.server.Serve(ctx, handler)
 }
 
 func (t *UDPTransport) Close() error {
-	if t == nil || t.conn == nil {
+	if t == nil || t.server == nil {
 		return nil
 	}
-	return t.conn.Close()
+	return t.server.Close()
+}
+
+func cloneUDPAddr(addr *net.UDPAddr) *net.UDPAddr {
+	if addr == nil {
+		return nil
+	}
+	copyAddr := *addr
+	copyAddr.IP = append(net.IP(nil), addr.IP...)
+	return &copyAddr
 }
