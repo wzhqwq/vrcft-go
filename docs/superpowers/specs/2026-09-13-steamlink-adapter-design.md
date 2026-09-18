@@ -1,6 +1,8 @@
 # Steam Link Adapter Design
 
-Date: 2026-09-13. Status: architectural boundaries approved; detailed behavior in this draft awaits user review.
+Date: 2026-09-13. Status: approved for implementation planning on 2026-09-19.
+
+Updated: 2026-09-19, after rebasing onto `eb25123`. The adapter reuses the public `pkg/osc` codec, including the nesting-limit fix, instead of implementing a private OSC decoder.
 
 ## Goal and Scope
 
@@ -35,18 +37,22 @@ The user has approved separate responsibilities for OSC reception, device field 
 | Path | Responsibility | Dependencies |
 | --- | --- | --- |
 | `cmd/steamlink-plugin` | Create the Driver, call `pluginruntime.Main`, and exit nonzero on failure | Plugin package, pluginruntime |
-| `internal/steamlink` | Driver, UDP reception, bounded OSC decoding, mapping, freshness, and configuration | Standard library, pluginapi, trackingmodel |
+| `internal/steamlink` | Driver, UDP reception, device input validation, mapping, freshness, and configuration | Standard library, pkg/osc, pluginapi, trackingmodel |
 | `plugins/steamlink/manifest.json` | Version and discoverable entry-point template | Existing manifest schema |
 | `docs/project/packages/internal-steamlink.md` | Plugin responsibilities and executable acceptance checks | Project specification infrastructure |
 | `docs/project/packages/cmd-steamlink-plugin.md` | Command build acceptance | Project specification infrastructure |
 
-Within `internal/steamlink`, separate decoder, mapping, state, driver, and config files. Only the Driver uses Host. Pure decoding, pure mapping, and state objects driven by explicit time are independently testable. The implementation package does not depend on `internal/plugins`, application, or the host OSC service.
+Within `internal/steamlink`, separate receiver, input validation, mapping, state, driver, and config files. Only the Driver uses Host. Input validation consumes `osc.Message` values; pure mapping and state objects driven by explicit time are independently testable. The implementation package depends on the public codec, not `internal/osc`, `internal/plugins`, application, or the host OSC service. Its package specification must include `pkg-osc` in `depends_on`.
 
-The existing `internal/osc/packet.go` flattens bundles, discards timetags, has no nesting-depth limit, and does not strictly check full message consumption. The first version implements a small bounded telemetry reader inside the device package, avoiding a dependency on the entire host OSC package. Refactoring host OSC is outside this change. Tests may use the existing encoder for some fixtures, but must also include manually authored byte fixtures to catch shared encoder/decoder mistakes.
+The executable also uses `pkg/pluginruntime`, which internally depends on `internal/ipc`. This indirect runtime dependency does not belong to device adaptation and does not require the adapter package to import another internal package.
+
+Use `pkg/osc.UnmarshalPacket` for wire decoding and its `Message`, `Value`, and `ValueKind` types for device input validation. The public codec validates padding, element lengths, exact message consumption, and nesting depth. It returns independently owned messages in wire order, flattens nested bundles, and discards timetags. Reuse this behavior without copying the parser or adding a second structural decoder. Generic codec fixes belong in `pkg/osc` with shared regression tests.
+
+Retain a standard-library UDP socket and one receive worker. The current `osc.Server.Serve` API dispatches individual messages and silently drops malformed or unsupported datagrams; it exposes neither a datagram callback nor parse-error reporting. Calling `UnmarshalPacket` on each received datagram preserves the adapter's whole-packet state updates, receive timestamp, packet limits, and diagnostic counters. No public server API extension is required. Tests use `osc.MarshalMessage` and `osc.MarshalBundle` for normal fixtures, plus manually authored byte fixtures for independent boundary and unsupported-type checks.
 
 ## Reception and Data Flow
 
-`Steam Link -> IPv4 loopback UDP -> bounded decoding -> raw field state -> canonical model mapping -> subscription trimming -> Host.PublishFrame -> existing runtime/IPC`
+`Steam Link -> IPv4 loopback UDP -> osc.UnmarshalPacket -> device input validation -> raw field state -> canonical model mapping -> subscription trimming -> Host.PublishFrame -> existing runtime/IPC`
 
 The default binding is `127.0.0.1:9015`. Port 9015 is the adapter's choice; users must set Steam Link's OSC Output Port to match. It is not Valve's default. The first version does not listen on the LAN, modify SteamVR configuration, or bind SteamVR's OSC input port.
 
@@ -54,15 +60,16 @@ One process represents one logical Steam Link source. UDP source ports do not id
 
 ### Input Boundaries
 
-- Accept individual messages and nested bundles, with a maximum UDP payload of 65507 bytes, bundle depth of 8, 512 messages per packet, and address length of 256 bytes.
-- Validate every length, sign, four-byte alignment, zero padding, type tag, and complete consumption. A partially parsed malformed packet must not change the cache.
+- Accept individual messages and nested bundles, with a maximum UDP payload of 65507 bytes. Use the codec's existing nesting bound (`maxBundleDepth = 32` at the rebased revision) rather than a separate depth-8 parser. The constant is private; rely on the package's boundary tests rather than importing or duplicating it.
+- Reject payloads exceeding the byte limit before decoding. After successful decoding, reject the entire datagram if it contains more than 512 messages or any address exceeds 256 bytes, before changing field state. These two application limits are post-decode checks, not codec allocation limits; decoding work remains bounded by the payload size and codec nesting bound.
+- Delegate wire-length, element-boundary, alignment, zero-padding, type-tag, and exact-consumption checks to `osc.UnmarshalPacket`. Any returned error discards the entire datagram without changing the cache. Do not retain partial results or reparse individual bundle elements.
 - Recognized addresses require exact matching. Tracking weights contain one `f`; gaze points contain three `f` arguments. Do not coerce integers, strings, or booleans into tracking values.
-- Support bounded reading or skipping of `i/f/s/b/T/F`. Discard messages with unknown types. Continue with other bundle elements when their boundaries remain trustworthy; discard the entire datagram when structural boundaries are invalid.
+- Adopt the public codec's `i/f/s/T/F` subset. Blob (`b`) and other unsupported types return `osc.ErrUnsupportedType` and cause the entire datagram to be discarded, even if the unsupported message has an unknown address. Do not implement blob skipping or partial-bundle recovery in the adapter. Unknown addresses using supported types can be ignored after successful decoding. Any future need for additional wire types must be addressed in the shared package with its own tests.
 - NaN/Inf, incorrect argument counts, or tracking weights outside `[0,1]` invalidate the message without refreshing field timestamps. They do not fail the connection. Unknown addresses increment counters without creating dynamic fields.
-- When an address appears multiple times in a packet, the last valid value wins. Validate packet structure before committing its valid recognized messages as one state update.
-- Process packets in local receive order. Read OSC timetags but do not use them for ordering, scheduling, or device timestamps. This is an explicit real-time telemetry compatibility policy; future timetags are not queued either. Revise this policy separately if subsequent evidence establishes that the device relies on timetags.
+- When an address appears multiple times in a packet, the last valid value wins. After decoding and packet-limit checks succeed, validate device arguments and commit the valid recognized messages as one state update. A device-level invalid message does not prevent valid siblings from being applied; a codec error rejects the whole packet.
+- Process packets in local receive order and messages in the order returned by the codec. Bundle timetags are discarded by `UnmarshalPacket` and are unavailable to the adapter; do not infer scheduling or device timestamps. This is an explicit real-time telemetry compatibility policy; future timetags are not queued either. Revise the shared codec contract and adapter policy separately if subsequent evidence establishes that the device relies on timetags.
 
-Raw fields come from a fixed table. One receive worker passes complete datagrams and local receive times to the driver through a queue capped at 64 packets. A full queue drops new packets and increments a counter. The driver exclusively owns field state so mapping never reads concurrently mutated data. Each main-loop iteration checks cancellation and queued controls first; continuous UDP traffic must not starve control processing.
+Raw fields come from a fixed table. One receive worker passes complete, independently owned datagrams and local receive times to the driver through a queue capped at 64 packets. Queued bytes must not alias the worker's reusable read buffer. A full queue drops new packets and increments a counter. The driver calls `osc.UnmarshalPacket`, validates device input, and exclusively owns field state so mapping never reads concurrently mutated data. Each main-loop iteration checks cancellation and queued controls first; continuous UDP traffic must not starve control processing.
 
 ### Freshness and Publication
 
@@ -160,14 +167,17 @@ All Go commands reuse the absolute `GOCACHE=F:\dev\vrcft-go\.go-gocache` without
 
 ### A: Offline Implementation Completion
 
-- Decoder: manually authored byte fixtures cover endianness, padding, individual messages, nested bundles, truncation, invalid lengths, unknown types, argument counts, NaN/Inf, duplicate addresses, and every limit. Fuzz tests check for panics, out-of-bounds access, and unbounded allocation.
+- Shared codec: run the existing `pkg/osc` packet, nesting-boundary, ownership, and fuzz regression tests. Wire-format implementation and generic parser regressions remain in that package; do not create a private decoder to retest the same implementation.
+- Adapter input: use public encoder fixtures and independent raw bytes to test whole-datagram rejection on codec errors (including an unsupported blob beside otherwise valid tracking messages), no partial cache mutation, supported-type unknown addresses, message/address limits, argument counts, NaN/Inf, out-of-range weights, duplicate addresses, and datagram buffer ownership. Fuzz the bounded adapter input path to check for panics, out-of-bounds access, and invalid state updates in addition to the shared decoder target.
 - Mapping: independent expectations cover every table row, positive and negative differences, missing required inputs, zero values, left/right naming, shared gaze direction, 45-degree normalization, closed/ordinary-open/widened eyes, and optional wide expiration.
 - State: virtual-clock tests cover the 249/250 ms boundary, 2-second disconnection, repeated values, partial stream loss, full expiration, one-time invalidation notifications, subscription dependencies, absent subscriptions, pause/resume, and configured port changes.
 - Integration: real loopback UDP and a simulated Host cover aggregation across bundles, queue overflow, recovery, port closure, and worker cleanup. Runtime/host subprocess integration covers handshake, manifest consistency, subscription trimming, configuration, and shutdown.
-- Run new plugin package and command tests; relevant plugin API/runtime/manager and tracking/processing regressions; corresponding race and vet checks; then the full Go suite and desktop build. Run fuzzing for at least 30 seconds during development acceptance and retain fixed seeds for regular regression coverage.
+- Run new plugin package and command tests; public `pkg/osc` tests; relevant plugin API/runtime/manager and tracking/processing regressions; corresponding race and vet checks; then the full Go suite and desktop build. Run the existing `pkg/osc/FuzzUnmarshalPacket` target and the adapter input fuzz target for at least 30 seconds each during development acceptance, retaining fixed seeds for regular regression coverage.
 - Establish that tests verify policy without treating synthetic inputs as hardware evidence. Verify that the host remains operational and applies existing dropout when plugin data is absent.
 
 Baseline recorded on 2026-09-13: worktree `feat/steamlink-adapter`, based on `b000b11`. The Wails build passed. The full Go suite had one known failure, `internal/projectstatus/TestParseSpecRejectsInvalidMetadata/duplicate_check`; all other packages passed. Track this failure separately from the device design without weakening tests to bypass it. Final verification must still report whether it remains.
+
+Rebase verification on 2026-09-19: the design branch now includes `eb25123` and the public OSC nesting fix `6f2f149`. `go test ./pkg/osc` passed. The earlier full-suite/build results are historical evidence, not verification of the rebased tree; this documentation update does not establish whether the earlier project-status failure remains.
 
 ### B: Final Pico 4 Pro Hardware Acceptance
 
@@ -181,4 +191,6 @@ Claim tested Pico 4 Pro compatibility only after phase B. List missing device fi
 
 ## Review Focus
 
-The user has approved the independent Go plugin, the three component responsibilities, separate eye/expression subscriptions, and deferred hardware validation. This draft adds the fixed OSC mapping profile, 45-degree gaze normalization, the 0.75 ordinary eye-openness region, a 250 ms field window, a 100 Hz publication limit, a 2-second disconnection threshold, and a configuration surface containing only listenPort. These policies enter the implementation plan after the user reviews this draft.
+The approved scope includes the independent Go plugin, the three component responsibilities, separate eye/expression subscriptions, and deferred hardware validation. The implementation plan uses the fixed OSC mapping profile, 45-degree gaze normalization, the 0.75 ordinary eye-openness region, a 250 ms field window, a 100 Hz publication limit, a 2-second disconnection threshold, and a configuration surface containing only listenPort. Hardware assumptions remain subject to final Pico acceptance.
+
+The 2026-09-19 revision replaces the private decoder with `pkg/osc`, adopts its nesting bound and whole-datagram rejection of unsupported types, and assigns generic wire-format tests to the shared package. Device mapping, publication timing, and deferred Pico hardware acceptance remain unchanged.
