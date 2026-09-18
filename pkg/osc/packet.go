@@ -134,7 +134,7 @@ func MarshalBundle(b Bundle) ([]byte, error) {
 		if len(element) == 0 || len(element) > math.MaxInt32 {
 			return nil, ErrMalformedPacket
 		}
-		if _, err := UnmarshalPacket(element); err != nil {
+		if _, err := unmarshalPacket(element, 1); err != nil {
 			return nil, err
 		}
 		var size [4]byte

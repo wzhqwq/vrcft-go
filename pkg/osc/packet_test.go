@@ -76,6 +76,41 @@ func TestBundleRoundTripAndNestedOrder(t *testing.T) {
 	}
 }
 
+func TestMarshalBundleRoundTripsAtMaximumNestedDepth(t *testing.T) {
+	packet := mustMarshalMessage(t, "/deep")
+	for depth := 1; depth <= 32; depth++ {
+		var err error
+		packet, err = osc.MarshalBundle(osc.Bundle{Elements: [][]byte{packet}})
+		if err != nil {
+			t.Fatalf("MarshalBundle at depth %d: %v", depth, err)
+		}
+	}
+
+	messages, err := osc.UnmarshalPacket(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []osc.Message{{Address: "/deep", Args: []osc.Value{}}}; !reflect.DeepEqual(messages, want) {
+		t.Fatalf("messages = %#v, want %#v", messages, want)
+	}
+}
+
+func TestMarshalBundleRejectsWrappingBeyondMaximumNestedDepth(t *testing.T) {
+	packet := mustMarshalMessage(t, "/deep")
+	for depth := 1; depth <= 32; depth++ {
+		var err error
+		packet, err = osc.MarshalBundle(osc.Bundle{Elements: [][]byte{packet}})
+		if err != nil {
+			t.Fatalf("MarshalBundle at depth %d: %v", depth, err)
+		}
+	}
+
+	_, err := osc.MarshalBundle(osc.Bundle{Elements: [][]byte{packet}})
+	if !errors.Is(err, osc.ErrMalformedPacket) {
+		t.Fatalf("MarshalBundle beyond maximum depth error = %v, want errors.Is(_, %v)", err, osc.ErrMalformedPacket)
+	}
+}
+
 func TestMarshalBundleNormalizesZeroTimetag(t *testing.T) {
 	packet, err := osc.MarshalBundle(osc.Bundle{Elements: [][]byte{mustMarshalMessage(t, "/one")}})
 	if err != nil {
