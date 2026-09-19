@@ -69,7 +69,7 @@ describe('shared UI patterns', () => {
   it('keeps unsaved actions sticky inside the content area', () => {
     render(UnsavedChangesBar, {props: {onSave: () => {}, onDiscard: () => {}}});
 
-    expect(screen.getByRole('region', {name: '未保存的更改'})).toHaveClass('sticky', 'bottom-0');
+    expect(screen.getByRole('region', {name: '未保存的更改'})).toHaveClass('surface-sticky-footer');
     expect(screen.getByRole('button', {name: '保存更改'})).toBeEnabled();
     expect(screen.getByRole('button', {name: '放弃更改'})).toBeEnabled();
   });
