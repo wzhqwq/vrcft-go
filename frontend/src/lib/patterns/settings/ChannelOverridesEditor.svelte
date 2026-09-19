@@ -4,7 +4,7 @@
   import {IconButton, SelectField} from '../../components/ui/index.js'
   import type {ProcessingChannel, ProcessingOverride} from '../../modules/settings/form.js'
   import {createRowKeys} from './row-keys.js'
-  import ChannelSelector from './ChannelSelector.svelte'
+  import ChannelSelectorDialog from './ChannelSelectorDialog.svelte'
   import ProcessingChannelFields from './ProcessingChannelFields.svelte'
 
   type Props = {
@@ -99,10 +99,13 @@
       <h3 class="font-semibold text-text">{copy.text.overrideChannel}</h3>
       <p class="text-sm text-text-muted">{copy.text.overrideChannelDescription}</p>
     </div>
-    <ChannelSelector
+    <ChannelSelectorDialog
       id={`${id}-${rowKeys.at(selectedIndex)}-selector`}
       selected={selectedOverride.name ? [selectedOverride.name] : []}
       mode="single"
+      triggerLabel={copy.text.editOverrideChannel}
+      title={copy.text.selectOverrideChannel}
+      description={copy.text.overrideChannelDescription}
       unavailable={unavailableChannels}
       onChange={(selection) => updateSelected({...cloneOverride(selectedOverride), name: selection[0] ?? ''})}
     />

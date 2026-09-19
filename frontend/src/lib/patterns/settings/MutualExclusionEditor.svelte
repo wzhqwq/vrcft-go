@@ -1,9 +1,8 @@
 <script lang="ts">
-  import {Trash2, X} from 'lucide-svelte'
+  import {Trash2} from 'lucide-svelte'
   import {copy} from '../../../copy/zh-CN.js'
   import {Button, IconButton} from '../../components/ui/index.js'
-  import ChannelSelector from './ChannelSelector.svelte'
-  import {channelLabel} from './channels.js'
+  import ChannelSelectorDialog from './ChannelSelectorDialog.svelte'
   import {createRowKeys} from './row-keys.js'
 
   type Props = {
@@ -15,7 +14,6 @@
 
   let {values, id = 'mutual-exclusion', error, onChange}: Props = $props()
   const rowKeys = createRowKeys()
-  let expanded = $state<Record<number, boolean>>({})
 
   function clone(values: readonly (readonly string[])[]): string[][] {
     return values.map((group) => [...group])
@@ -25,13 +23,7 @@
     onChange(values.map((current, currentIndex) => currentIndex === index ? [...group] : [...current]))
   }
 
-  function removeMember(index: number, channel: string) {
-    update(index, values[index].filter((current) => current !== channel))
-  }
-
   function remove(index: number) {
-    const key = rowKeys.at(index)
-    delete expanded[key]
     rowKeys.remove(index)
     onChange(values.filter((_, current) => current !== index).map((group) => [...group]))
   }
@@ -42,14 +34,6 @@
       : group.map((channel) => [channel, copy.format.channelInGroup(groupIndex)])))
   }
 
-  function isExpanded(index: number): boolean {
-    return expanded[rowKeys.at(index)] ?? values[index].length === 0
-  }
-
-  function toggle(index: number) {
-    const key = rowKeys.at(index)
-    expanded[key] = !isExpanded(index)
-  }
 </script>
 
 <fieldset class="grid min-w-0 gap-4" id={id} tabindex="-1" aria-describedby={error ? `${id}-error` : undefined}>
@@ -78,33 +62,17 @@
         </IconButton>
       </div>
 
-      <div class="flex min-w-0 flex-wrap gap-2" aria-label={copy.format.selectedGroupChannels(index)}>
-        {#each group as channel (channel)}
-          <button
-            type="button"
-            class="focus-ring inline-flex min-w-0 items-center gap-1.5 rounded-full border border-accent bg-accent/15 px-3 py-1.5 text-sm text-text"
-            aria-label={copy.format.removeChannelFromGroup(index, channelLabel(channel))}
-            title={channel}
-            onclick={() => removeMember(index, channel)}
-          >
-            <span class="min-w-0 truncate">{channelLabel(channel)}</span>
-            <X aria-hidden="true" class="size-3.5 shrink-0" />
-          </button>
-        {:else}
-          <p class="text-sm text-text-muted">{copy.text.chooseAtLeastTwoChannels}</p>
-        {/each}
-      </div>
+      <ChannelSelectorDialog
+        id={`${id}-${rowKeys.at(index)}-selector`}
+        selected={group}
+        triggerLabel={copy.format.editGroupChannels(index)}
+        title={copy.format.selectGroupChannels(index)}
+        description={copy.text.mutualHowItWorksDescription}
+        emptyText={copy.text.chooseAtLeastTwoChannels}
+        unavailable={unavailable(index)}
+        onChange={(selection) => update(index, selection)}
+      />
       {#if group.length === 1}<p class="text-sm text-warning">{copy.text.chooseOneMoreChannel}</p>{/if}
-
-      <Button label={copy.format.editGroupChannels(index)} tone="secondary" class="justify-self-start" aria-expanded={isExpanded(index)} onclick={() => toggle(index)} />
-      {#if isExpanded(index)}
-        <ChannelSelector
-          id={`${id}-${rowKeys.at(index)}-selector`}
-          selected={group}
-          unavailable={unavailable(index)}
-          onChange={(selection) => update(index, selection)}
-        />
-      {/if}
     </section>
   {/each}
 

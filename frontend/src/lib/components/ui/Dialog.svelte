@@ -9,6 +9,8 @@
     closeLabel?: string;
     open?: boolean;
     showTrigger?: boolean;
+    trigger?: Snippet;
+    triggerClass?: string;
     children?: Snippet;
   };
 
@@ -19,14 +21,19 @@
     closeLabel = '关闭',
     open = $bindable(false),
     showTrigger = true,
+    trigger,
+    triggerClass = 'focus-ring inline-flex min-w-0 items-center justify-center rounded-lg border border-border bg-surface-raised px-4 py-2 font-semibold text-text transition-colors hover:bg-surface',
     children,
   }: Props = $props();
 </script>
 
 <BitsDialog.Root bind:open>
   {#if showTrigger}
-    <BitsDialog.Trigger class="focus-ring inline-flex min-w-0 items-center justify-center rounded-lg border border-border bg-surface-raised px-4 py-2 font-semibold text-text transition-colors hover:bg-surface">
-      {triggerLabel}
+    <BitsDialog.Trigger
+      class={triggerClass}
+      aria-label={triggerLabel}
+    >
+      {#if trigger}{@render trigger()}{:else}{triggerLabel}{/if}
     </BitsDialog.Trigger>
   {/if}
   <BitsDialog.Portal>

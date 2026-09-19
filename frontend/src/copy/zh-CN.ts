@@ -10,6 +10,7 @@ export const copy = {
   actions: {
     save: '保存',
     cancel: '取消',
+    done: '完成',
     retry: '重试',
     copy: '复制',
   },
@@ -111,6 +112,9 @@ export const copy = {
     removeCustomProcessing: '删除自定义处理',
     overrideChannel: '覆盖通道',
     overrideChannelDescription: '选择需要使用这套处理参数的通道。',
+    editOverrideChannel: '编辑覆盖通道',
+    selectOverrideChannel: '选择覆盖通道',
+    noChannelsSelected: '尚未选择通道',
     channelAlreadyCustomized: '已使用自定义处理',
     searchChannels: '搜索通道',
     searchChannelsPlaceholder: '输入通道名称或 ID',
@@ -271,8 +275,7 @@ export const copy = {
     group: (index: number) => `互斥组 ${index + 1}`,
     removeGroup: (index: number) => `删除互斥组 ${index + 1}`,
     editGroupChannels: (index: number) => `编辑互斥组 ${index + 1} 通道`,
-    selectedGroupChannels: (index: number) => `互斥组 ${index + 1} 已选通道`,
-    removeChannelFromGroup: (index: number, channel: string) => `从互斥组 ${index + 1} 移除 ${channel}`,
+    selectGroupChannels: (index: number) => `选择互斥组 ${index + 1} 的通道`,
     channelInGroup: (index: number) => `已在互斥组 ${index + 1}`,
   },
   problem: {
