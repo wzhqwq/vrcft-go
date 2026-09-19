@@ -206,8 +206,9 @@ describe('SettingsPage', () => {
     await fireEvent.pointerUp(custom, {button: 0, ctrlKey: false})
 
     expect(screen.getByRole('button', {name: '删除自定义处理'})).toBeVisible()
-    await fireEvent.input(screen.getByRole('textbox', {name: '覆盖通道名称'}), {target: {value: 'mouth.smile'}})
-    expect(settings.state.draft?.processing.overrides[0]?.name).toBe('mouth.smile')
+    await fireEvent.input(screen.getByRole('searchbox', {name: '搜索通道'}), {target: {value: 'jaw open'}})
+    await fireEvent.click(screen.getByRole('button', {name: 'Jaw Open'}))
+    expect(settings.state.draft?.processing.overrides[0]?.name).toBe('expression:JawOpen')
 
     await fireEvent.click(screen.getByRole('button', {name: '删除自定义处理'}))
     expect(settings.state.draft?.processing.overrides).toEqual([])
@@ -216,7 +217,7 @@ describe('SettingsPage', () => {
     await fireEvent.click(screen.getByRole('button', {name: '添加自定义处理'}))
     expect(settings.state.draft?.processing.overrides).toHaveLength(1)
     expect(settings.state.draft?.processing.overrides[0]?.channel).toEqual(settings.state.draft?.processing.defaultChannel)
-    expect(screen.getByRole('textbox', {name: '覆盖通道名称'})).toBeVisible()
+    expect(screen.getByRole('searchbox', {name: '搜索通道'})).toBeVisible()
   })
 
   it('renders, routes, and focuses an active stale timeout field Problem independently of default channel settings', async () => {

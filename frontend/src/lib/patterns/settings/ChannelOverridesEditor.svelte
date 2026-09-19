@@ -1,9 +1,10 @@
 <script lang="ts">
   import {Plus, Trash2} from 'lucide-svelte'
   import {copy} from '../../../copy/zh-CN.js'
-  import {IconButton, SelectField, TextField} from '../../components/ui/index.js'
+  import {IconButton, SelectField} from '../../components/ui/index.js'
   import type {ProcessingChannel, ProcessingOverride} from '../../modules/settings/form.js'
   import {createRowKeys} from './row-keys.js'
+  import ChannelSelector from './ChannelSelector.svelte'
   import ProcessingChannelFields from './ProcessingChannelFields.svelte'
 
   type Props = {
@@ -36,6 +37,9 @@
   ])
   let selectedIndex = $derived(selected.startsWith('override:') ? Number(selected.slice('override:'.length)) : -1)
   let selectedOverride = $derived(selectedIndex >= 0 ? values[selectedIndex] : undefined)
+  let unavailableChannels = $derived(Object.fromEntries(values
+    .filter((_, index) => index !== selectedIndex)
+    .map((override) => [override.name, copy.text.channelAlreadyCustomized])))
 
   $effect(() => {
     if (selected !== 'default' && selectedOverride === undefined) selected = 'default'
@@ -91,12 +95,16 @@
   </div>
 
   {#if selectedOverride}
-    <TextField
-      id={`${id}-${rowKeys.at(selectedIndex)}-name`}
-      label={copy.text.overrideChannelName}
-      description={copy.text.overrideChannelNameDescription}
-      value={selectedOverride.name}
-      oninput={(event) => updateSelected({...cloneOverride(selectedOverride), name: event.currentTarget.value})}
+    <div class="grid min-w-0 gap-2">
+      <h3 class="font-semibold text-text">{copy.text.overrideChannel}</h3>
+      <p class="text-sm text-text-muted">{copy.text.overrideChannelDescription}</p>
+    </div>
+    <ChannelSelector
+      id={`${id}-${rowKeys.at(selectedIndex)}-selector`}
+      selected={selectedOverride.name ? [selectedOverride.name] : []}
+      mode="single"
+      unavailable={unavailableChannels}
+      onChange={(selection) => updateSelected({...cloneOverride(selectedOverride), name: selection[0] ?? ''})}
     />
     <ProcessingChannelFields
       id={`${id}-${rowKeys.at(selectedIndex)}-channel`}

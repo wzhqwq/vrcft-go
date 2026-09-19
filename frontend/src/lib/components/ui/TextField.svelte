@@ -1,7 +1,7 @@
 <script lang="ts">
   import type {HTMLInputAttributes} from 'svelte/elements';
 
-  type Props = Omit<HTMLInputAttributes, 'id' | 'value' | 'type'> & {
+  type Props = Omit<HTMLInputAttributes, 'id' | 'value'> & {
     label: string;
     description?: string;
     error?: string;

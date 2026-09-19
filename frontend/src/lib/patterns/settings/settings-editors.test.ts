@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/svelte'
+import {fireEvent, render, screen, within} from '@testing-library/svelte'
 import {describe, expect, it} from 'vitest'
 
 import ChannelOverridesEditor from './ChannelOverridesEditor.svelte'
@@ -112,7 +112,7 @@ describe('settings repeated editors', () => {
   })
 
   it('emits cloned channel overrides for add, name edit, nested edit, and removal', async () => {
-    const values = Object.freeze([{name: 'Eye', channel: structuredClone(channel)}])
+    const values = Object.freeze([{name: 'eye.left_gaze_x', channel: structuredClone(channel)}])
     const added: Array<{name: string; channel: ProcessingChannel}[]> = []
     const addedView = render(ChannelOverridesEditor, {props: {defaultChannel: channel, values, onDefaultChange: () => {}, onChange: (value) => added.push(value)}})
     await fireEvent.click(screen.getByRole('button', {name: '添加自定义处理'}))
@@ -124,11 +124,16 @@ describe('settings repeated editors', () => {
     const changedView = render(ChannelOverridesEditor, {props: {defaultChannel: channel, values, onDefaultChange: () => {}, onChange: (value) => changed.push(value)}})
     const changedSelector = screen.getByRole('button', {name: '处理配置'})
     await fireEvent.pointerDown(changedSelector, {button: 0, ctrlKey: false})
-    const changedOption = screen.getByRole('option', {name: '自定义：Eye'})
+    const changedOption = screen.getByRole('option', {name: '自定义：eye.left_gaze_x'})
     await fireEvent.pointerDown(changedOption, {button: 0, ctrlKey: false})
     await fireEvent.pointerUp(changedOption, {button: 0, ctrlKey: false})
-    await fireEvent.input(screen.getByRole('textbox', {name: '覆盖通道名称'}), {target: {value: 'Mouth'}})
-    expect(changed.at(-1)?.[0].name).toBe('Mouth')
+    expect(screen.queryByRole('textbox', {name: '覆盖通道名称'})).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', {name: '眼动'})).toBeVisible()
+    expect(screen.getByRole('heading', {name: '下颌'})).toBeVisible()
+    await fireEvent.input(screen.getByRole('searchbox', {name: '搜索通道'}), {target: {value: 'jaw open'}})
+    expect(screen.queryByRole('heading', {name: '眼动'})).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', {name: 'Jaw Open'}))
+    expect(changed.at(-1)?.[0].name).toBe('expression:JawOpen')
     await fireEvent.input(screen.getByRole('spinbutton', {name: '静止基准值'}), {target: {value: '0.4'}})
     expect(changed.at(-1)?.[0].channel.calibration.neutral).toBe(0.4)
     changedView.unmount()
@@ -137,7 +142,7 @@ describe('settings repeated editors', () => {
     render(ChannelOverridesEditor, {props: {defaultChannel: channel, values, onDefaultChange: () => {}, onChange: (value) => removed.push(value)}})
     const removedSelector = screen.getByRole('button', {name: '处理配置'})
     await fireEvent.pointerDown(removedSelector, {button: 0, ctrlKey: false})
-    const removedOption = screen.getByRole('option', {name: '自定义：Eye'})
+    const removedOption = screen.getByRole('option', {name: '自定义：eye.left_gaze_x'})
     await fireEvent.pointerDown(removedOption, {button: 0, ctrlKey: false})
     await fireEvent.pointerUp(removedOption, {button: 0, ctrlKey: false})
     await fireEvent.click(screen.getByRole('button', {name: '删除自定义处理'}))
@@ -145,25 +150,40 @@ describe('settings repeated editors', () => {
     expect(values[0].channel.calibration.neutral).toBe(0)
   })
 
-  it('emits cloned mutual-exclusion groups for add, edit, and remove', async () => {
-    const values = Object.freeze([Object.freeze(['Eye', 'Mouth'])])
+  it('presents mutual-exclusion groups as channel cards and prevents cross-group duplicates', async () => {
+    const values = Object.freeze([
+      Object.freeze(['eye.left_gaze_x', 'eye.right_gaze_x']),
+      Object.freeze(['expression:JawOpen', 'expression:MouthClosed']),
+    ])
     const added: string[][][] = []
     const addedView = render(MutualExclusionEditor, {props: {values, onChange: (value) => added.push(value)}})
     await fireEvent.click(screen.getByRole('button', {name: '添加互斥组'}))
-    expect(added).toEqual([[['Eye', 'Mouth'], []]])
+    expect(added).toEqual([[['eye.left_gaze_x', 'eye.right_gaze_x'], ['expression:JawOpen', 'expression:MouthClosed'], []]])
     addedView.unmount()
 
     const edited: string[][][] = []
     const editedView = render(MutualExclusionEditor, {props: {values, onChange: (value) => edited.push(value)}})
-    await fireEvent.input(screen.getByRole('textbox', {name: '互斥组 0 成员'}), {target: {value: 'Brow, Cheek'}})
-    expect(edited).toEqual([[['Brow', 'Cheek']]])
+    const firstGroup = screen.getByRole('group', {name: '互斥组 1'})
+    expect(firstGroup).toHaveTextContent('同时收到输入时，只保留变化最明显的通道。')
+    await fireEvent.click(within(firstGroup).getByRole('button', {name: '编辑互斥组 1 通道'}))
+    const jawOpen = within(firstGroup).getByRole('button', {name: 'Jaw Open'})
+    expect(jawOpen).toBeDisabled()
+    expect(jawOpen).toHaveAccessibleDescription('已在互斥组 2')
+    await fireEvent.click(within(firstGroup).getByRole('button', {name: '从互斥组 1 移除 Left Gaze X'}))
+    expect(edited.at(-1)).toEqual([['eye.right_gaze_x'], ['expression:JawOpen', 'expression:MouthClosed']])
     editedView.unmount()
 
     const removed: string[][][] = []
     render(MutualExclusionEditor, {props: {values, onChange: (value) => removed.push(value)}})
-    await fireEvent.click(screen.getByRole('button', {name: '删除互斥组 0'}))
-    expect(removed).toEqual([[]])
-    expect(values).toEqual([['Eye', 'Mouth']])
+    await fireEvent.click(screen.getByRole('button', {name: '删除互斥组 1'}))
+    expect(removed).toEqual([[['expression:JawOpen', 'expression:MouthClosed']]])
+    expect(values).toEqual([['eye.left_gaze_x', 'eye.right_gaze_x'], ['expression:JawOpen', 'expression:MouthClosed']])
+  })
+
+  it('explains an empty mutual-exclusion editor before creating a group', () => {
+    render(MutualExclusionEditor, {props: {values: [], onChange: () => {}}})
+    expect(screen.getByText('尚未创建互斥组')).toBeVisible()
+    expect(screen.getByText('例如，将 Jaw Open 和 Mouth Closed 放在同一组，避免它们同时输出。')).toBeVisible()
   })
 
   it('makes each supplied field target focusable for backend problem routing', () => {
