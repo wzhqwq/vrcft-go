@@ -70,10 +70,10 @@ Datagrams are limited to 65507 bytes, 512 flattened messages, and 256-byte addre
 The receiver binds only `127.0.0.1`. Strict JSON parsing and fixed address matching prevent configuration ambiguity and untrusted addresses from extending the supported tracking profile. Diagnostics never log packet bytes, raw tracking values, or configuration data.
 
 ## Required tests
-Package tests cover strict configuration, whole-datagram codec rejection, packet limits, known field validation, mapping/freshness state, UDP queueing, lifecycle controls and rebinds, status transitions, bounded diagnostics, cleanup, and rejected frame handling. `FuzzDecodeDatagram` checks that arbitrary input cannot return observations with errors or non-finite values.
+Package tests cover strict configuration, whole-datagram codec rejection, packet limits, known field validation, mapping/freshness state, UDP queueing, lifecycle controls and rebinds, status transitions, bounded diagnostics, cleanup, and rejected frame handling. `FuzzDecodeDatagram` checks that arbitrary input cannot return observations with errors or non-finite values. Windows-only `internal/plugins/steamlink_integration_test.go` builds the real command, discovers it through `DirectoryCatalog`, persists configuration through `JSONStore`, and runs it through `Manager`, named-pipe IPC, `ProcessLauncher`, and a bounded `FrameSink`. It verifies dynamic loopback ports, subscription generations and field trimming, pause/resume, rebind fencing, malformed-datagram rejection, disable cleanup, and fresh-to-dropout delivery through the host tracking and processing pipeline without resetting it.
 
 ## Known gaps
-Manifest/discovery integration and hardware validation are implemented by later Steam Link adapter tasks.
+Hardware validation is still required before making claims about actual Pico 4 Pro Steam Link output.
 
 ## Completion definition
 The package is complete when the Driver safely manages loopback reception, controls, recovery, health, and bounded diagnostics while publishing only fresh subscribed data from the fixed profile.
