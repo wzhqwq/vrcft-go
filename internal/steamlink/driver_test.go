@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -96,13 +97,15 @@ func TestDriverClosedEventsDoesNotBusyLoop(t *testing.T) {
 	}
 }
 
-func TestDriverRetriesInitialBindAndRecoversFromMalformedConfig(t *testing.T) {
+func TestDriverRetriesInitialBindForValidStartupConfig(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	driver := New()
 	driver.clock = clock
 	var calls atomic.Int32
+	addresses := make(chan string, 2)
 	created := make(chan *receiver, 1)
-	driver.listen = func(string) (*receiver, error) {
+	driver.listen = func(address string) (*receiver, error) {
+		addresses <- address
 		if calls.Add(1) == 1 {
 			return nil, errors.New("occupied")
 		}
@@ -112,15 +115,12 @@ func TestDriverRetriesInitialBindAndRecoversFromMalformedConfig(t *testing.T) {
 		}
 		return r, err
 	}
-	host := newFakeHost(pluginapi.Startup{Active: true, Config: pluginapi.Config{Revision: 1, Data: []byte(`{`)}, Subscription: expressionSubscription(trackingmodel.ExpressionJawOpen)})
+	host := newFakeHost(pluginapi.Startup{Active: true, Config: pluginapi.Config{Revision: 1, Data: []byte(`{"listenPort":9016}`)}, Subscription: expressionSubscription(trackingmodel.ExpressionJawOpen)})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- driver.Run(ctx, host) }()
 	awaitStatus(t, host, pluginapi.DeviceError)
-	host.events <- pluginapi.ConfigChanged{Config: pluginapi.Config{Revision: 2, Data: []byte(`{}`)}}
-	advanceUntil(t, clock, func() bool { return calls.Load() >= 1 })
-	// The first correction bind is the first listener attempt because invalid startup never bound.
 	var r *receiver
 	advanceUntil(t, clock, func() bool {
 		select {
@@ -132,6 +132,44 @@ func TestDriverRetriesInitialBindAndRecoversFromMalformedConfig(t *testing.T) {
 	})
 	if r == nil {
 		t.Fatal("nil retried listener")
+	}
+	if calls.Load() != 2 || <-addresses != "127.0.0.1:9016" || <-addresses != "127.0.0.1:9016" {
+		t.Fatalf("initial retry calls=%d", calls.Load())
+	}
+	awaitStatus(t, host, pluginapi.DeviceDisconnected)
+	cancel()
+	<-done
+}
+
+func TestDriverRecoversFromMalformedConfig(t *testing.T) {
+	clock := newFakeClock(time.Unix(100, 0))
+	driver := New()
+	driver.clock = clock
+	created := make(chan *receiver, 1)
+	driver.listen = func(string) (*receiver, error) {
+		r, err := listenReceiver("127.0.0.1:0")
+		if err == nil {
+			created <- r
+		}
+		return r, err
+	}
+	host := newFakeHost(pluginapi.Startup{Active: true, Config: pluginapi.Config{Revision: 1, Data: []byte(`{`)}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- driver.Run(ctx, host) }()
+	awaitStatus(t, host, pluginapi.DeviceError)
+	host.events <- pluginapi.ConfigChanged{Config: pluginapi.Config{Revision: 2, Data: []byte(`{}`)}}
+	var r *receiver
+	advanceUntil(t, clock, func() bool {
+		select {
+		case r = <-created:
+			return true
+		default:
+			return false
+		}
+	})
+	if r == nil {
+		t.Fatal("valid correction did not bind")
 	}
 	awaitStatus(t, host, pluginapi.DeviceDisconnected)
 	cancel()
@@ -174,6 +212,79 @@ func TestDriverFailedRebindPreservesOldReceiverAndSamePortCorrection(t *testing.
 	host.events <- pluginapi.ConfigChanged{Config: pluginapi.Config{Revision: 3, Data: []byte(`{}`)}}
 	advanceUntil(t, clock, func() bool { return calls.Load() == 2 })
 	awaitStatus(t, host, pluginapi.DeviceReady)
+	cancel()
+	<-done
+}
+
+func TestDriverSuccessfulRebindDiscardsRetiredReceiverPacket(t *testing.T) {
+	clock := newFakeClock(time.Unix(100, 0))
+	driver := New()
+	driver.clock = clock
+	created := make(chan *receiver, 2)
+	addresses := make(chan string, 2)
+	candidateStarted := make(chan struct{})
+	allowCandidate := make(chan struct{})
+	var calls atomic.Int32
+	driver.listen = func(address string) (*receiver, error) {
+		addresses <- address
+		if calls.Add(1) == 2 {
+			close(candidateStarted)
+			<-allowCandidate
+		}
+		r, err := listenReceiver("127.0.0.1:0")
+		if err == nil {
+			created <- r
+		}
+		return r, err
+	}
+	host := newFakeHost(pluginapi.Startup{Active: true, Subscription: expressionSubscription(trackingmodel.ExpressionJawOpen)})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- driver.Run(ctx, host) }()
+	var old *receiver
+	select {
+	case old = <-created:
+	case <-time.After(time.Second):
+		t.Fatal("initial listener")
+	}
+	host.events <- pluginapi.ConfigChanged{Config: pluginapi.Config{Revision: 2, Data: []byte(`{"listenPort":9016}`)}}
+	select {
+	case <-candidateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("candidate bind did not start")
+	}
+	// The candidate bind holds the control loop before it can close the old
+	// receiver. Fill the packet queue from that receiver so its epoch is
+	// definitely retired when the rebind completes.
+	for range 100 {
+		sendJawDrop(t, old.localAddr(), .2)
+	}
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	if dropped := awaitDropped(t, waitCtx, old); dropped == 0 {
+		t.Fatal("old receiver did not queue packets")
+	}
+	waitCancel()
+	close(allowCandidate)
+	var replacement *receiver
+	select {
+	case replacement = <-created:
+	case <-time.After(time.Second):
+		t.Fatal("replacement listener")
+	}
+	if <-addresses != "127.0.0.1:9015" || <-addresses != "127.0.0.1:9016" {
+		t.Fatal("rebind did not use the configured ports")
+	}
+	clock.Advance(10 * time.Millisecond)
+	time.Sleep(time.Millisecond)
+	if host.frameCount() != 0 {
+		t.Fatal("retired receiver packet published after rebind")
+	}
+	sendJawDrop(t, replacement.localAddr(), .7)
+	advanceUntilFrames(t, clock, host, 1)
+	frame := host.framesCopy()[0]
+	if value, ok := frame.Expressions.Get(trackingmodel.ExpressionJawOpen); !ok || value != .7 {
+		t.Fatalf("replacement frame=%v,%v", value, ok)
+	}
 	cancel()
 	<-done
 }
@@ -227,6 +338,77 @@ func TestDriverDoesNotRetryRejectedFrame(t *testing.T) {
 	time.Sleep(time.Millisecond)
 	if host.frameCount() != 1 {
 		t.Fatalf("frames = %d, want 1", host.frameCount())
+	}
+	cancel()
+	<-done
+}
+
+func TestDriverCancellationDuringSustainedUDP(t *testing.T) {
+	clock := newFakeClock(time.Unix(100, 0))
+	_, _, r, cancel, done := startDriver(t, clock, true, expressionSubscription(trackingmodel.ExpressionJawOpen))
+	payload, err := osc.MarshalMessage(osc.Message{Address: "/sl/xrfb/facew/JawDrop", Args: []osc.Value{{Kind: osc.ValueFloat32, F32: .4}}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	conn, err := net.DialUDP("udp4", nil, r.localAddr())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	stopSending := make(chan struct{})
+	sent := make(chan struct{}, 1)
+	senderDone := make(chan struct{})
+	go func() {
+		defer close(senderDone)
+		for {
+			select {
+			case <-stopSending:
+				return
+			default:
+			}
+			_, _ = conn.Write(payload)
+			select {
+			case sent <- struct{}{}:
+			default:
+			}
+		}
+	}()
+	select {
+	case <-sent:
+	case <-time.After(time.Second):
+		t.Fatal("sender did not send")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not stop during UDP traffic")
+	}
+	close(stopSending)
+	select {
+	case <-senderDone:
+	case <-time.After(time.Second):
+		t.Fatal("sender did not stop")
+	}
+}
+
+func TestDriverDiagnosticsDoNotLogRawInputOrConfig(t *testing.T) {
+	clock := newFakeClock(time.Unix(100, 0))
+	_, host, r, cancel, done := startDriver(t, clock, true, expressionSubscription(trackingmodel.ExpressionJawOpen))
+	sendJawDrop(t, r.localAddr(), 123.456)
+	host.events <- pluginapi.ConfigChanged{Config: pluginapi.Config{Revision: 2, Data: []byte(`{"listenPort":9015,"secret":"configuration-should-not-log"}`)}}
+	advanceUntil(t, clock, func() bool {
+		statuses := host.statusesCopy()
+		return len(statuses) > 0 && statuses[len(statuses)-1].State == pluginapi.DeviceError
+	})
+	advanceUntil(t, clock, func() bool { return len(host.logsCopy()) > 0 })
+	for _, message := range host.logsCopy() {
+		if strings.Contains(message, "123.456") || strings.Contains(message, "configuration-should-not-log") || strings.Contains(message, "listenPort") {
+			t.Fatalf("diagnostic exposed raw data: %q", message)
+		}
 	}
 	cancel()
 	<-done

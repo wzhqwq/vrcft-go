@@ -79,6 +79,12 @@ func (h *fakeHost) statusesCopy() []pluginapi.DeviceStatus {
 	return append([]pluginapi.DeviceStatus(nil), h.status...)
 }
 
+func (h *fakeHost) logsCopy() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.logs...)
+}
+
 type fakeClock struct {
 	mu      sync.Mutex
 	now     time.Time
