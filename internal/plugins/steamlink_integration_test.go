@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -100,6 +101,14 @@ func TestSteamLinkProcessLifecycleAndSubscriptions(t *testing.T) {
 	}
 
 	h.sink.drain()
+	oldGenerationPacket := steamLinkJawPacket(t, 0.25)
+	stopOldGenerationTraffic := h.sendContinuously(oldGenerationPacket, h.port)
+	h.waitFrame(func(frame steamLinkFrame) bool {
+		return frame.generation == 7 &&
+			frame.frame.Expressions.Valid.Has(trackingmodel.ExpressionJawOpen) &&
+			frame.frame.Expressions.Values[trackingmodel.ExpressionJawOpen] == 0.25
+	})
+	h.sink.drain()
 	eye := pluginapi.Subscription{
 		Generation:   8,
 		Capabilities: trackingmodel.CapabilityEye,
@@ -108,8 +117,19 @@ func TestSteamLinkProcessLifecycleAndSubscriptions(t *testing.T) {
 	if err := h.manager.UpdateSubscription(h.ctx, steamLinkIntegrationPluginID, eye); err != nil {
 		t.Fatalf("UpdateSubscription(eye) error = %v", err)
 	}
-	eyeFrame := h.sendUntilGeneration(8, steamLinkPacket(t, true), func(frame steamLinkFrame) bool {
+	// The control acknowledgement permits already-observed generation-7 frames
+	// to reach this local sink. Drain them before the generation-8 assertion.
+	h.sink.drain()
+	eyeFrame := h.sendUntil(steamLinkPacket(t, true), func(frame steamLinkFrame) bool {
 		return frame.generation == 8 && frame.frame.Eye.Valid&trackingmodel.EyeValidLeftGaze != 0
+	})
+	stopOldGenerationTraffic()
+	// A generation-8 frame is the transition barrier. Any distinguishable
+	// generation-7 traffic that was queued before the update must not cross it.
+	h.assertNoMatchingFrame(150*time.Millisecond, func(frame steamLinkFrame) bool {
+		return frame.generation == 7 &&
+			frame.frame.Expressions.Valid.Has(trackingmodel.ExpressionJawOpen) &&
+			frame.frame.Expressions.Values[trackingmodel.ExpressionJawOpen] == 0.25
 	})
 	if eyeFrame.frame.Capabilities != trackingmodel.CapabilityEye ||
 		eyeFrame.frame.Expressions.Valid.Has(trackingmodel.ExpressionJawOpen) ||
@@ -135,6 +155,13 @@ func TestSteamLinkProcessLifecycleAndSubscriptions(t *testing.T) {
 	h.sink.drain()
 	oldPort := h.port
 	newPort := h.reservePort()
+	oldPortPacket := steamLinkEyePacket(t, 1, 0)
+	stopOldPortTraffic := h.sendContinuously(oldPortPacket, oldPort)
+	h.waitFrame(func(frame steamLinkFrame) bool {
+		return frame.generation == 8 && frame.frame.Eye.Valid&trackingmodel.EyeValidLeftGaze != 0 &&
+			frame.frame.Eye.LeftGaze == (trackingmodel.Vec2{X: 1, Y: 0})
+	})
+	h.sink.drain()
 	if err := h.manager.UpdateConfig(h.ctx, steamLinkIntegrationPluginID, pluginapi.Config{
 		Revision: 2,
 		Data:     []byte(fmt.Sprintf(`{"listenPort":%d}`, newPort)),
@@ -142,19 +169,24 @@ func TestSteamLinkProcessLifecycleAndSubscriptions(t *testing.T) {
 		t.Fatalf("UpdateConfig(rebind) error = %v", err)
 	}
 	h.port = newPort
-	h.sendUntil(steamLinkPacket(t, true), func(frame steamLinkFrame) bool {
-		return frame.generation == 8 && frame.frame.Eye.Valid&trackingmodel.EyeValidLeftGaze != 0
+	newPortPacket := steamLinkEyePacket(t, -1, 0)
+	h.sendUntil(newPortPacket, func(frame steamLinkFrame) bool {
+		return frame.generation == 8 && frame.frame.Eye.Valid&trackingmodel.EyeValidLeftGaze != 0 &&
+			frame.frame.Eye.LeftGaze == (trackingmodel.Vec2{X: -1, Y: 0})
 	})
-	// A UDP datagram accepted before the receive transition can still be in the
-	// receiver queue. Wait for the bounded freshness window to quiesce before
-	// making the malformed-datagram assertion.
-	h.waitForQuietMatching(300*time.Millisecond, func(frame steamLinkFrame) bool {
-		return frame.generation == 8 && frame.frame.Eye.Valid&trackingmodel.EyeValidLeftGaze != 0
+	h.trackPort(newPort)
+	stopOldPortTraffic()
+	// The new-port frame is the rebind completion barrier. Old-port data was
+	// deliberately sent across the transition and must not be delivered later.
+	h.assertNoMatchingFrame(150*time.Millisecond, func(frame steamLinkFrame) bool {
+		return frame.generation == 8 && frame.frame.Eye.Valid&trackingmodel.EyeValidLeftGaze != 0 &&
+			frame.frame.Eye.LeftGaze == (trackingmodel.Vec2{X: 1, Y: 0})
 	})
 	h.sink.drain()
-	h.send(steamLinkPacket(t, true), oldPort)
+	h.send(oldPortPacket, oldPort)
 	h.assertNoMatchingFrame(150*time.Millisecond, func(frame steamLinkFrame) bool {
-		return frame.generation == 8 && frame.frame.Eye.Valid&trackingmodel.EyeValidLeftGaze != 0
+		return frame.generation == 8 && frame.frame.Eye.Valid&trackingmodel.EyeValidLeftGaze != 0 &&
+			frame.frame.Eye.LeftGaze == (trackingmodel.Vec2{X: 1, Y: 0})
 	})
 
 	h.sink.drain()
@@ -198,6 +230,11 @@ func (s *steamLinkSink) drain() {
 		}
 	}
 }
+
+const (
+	steamLinkBindAttempts  = 4
+	steamLinkBindWaitLimit = 2 * time.Second
+)
 
 type steamLinkIntegrationHarness struct {
 	t        *testing.T
@@ -263,46 +300,115 @@ func newSteamLinkIntegrationHarness(t *testing.T) *steamLinkIntegrationHarness {
 
 func (h *steamLinkIntegrationHarness) startConfigured(generation uint64, subscription pluginapi.Subscription) {
 	h.t.Helper()
-	h.port = h.reservePort()
 	if err := h.manager.Start(h.ctx); err != nil {
 		h.t.Fatalf("Start() error = %v", err)
 	}
-	if err := h.manager.UpdateConfig(h.ctx, steamLinkIntegrationPluginID, pluginapi.Config{
-		Revision: 1,
-		Data:     []byte(fmt.Sprintf(`{"listenPort":%d}`, h.port)),
-	}); err != nil {
-		h.t.Fatalf("UpdateConfig() error = %v", err)
-	}
-	if err := h.manager.Enable(h.ctx, steamLinkIntegrationPluginID); err != nil {
-		h.t.Fatalf("Enable() error = %v", err)
-	}
-	h.waitSnapshot(func(snapshot RuntimeSnapshot) bool { return snapshot.State == StateRunning && snapshot.PID > 0 })
 	if subscription.Generation != generation {
 		h.t.Fatalf("subscription generation %d, want %d", subscription.Generation, generation)
 	}
-	if err := h.manager.UpdateSubscription(h.ctx, steamLinkIntegrationPluginID, subscription); err != nil {
-		h.t.Fatalf("UpdateSubscription() error = %v", err)
+	for attempt := 0; attempt < steamLinkBindAttempts; attempt++ {
+		port := h.reservePort()
+		h.drainEvents()
+		if err := h.manager.UpdateConfig(h.ctx, steamLinkIntegrationPluginID, pluginapi.Config{
+			Revision: uint64(attempt + 1),
+			Data:     []byte(fmt.Sprintf(`{"listenPort":%d}`, port)),
+		}); err != nil {
+			h.t.Fatalf("UpdateConfig() error = %v", err)
+		}
+		if err := h.manager.Enable(h.ctx, steamLinkIntegrationPluginID); err != nil {
+			h.t.Fatalf("Enable() error = %v", err)
+		}
+		h.waitSnapshot(func(snapshot RuntimeSnapshot) bool { return snapshot.State == StateRunning && snapshot.PID > 0 })
+		if err := h.manager.UpdateSubscription(h.ctx, steamLinkIntegrationPluginID, subscription); err != nil {
+			h.t.Fatalf("UpdateSubscription() error = %v", err)
+		}
+		if err := h.manager.SetActive(h.ctx, steamLinkIntegrationPluginID, true); err != nil {
+			h.t.Fatalf("SetActive() error = %v", err)
+		}
+		h.port = port
+		if h.waitForConfiguredFrame(generation) {
+			h.trackPort(port)
+			return
+		}
+		h.disableAfterBindRace(port)
 	}
-	if err := h.manager.SetActive(h.ctx, steamLinkIntegrationPluginID, true); err != nil {
-		h.t.Fatalf("SetActive() error = %v", err)
-	}
+	h.t.Fatalf("Steam Link did not bind an ephemeral loopback port after %d attempts", steamLinkBindAttempts)
 }
 
 func (h *steamLinkIntegrationHarness) reservePort() int {
 	h.t.Helper()
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; attempt < steamLinkBindAttempts; attempt++ {
 		listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 		if err != nil {
 			continue
 		}
 		port := listener.LocalAddr().(*net.UDPAddr).Port
 		if err := listener.Close(); err == nil && port != 0 && port != 9015 {
-			h.ports = append(h.ports, port)
 			return port
 		}
 	}
 	h.t.Fatal("reserve non-production UDP port after bounded retries")
 	return 0
+}
+
+func (h *steamLinkIntegrationHarness) trackPort(port int) {
+	h.t.Helper()
+	if port == 0 || port == 9015 {
+		h.t.Fatalf("tracked invalid Steam Link test port %d", port)
+	}
+	for _, existing := range h.ports {
+		if existing == port {
+			return
+		}
+	}
+	h.ports = append(h.ports, port)
+}
+
+func (h *steamLinkIntegrationHarness) waitForConfiguredFrame(generation uint64) bool {
+	h.t.Helper()
+	timer := time.NewTimer(steamLinkBindWaitLimit)
+	defer timer.Stop()
+	ticker := time.NewTicker(15 * time.Millisecond)
+	defer ticker.Stop()
+	packet := steamLinkPacket(h.t, false)
+	for {
+		h.send(packet, h.port)
+		for {
+			select {
+			case frame := <-h.sink.frames:
+				if frame.generation == generation && frame.frame.Expressions.Valid.Has(trackingmodel.ExpressionJawOpen) {
+					return true
+				}
+			default:
+				goto wait
+			}
+		}
+	wait:
+		select {
+		case event := <-h.events:
+			if event.PluginID == steamLinkIntegrationPluginID && event.Type == EventPluginStatus &&
+				event.Status != nil && event.Status.State == pluginapi.DeviceError {
+				return false
+			}
+		case <-timer.C:
+			h.t.Fatalf("Steam Link bind probe on UDP port %d timed out without a bind error", h.port)
+		case <-h.ctx.Done():
+			h.t.Fatalf("Steam Link bind probe on UDP port %d: %v", h.port, h.ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (h *steamLinkIntegrationHarness) disableAfterBindRace(port int) {
+	h.t.Helper()
+	if err := h.manager.Disable(h.ctx, steamLinkIntegrationPluginID); err != nil {
+		h.t.Fatalf("Disable() after UDP port %d bind race: %v", port, err)
+	}
+	h.waitSnapshot(func(snapshot RuntimeSnapshot) bool { return snapshot.State == StateDisabled && snapshot.PID == 0 })
+	if err := h.launcher.waitAllExited(h.ctx, 0); err != nil {
+		h.t.Fatalf("wait for bind-race process cleanup on UDP port %d: %v", port, err)
+	}
+	h.sink.drain()
 }
 
 func (h *steamLinkIntegrationHarness) waitSnapshot(match func(RuntimeSnapshot) bool) RuntimeSnapshot {
@@ -324,15 +430,6 @@ func (h *steamLinkIntegrationHarness) waitSnapshot(match func(RuntimeSnapshot) b
 
 func (h *steamLinkIntegrationHarness) sendUntil(packet []byte, match func(steamLinkFrame) bool) steamLinkFrame {
 	return h.sendUntilFrame(packet, match, func(steamLinkFrame) {})
-}
-
-func (h *steamLinkIntegrationHarness) sendUntilGeneration(expectedGeneration uint64, packet []byte, match func(steamLinkFrame) bool) steamLinkFrame {
-	h.t.Helper()
-	return h.sendUntilFrame(packet, match, func(frame steamLinkFrame) {
-		if frame.pluginID != steamLinkIntegrationPluginID || frame.generation > expectedGeneration {
-			h.t.Fatalf("unexpected Steam Link frame after generation transition: %+v", frame)
-		}
-	})
 }
 
 func (h *steamLinkIntegrationHarness) sendUntilFrame(packet []byte, match func(steamLinkFrame) bool, observe func(steamLinkFrame)) steamLinkFrame {
@@ -387,6 +484,50 @@ func (h *steamLinkIntegrationHarness) send(packet []byte, port int) {
 	}
 }
 
+func (h *steamLinkIntegrationHarness) sendContinuously(packet []byte, port int) func() {
+	h.t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		connection, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+		if err != nil {
+			done <- err
+			return
+		}
+		defer connection.Close()
+		ticker := time.NewTicker(2 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if _, err := connection.Write(packet); err != nil {
+				done <- err
+				return
+			}
+			select {
+			case <-ctx.Done():
+				done <- nil
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case err := <-done:
+				if err != nil {
+					h.t.Fatalf("send Steam Link transition traffic to UDP port %d: %v", port, err)
+				}
+			case <-h.ctx.Done():
+				h.t.Fatalf("stop Steam Link transition traffic on UDP port %d: %v", port, h.ctx.Err())
+			}
+		})
+	}
+	h.t.Cleanup(stop)
+	return stop
+}
+
 func (h *steamLinkIntegrationHarness) assertNoMatchingFrame(duration time.Duration, match func(steamLinkFrame) bool) {
 	h.t.Helper()
 	timer := time.NewTimer(duration)
@@ -434,30 +575,6 @@ func (h *steamLinkIntegrationHarness) waitDisconnected() {
 	}
 }
 
-func (h *steamLinkIntegrationHarness) waitForQuietMatching(duration time.Duration, match func(steamLinkFrame) bool) {
-	h.t.Helper()
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	for {
-		select {
-		case frame := <-h.sink.frames:
-			if match(frame) {
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				timer.Reset(duration)
-			}
-		case <-timer.C:
-			return
-		case <-h.ctx.Done():
-			h.t.Fatalf("waiting for Steam Link transition to quiesce: %v", h.ctx.Err())
-		}
-	}
-}
-
 func (h *steamLinkIntegrationHarness) disableAndAssertReleased() {
 	h.t.Helper()
 	if err := h.manager.Disable(h.ctx, steamLinkIntegrationPluginID); err != nil {
@@ -492,10 +609,22 @@ func (h *steamLinkIntegrationHarness) disableAndAssertReleased() {
 }
 
 func steamLinkPacket(t *testing.T, includeEye bool) []byte {
+	return steamLinkPacketWithValues(t, includeEye, 0.5, 0, 0)
+}
+
+func steamLinkJawPacket(t *testing.T, jaw float32) []byte {
+	return steamLinkPacketWithValues(t, false, jaw, 0, 0)
+}
+
+func steamLinkEyePacket(t *testing.T, eyeX, eyeY float32) []byte {
+	return steamLinkPacketWithValues(t, true, 0.5, eyeX, eyeY)
+}
+
+func steamLinkPacketWithValues(t *testing.T, includeEye bool, jaw, eyeX, eyeY float32) []byte {
 	t.Helper()
-	messages := []osc.Message{{Address: "/sl/xrfb/facew/JawDrop", Args: []osc.Value{osc.Float32(0.5)}}}
+	messages := []osc.Message{{Address: "/sl/xrfb/facew/JawDrop", Args: []osc.Value{osc.Float32(jaw)}}}
 	if includeEye {
-		messages = append(messages, osc.Message{Address: "/sl/eyeTrackedGazePoint", Args: []osc.Value{osc.Float32(0), osc.Float32(0), osc.Float32(-1)}})
+		messages = append(messages, osc.Message{Address: "/sl/eyeTrackedGazePoint", Args: []osc.Value{osc.Float32(eyeX), osc.Float32(eyeY), osc.Float32(-1)}})
 	}
 	elements := make([][]byte, len(messages))
 	for index, message := range messages {
@@ -539,15 +668,44 @@ func steamLinkBuildCommand(t *testing.T, ctx context.Context, repository, execut
 	if info, err := os.Stat(cache); err != nil || !info.IsDir() {
 		t.Fatalf("Steam Link process test requires existing GOCACHE %q: %v", cache, err)
 	}
-	// This disposable worktree has no usable VCS stamping context in the Go
-	// toolchain. The executable's runtime behavior is independent of build
-	// metadata, so disable only that stamping step while retaining a real build.
-	command := exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-o", executable, "./cmd/steamlink-plugin")
+	command := exec.CommandContext(ctx, "go", "build", "-o", executable, "./cmd/steamlink-plugin")
 	command.Dir = repository
-	command.Env = os.Environ()
+	command.Env = steamLinkBuildEnvironment(t, repository)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build Steam Link command: %v\n%s", err, output)
 	}
+}
+
+func steamLinkBuildEnvironment(t *testing.T, repository string) []string {
+	t.Helper()
+	command := exec.Command("git", "rev-parse", "--git-common-dir")
+	command.Dir = repository
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --git-common-dir: %v", err)
+	}
+	commonDir := strings.TrimSpace(string(output))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(repository, commonDir)
+	}
+	return steamLinkAppendGitSafeDirectory(os.Environ(), filepath.Dir(commonDir))
+}
+
+func steamLinkAppendGitSafeDirectory(environment []string, directory string) []string {
+	count := 0
+	for _, entry := range environment {
+		key, value, found := strings.Cut(entry, "=")
+		if found && key == "GIT_CONFIG_COUNT" {
+			if parsed, err := strconv.Atoi(value); err == nil && parsed >= 0 {
+				count = parsed
+			}
+		}
+	}
+	return append(environment,
+		fmt.Sprintf("GIT_CONFIG_COUNT=%d", count+1),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=safe.directory", count),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", count, directory),
+	)
 }
 
 func copySteamLinkManifest(t *testing.T, source, destination string) {
