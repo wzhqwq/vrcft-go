@@ -103,9 +103,11 @@ func TestDriverRetriesInitialBindForValidStartupConfig(t *testing.T) {
 	driver.clock = clock
 	var calls atomic.Int32
 	addresses := make(chan string, 2)
+	attemptedAt := make(chan time.Time, 2)
 	created := make(chan *receiver, 1)
 	driver.listen = func(address string) (*receiver, error) {
 		addresses <- address
+		attemptedAt <- clock.Now()
 		if calls.Add(1) == 1 {
 			return nil, errors.New("occupied")
 		}
@@ -121,19 +123,23 @@ func TestDriverRetriesInitialBindForValidStartupConfig(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- driver.Run(ctx, host) }()
 	awaitStatus(t, host, pluginapi.DeviceError)
-	var r *receiver
-	advanceUntil(t, clock, func() bool {
-		select {
-		case r = <-created:
-			return true
-		default:
-			return false
-		}
-	})
-	if r == nil {
-		t.Fatal("nil retried listener")
+	firstAttempt := <-attemptedAt
+	clock.Advance(initialRetryInterval - time.Nanosecond)
+	if calls.Load() != 1 {
+		t.Fatalf("retry before two seconds: calls=%d", calls.Load())
 	}
-	if calls.Load() != 2 || <-addresses != "127.0.0.1:9016" || <-addresses != "127.0.0.1:9016" {
+	select {
+	case <-created:
+		t.Fatal("retry bound before two seconds")
+	default:
+	}
+	clock.Advance(time.Nanosecond)
+	select {
+	case <-created:
+	case <-time.After(time.Second):
+		t.Fatalf("retry did not bind at two seconds: calls=%d", calls.Load())
+	}
+	if calls.Load() != 2 || <-addresses != "127.0.0.1:9016" || <-addresses != "127.0.0.1:9016" || <-attemptedAt != firstAttempt.Add(initialRetryInterval) {
 		t.Fatalf("initial retry calls=%d", calls.Load())
 	}
 	awaitStatus(t, host, pluginapi.DeviceDisconnected)
@@ -274,8 +280,16 @@ func TestDriverSuccessfulRebindDiscardsRetiredReceiverPacket(t *testing.T) {
 	if <-addresses != "127.0.0.1:9015" || <-addresses != "127.0.0.1:9016" {
 		t.Fatal("rebind did not use the configured ports")
 	}
-	clock.Advance(10 * time.Millisecond)
-	time.Sleep(time.Millisecond)
+	sendUnknownFloat(t, replacement.localAddr(), "/steamlink/rebind-sentinel")
+	advanceUntil(t, clock, func() bool {
+		sendUnknownFloat(t, replacement.localAddr(), "/steamlink/rebind-sentinel")
+		for _, message := range host.logsCopy() {
+			if strings.Contains(message, "/steamlink/rebind-sentinel") {
+				return true
+			}
+		}
+		return false
+	})
 	if host.frameCount() != 0 {
 		t.Fatal("retired receiver packet published after rebind")
 	}
@@ -467,6 +481,15 @@ func startDriver(t *testing.T, clock *fakeClock, active bool, sub pluginapi.Subs
 func sendJawDrop(t *testing.T, address *net.UDPAddr, value float32) {
 	t.Helper()
 	payload, err := osc.MarshalMessage(osc.Message{Address: "/sl/xrfb/facew/JawDrop", Args: []osc.Value{{Kind: osc.ValueFloat32, F32: value}}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	sendDatagram(t, address, payload)
+}
+
+func sendUnknownFloat(t *testing.T, address *net.UDPAddr, name string) {
+	t.Helper()
+	payload, err := osc.MarshalMessage(osc.Message{Address: name, Args: []osc.Value{{Kind: osc.ValueFloat32, F32: .4}}})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

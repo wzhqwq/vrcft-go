@@ -102,7 +102,7 @@ func (c *fakeClock) Now() time.Time {
 func (c *fakeClock) NewTicker(period time.Duration) ticker {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	t := &fakeTicker{period: period, next: c.now.Add(period), ch: make(chan time.Time, 16)}
+	t := &fakeTicker{period: period, next: c.now.Add(period), ch: make(chan time.Time, 256)}
 	c.tickers = append(c.tickers, t)
 	return t
 }
