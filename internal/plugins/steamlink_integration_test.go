@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -91,8 +92,15 @@ func TestSteamLinkProcessPipeline(t *testing.T) {
 }
 
 func TestSteamLinkProcessLifecycleAndSubscriptions(t *testing.T) {
+	// Exercise the build helper without the harness's inherited Git safety
+	// configuration. It must make the linked worktree safe before querying Git.
+	t.Setenv("GIT_CONFIG_COUNT", "0")
 	h := newSteamLinkIntegrationHarness(t)
+	h.claimNextReservedPortForBindRace()
 	h.startConfigured(7, jawSubscription(7))
+	if h.initialBindAttempts != 2 {
+		t.Fatalf("initial bind attempts = %d, want simulated race recovery on attempt 2", h.initialBindAttempts)
+	}
 	first := h.sendUntil(steamLinkPacket(t, false), func(frame steamLinkFrame) bool {
 		return frame.generation == 7 && frame.frame.Expressions.Valid.Has(trackingmodel.ExpressionJawOpen)
 	})
@@ -163,7 +171,7 @@ func TestSteamLinkProcessLifecycleAndSubscriptions(t *testing.T) {
 	})
 	h.sink.drain()
 	if err := h.manager.UpdateConfig(h.ctx, steamLinkIntegrationPluginID, pluginapi.Config{
-		Revision: 2,
+		Revision: h.nextConfigRevision(),
 		Data:     []byte(fmt.Sprintf(`{"listenPort":%d}`, newPort)),
 	}); err != nil {
 		t.Fatalf("UpdateConfig(rebind) error = %v", err)
@@ -237,16 +245,21 @@ const (
 )
 
 type steamLinkIntegrationHarness struct {
-	t        *testing.T
-	ctx      context.Context
-	cancel   context.CancelFunc
-	manager  Manager
-	launcher *steamLinkLauncher
-	sink     *steamLinkSink
-	events   <-chan Event
-	port     int
-	ports    []int
-	closed   bool
+	t              *testing.T
+	ctx            context.Context
+	cancel         context.CancelFunc
+	manager        Manager
+	launcher       *steamLinkLauncher
+	sink           *steamLinkSink
+	events         <-chan Event
+	port           int
+	ports          []int
+	closed         bool
+	configRevision uint64
+
+	claimNextReservedPort bool
+	bindRaceClaim         *net.UDPConn
+	initialBindAttempts   int
 }
 
 func newSteamLinkIntegrationHarness(t *testing.T) *steamLinkIntegrationHarness {
@@ -294,6 +307,7 @@ func newSteamLinkIntegrationHarness(t *testing.T) *steamLinkIntegrationHarness {
 		if err := h.launcher.waitAllExited(context.Background(), 5*time.Second); err != nil {
 			t.Errorf("cleanup process wait: %v", err)
 		}
+		h.releaseBindRaceClaim()
 	})
 	return h
 }
@@ -307,10 +321,11 @@ func (h *steamLinkIntegrationHarness) startConfigured(generation uint64, subscri
 		h.t.Fatalf("subscription generation %d, want %d", subscription.Generation, generation)
 	}
 	for attempt := 0; attempt < steamLinkBindAttempts; attempt++ {
+		h.initialBindAttempts++
 		port := h.reservePort()
 		h.drainEvents()
 		if err := h.manager.UpdateConfig(h.ctx, steamLinkIntegrationPluginID, pluginapi.Config{
-			Revision: uint64(attempt + 1),
+			Revision: h.nextConfigRevision(),
 			Data:     []byte(fmt.Sprintf(`{"listenPort":%d}`, port)),
 		}); err != nil {
 			h.t.Fatalf("UpdateConfig() error = %v", err)
@@ -331,6 +346,7 @@ func (h *steamLinkIntegrationHarness) startConfigured(generation uint64, subscri
 			return
 		}
 		h.disableAfterBindRace(port)
+		h.releaseBindRaceClaim()
 	}
 	h.t.Fatalf("Steam Link did not bind an ephemeral loopback port after %d attempts", steamLinkBindAttempts)
 }
@@ -344,11 +360,38 @@ func (h *steamLinkIntegrationHarness) reservePort() int {
 		}
 		port := listener.LocalAddr().(*net.UDPAddr).Port
 		if err := listener.Close(); err == nil && port != 0 && port != 9015 {
+			if h.claimNextReservedPort {
+				h.claimNextReservedPort = false
+				claimed, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+				if err != nil {
+					h.t.Fatalf("claim released Steam Link UDP port %d for bind race: %v", port, err)
+				}
+				h.bindRaceClaim = claimed
+			}
 			return port
 		}
 	}
 	h.t.Fatal("reserve non-production UDP port after bounded retries")
 	return 0
+}
+
+func (h *steamLinkIntegrationHarness) claimNextReservedPortForBindRace() {
+	h.t.Helper()
+	if h.claimNextReservedPort || h.bindRaceClaim != nil {
+		h.t.Fatal("Steam Link bind-race claim is already armed")
+	}
+	h.claimNextReservedPort = true
+}
+
+func (h *steamLinkIntegrationHarness) releaseBindRaceClaim() {
+	h.t.Helper()
+	if h.bindRaceClaim == nil {
+		return
+	}
+	if err := h.bindRaceClaim.Close(); err != nil {
+		h.t.Errorf("release simulated Steam Link bind-race UDP port: %v", err)
+	}
+	h.bindRaceClaim = nil
 }
 
 func (h *steamLinkIntegrationHarness) trackPort(port int) {
@@ -362,6 +405,11 @@ func (h *steamLinkIntegrationHarness) trackPort(port int) {
 		}
 	}
 	h.ports = append(h.ports, port)
+}
+
+func (h *steamLinkIntegrationHarness) nextConfigRevision() uint64 {
+	h.configRevision++
+	return h.configRevision
 }
 
 func (h *steamLinkIntegrationHarness) waitForConfiguredFrame(generation uint64) bool {
@@ -651,12 +699,19 @@ func jawSubscription(generation uint64) pluginapi.Subscription {
 
 func steamLinkRepositoryRoot(t *testing.T) string {
 	t.Helper()
-	command := exec.Command("git", "rev-parse", "--show-toplevel")
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("git rev-parse --show-toplevel: %v", err)
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate Steam Link integration test source")
 	}
-	return strings.TrimSpace(string(output))
+	repository := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", ".."))
+	if !filepath.IsAbs(repository) {
+		absolute, err := filepath.Abs(repository)
+		if err != nil {
+			t.Fatalf("resolve Steam Link repository root: %v", err)
+		}
+		repository = absolute
+	}
+	return repository
 }
 
 func steamLinkBuildCommand(t *testing.T, ctx context.Context, repository, executable string) {
@@ -678,8 +733,10 @@ func steamLinkBuildCommand(t *testing.T, ctx context.Context, repository, execut
 
 func steamLinkBuildEnvironment(t *testing.T, repository string) []string {
 	t.Helper()
+	environment := steamLinkAppendGitSafeDirectory(os.Environ(), repository)
 	command := exec.Command("git", "rev-parse", "--git-common-dir")
 	command.Dir = repository
+	command.Env = environment
 	output, err := command.Output()
 	if err != nil {
 		t.Fatalf("git rev-parse --git-common-dir: %v", err)
@@ -688,7 +745,7 @@ func steamLinkBuildEnvironment(t *testing.T, repository string) []string {
 	if !filepath.IsAbs(commonDir) {
 		commonDir = filepath.Join(repository, commonDir)
 	}
-	return steamLinkAppendGitSafeDirectory(os.Environ(), filepath.Dir(commonDir))
+	return steamLinkAppendGitSafeDirectory(environment, filepath.Dir(commonDir))
 }
 
 func steamLinkAppendGitSafeDirectory(environment []string, directory string) []string {
