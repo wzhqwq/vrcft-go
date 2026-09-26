@@ -49,7 +49,7 @@ func (d *Driver) Descriptor() pluginapi.Descriptor {
 	return pluginapi.Descriptor{
 		APIVersion: pluginapi.APIVersion,
 		ID:         "steamlink", Name: "Steam Link", Version: "0.1.0",
-		Description:  "Receives Steam Link eye and expression tracking over loopback OSC.",
+		Description:  "Eye and expression tracking from Steam Link OSC.",
 		Capabilities: trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression,
 	}
 }

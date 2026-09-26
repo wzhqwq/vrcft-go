@@ -26,6 +26,13 @@ checks:
     pattern: '(?m)^func FuzzDecodeDatagram\('
     weight: 1
     required: true
+  - id: public-import-boundary
+    description: Steam Link production imports use only public tracking packages
+    type: symbol
+    path: internal/steamlink/architecture_test.go
+    pattern: '(?m)^func TestProductionImportsOnlyPublicPackages\('
+    weight: 1
+    required: true
 ---
 # Package: internal/steamlink
 
@@ -66,7 +73,7 @@ The receiver binds only `127.0.0.1`. Strict JSON parsing and fixed address match
 Package tests cover strict configuration, whole-datagram codec rejection, packet limits, known field validation, mapping/freshness state, UDP queueing, lifecycle controls and rebinds, status transitions, bounded diagnostics, cleanup, and rejected frame handling. `FuzzDecodeDatagram` checks that arbitrary input cannot return observations with errors or non-finite values.
 
 ## Known gaps
-Plugin command wiring, manifest/discovery integration, and hardware validation are implemented by later Steam Link adapter tasks.
+Manifest/discovery integration and hardware validation are implemented by later Steam Link adapter tasks.
 
 ## Completion definition
 The package is complete when the Driver safely manages loopback reception, controls, recovery, health, and bounded diagnostics while publishing only fresh subscribed data from the fixed profile.
