@@ -32,18 +32,19 @@ $executablePath = Join-Path $pluginDir 'steamlink-plugin.exe'
 $env:GOCACHE = 'F:\dev\vrcft-go\.go-gocache'
 New-Item -ItemType Directory -Force -Path $env:GOCACHE | Out-Null
 New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
-Add-GitSafeDirectory -Directory $repoPath
-$commonGitDir = (& git rev-parse --git-common-dir).Trim()
-if ($LASTEXITCODE -ne 0) {
-    throw 'Unable to resolve the Git common directory'
-}
-if (-not [System.IO.Path]::IsPathRooted($commonGitDir)) {
-    $commonGitDir = Join-Path $repoPath $commonGitDir
-}
-Add-GitSafeDirectory -Directory ([System.IO.Path]::GetFullPath((Join-Path $commonGitDir '..')))
 
 Push-Location $repoPath
 try {
+    Add-GitSafeDirectory -Directory $repoPath
+    $commonGitDir = (& git rev-parse --git-common-dir).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to resolve the Git common directory'
+    }
+    if (-not [System.IO.Path]::IsPathRooted($commonGitDir)) {
+        $commonGitDir = Join-Path $repoPath $commonGitDir
+    }
+    Add-GitSafeDirectory -Directory ([System.IO.Path]::GetFullPath((Join-Path $commonGitDir '..')))
+
     $buildArgs = @('build', '-o', $executablePath, './cmd/steamlink-plugin')
     & go @buildArgs
     if ($LASTEXITCODE -ne 0) {
