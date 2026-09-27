@@ -60,8 +60,12 @@ Production code may use the Go standard library and `pkg/osc`, `pkg/pluginapi`, 
 ## Concurrency and lifecycle
 Configuration parsing, decoding, mapping, and stream state are independently testable. `Driver.Run` exclusively owns lifecycle state and field caches, starts at most one receive worker for the active binding, closes it and waits for it at shutdown/rebind, and stops its publication ticker. The worker tags packets with an atomic epoch; the driver discards packets from older epochs or received before the current transition fence. Buffered network packets cannot be identified as stale without device timestamps.
 
+Publication uses the current monotonic clock when servicing a tick, with at least 10 ms between publication attempts even after delayed ticks. A successful retry of an older configuration preserves the error for a newer rejected revision until a valid correction applies.
+
 ## Error handling
 Malformed or unsupported OSC input and packet-limit violations reject the complete datagram without observations. Invalid known messages increment the report and permit valid siblings. Unknown supported addresses, malformed/unsupported packets, invalid messages, and receiver queue drops are summarized at most once per five seconds. Configuration errors identify only the revision/state, without raw configuration text. Unrecoverable receiver read errors return from `Run` for host-supervised restart.
+
+Only candidate listen failures are recoverable bind errors. A substantive error from a retiring worker propagates from `Run`, including when a configuration change concurrently replaces its receiver; the unused candidate socket is closed.
 
 ## Performance constraints
 Datagrams are limited to 65507 bytes, 512 flattened messages, and 256-byte addresses. The receive queue holds 64 copied datagrams. Unknown-address retention is limited to 32 names, and publication is limited to 100 Hz.

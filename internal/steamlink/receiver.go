@@ -16,7 +16,7 @@ type datagram struct {
 }
 
 type receiver struct {
-	conn *net.UDPConn
+	conn net.PacketConn
 
 	dropped atomic.Uint64
 
@@ -54,7 +54,7 @@ func (r *receiver) run(ctx context.Context, epoch *atomic.Uint64, now func() tim
 
 	buffer := make([]byte, 65535)
 	for {
-		n, _, err := r.conn.ReadFromUDP(buffer)
+		n, _, err := r.conn.ReadFrom(buffer)
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return nil

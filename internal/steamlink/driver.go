@@ -2,6 +2,7 @@ package steamlink
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync/atomic"
@@ -71,9 +72,10 @@ func (d *Driver) Run(ctx context.Context, host pluginapi.Host) error {
 	var workerDone <-chan error
 	var currentConfig config
 	haveConfig := false
-	var retryConfig *config
+	var retryConfig *bindRetry
 	var retryAt time.Time
 	var statusError string
+	var lastPublication time.Time
 	var lastInput time.Time
 	hasInput := false
 	diagnostics := newDiagnostics()
@@ -112,7 +114,7 @@ func (d *Driver) Run(ctx context.Context, host pluginapi.Host) error {
 	bind := func(candidate config) error {
 		r, err := d.listen("127.0.0.1:" + strconv.Itoa(candidate.ListenPort))
 		if err != nil {
-			return err
+			return &candidateListenError{err: err}
 		}
 		if err := stopWorker(); err != nil {
 			_ = r.close()
@@ -145,9 +147,12 @@ func (d *Driver) Run(ctx context.Context, host pluginapi.Host) error {
 	if initialErr != nil {
 		setStatusError(fmt.Sprintf("configuration revision %d is invalid", startup.Config.Revision))
 	} else if err := bind(initial); err != nil {
+		var listenErr *candidateListenError
+		if !errors.As(err, &listenErr) {
+			return err
+		}
 		setStatusError("unable to listen on configured port")
-		retryCopy := initial
-		retryConfig, retryAt = &retryCopy, d.clock.Now().Add(initialRetryInterval)
+		retryConfig, retryAt = &bindRetry{candidate: initial, clearsError: true}, d.clock.Now().Add(initialRetryInterval)
 	}
 	publishStatus(d.clock.Now())
 
@@ -204,20 +209,32 @@ func (d *Driver) Run(ctx context.Context, host pluginapi.Host) error {
 			}
 			state.observe(observations, packet.ReceivedAt)
 			publishStatus(d.clock.Now())
-		case now := <-tick.C():
+		case <-tick.C():
+			// A delayed tick carries its scheduled time, which can predate
+			// already-observed packets. Freshness uses the service time.
+			now := d.clock.Now()
 			if current != nil {
 				diagnostics.queueDrops += current.takeDropped()
 			}
 			if retryConfig != nil && !now.Before(retryAt) {
-				candidate := *retryConfig
-				if err := bind(candidate); err == nil {
-					retryConfig, statusError = nil, ""
+				if err := bind(retryConfig.candidate); err == nil {
+					if retryConfig.clearsError {
+						statusError = ""
+					}
+					retryConfig = nil
 				} else {
+					var listenErr *candidateListenError
+					if !errors.As(err, &listenErr) {
+						return err
+					}
 					retryAt = now.Add(initialRetryInterval)
 				}
 			}
-			if frame, publish := state.next(now); publish {
-				host.PublishFrame(frame)
+			if lastPublication.IsZero() || now.Sub(lastPublication) >= publishInterval {
+				if frame, publish := state.next(now); publish {
+					host.PublishFrame(frame)
+					lastPublication = now
+				}
 			}
 			diagnostics.emit(host, now)
 			publishStatus(now)
@@ -236,7 +253,20 @@ func (d *Driver) Run(ctx context.Context, host pluginapi.Host) error {
 
 type bindFunc func(config) error
 
-func (d *Driver) handleEvent(event pluginapi.ControlEvent, active *bool, sub *pluginapi.Subscription, state *streamState, epoch *atomic.Uint64, fence *time.Time, current *config, haveCurrent *bool, retry **config, retryAt *time.Time, statusError *string, bind bindFunc, now func() time.Time) (bool, error) {
+// Only candidate listen failures are recoverable configuration errors. Errors
+// joining a retired receiver must still reach the supervisor.
+type candidateListenError struct{ err error }
+
+func (e *candidateListenError) Error() string { return e.err.Error() }
+func (e *candidateListenError) Unwrap() error { return e.err }
+
+type bindRetry struct {
+	candidate config
+	// A later rejected revision owns the error until a valid correction applies.
+	clearsError bool
+}
+
+func (d *Driver) handleEvent(event pluginapi.ControlEvent, active *bool, sub *pluginapi.Subscription, state *streamState, epoch *atomic.Uint64, fence *time.Time, current *config, haveCurrent *bool, retry **bindRetry, retryAt *time.Time, statusError *string, bind bindFunc, now func() time.Time) (bool, error) {
 	transition := func() { epoch.Add(1); *fence = now(); state.reset(*active, *sub) }
 	switch event := event.(type) {
 	case pluginapi.ShutdownRequested:
@@ -256,6 +286,9 @@ func (d *Driver) handleEvent(event pluginapi.ControlEvent, active *bool, sub *pl
 		candidate, err := parseConfig(event.Config.Data)
 		if err != nil {
 			*statusError = fmt.Sprintf("configuration revision %d is unapplied", event.Config.Revision)
+			if *retry != nil {
+				(*retry).clearsError = false
+			}
 			return false, nil
 		}
 		if *haveCurrent && candidate.ListenPort == current.ListenPort {
@@ -263,10 +296,13 @@ func (d *Driver) handleEvent(event pluginapi.ControlEvent, active *bool, sub *pl
 			return false, nil
 		}
 		if err := bind(candidate); err != nil {
+			var listenErr *candidateListenError
+			if !errors.As(err, &listenErr) {
+				return false, err
+			}
 			*statusError = fmt.Sprintf("listen port change for revision %d is unapplied", event.Config.Revision)
 			if !*haveCurrent {
-				copy := candidate
-				*retry, *retryAt = &copy, now().Add(initialRetryInterval)
+				*retry, *retryAt = &bindRetry{candidate: candidate, clearsError: true}, now().Add(initialRetryInterval)
 			}
 			return false, nil
 		}
