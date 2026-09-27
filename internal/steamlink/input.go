@@ -90,6 +90,7 @@ var inputRegistry = map[string]inputField{
 	"/sl/xrfb/facew/LipSuckLB":           {id: rawLipSuckLB, argCount: 1},
 	"/sl/xrfb/facew/LipSuckRB":           {id: rawLipSuckRB, argCount: 1},
 	"/sl/xrfb/facew/TongueOut":           {id: rawTongueOut, argCount: 1},
+	"/sl/xrfb/facew/ToungeOut":           {id: rawTongueOut, argCount: 1},
 }
 
 func decodeDatagram(packet []byte) ([]observation, inputReport, error) {

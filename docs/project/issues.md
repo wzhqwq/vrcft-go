@@ -102,6 +102,54 @@ Copy the entire entry and replace the angle-bracket placeholders. Use `COM` inst
   - 2026-09-12: Recorded.
   - 2026-09-13: Added and verified UTF-8 BOM decoding support.
 
+### DEV-0004 · Discover the active VRChat avatar when the application starts
+
+- Status: open
+- Discovered: 2026-09-28
+- Updated: 2026-09-28
+- Owner: Unassigned
+- Affected scope: application - avatar plan installation - plugin activation
+- Source/links: `internal/osc/controller.go`, `internal/application/install.go`; Pico 4 Pro manual validation
+- Description: When the application starts after VRChat already has an avatar active, it does not know that avatar until VRChat sends a later `/avatar/change` message. A managed tracking plugin can therefore be enabled with its lifecycle running while remaining inactive at 0 FPS. Switching avatars sends the notification and activates the matching subscription. Startup should acquire the current avatar and install its plan without requiring a manual avatar switch.
+- Next action: Evaluate an authoritative startup query, such as the existing OSCQuery facilities, then add an integration test for startup with an already-active avatar.
+- End date: —
+- Resolution/closure reason: —
+- Verification evidence: Manual Pico 4 Pro validation reproduced the inactive 0 FPS state and confirmed that switching avatars activated Steam Link frame delivery.
+- History:
+  - 2026-09-28: Recorded after successful Steam Link hardware validation identified the missing startup avatar notification.
+
+### DEV-0005 · Suppress the console window for managed plugins on Windows
+
+- Status: open
+- Discovered: 2026-09-28
+- Updated: 2026-09-28
+- Owner: Unassigned
+- Affected scope: plugins - Windows process launcher
+- Source/links: `internal/plugins/process_windows.go`, `build/build-steamlink.ps1`; Pico 4 Pro manual validation
+- Description: Starting the Steam Link plugin from the desktop application opens a Command Prompt window. The plugin is built as a console executable, and the Windows process launcher does not currently set process creation flags that suppress the child console window. Managed background plugins should start without opening a separate console window.
+- Next action: Add and verify Windows launcher configuration that hides managed plugin consoles while preserving named-pipe IPC, supervision, and shutdown behavior.
+- End date: —
+- Resolution/closure reason: —
+- Verification evidence: Manual Windows validation observed the console window whenever the Steam Link managed process started; `configureProcess` is currently empty on Windows.
+- History:
+  - 2026-09-28: Recorded from the Steam Link hardware validation session.
+
+### DEV-0006 · Validate and map additional Steam Link telemetry
+
+- Status: open
+- Discovered: 2026-09-28
+- Updated: 2026-09-28
+- Owner: Unassigned
+- Affected scope: steamlink - OSC input profile and validity mapping
+- Source/links: `internal/steamlink/input.go`, `internal/steamlink/mapping.go`; Pico 4 Pro OSC capture
+- Description: Live Steam Link telemetry includes fields outside the validated adapter profile. Deferred fields include `EyesLook*` and `/tracking/eye/*`, which overlap the supported combined gaze source; `/sl/xrfb/facec/UpperFace` and `LowerFace`, whose relationship to tracking validity or loss is not yet established; and additional tongue and soft-palate directions without validated canonical conversions. `/avatar/parameters/*` messages are VRChat parameter traffic and are intentionally ignored to prevent output feedback. Guessing mappings could duplicate eye motion or publish invalid tracking data.
+- Next action: Capture controlled calibration and tracking-loss samples, compare overlapping eye signals, and define canonical mappings only where the observed semantics and ranges are repeatable.
+- End date: —
+- Resolution/closure reason: —
+- Verification evidence: A live loopback capture decoded 20 datagrams without errors and reported the listed addresses as unknown while recognized gaze and face weights continued to produce frames.
+- History:
+  - 2026-09-28: Recorded the telemetry deliberately deferred after the first Pico 4 Pro capture; the observed `ToungeOut` spelling is handled separately as a direct alias.
+
 ## Active Issues: Open-Source Community
 
 No entries yet. Add new `COM` entries here.

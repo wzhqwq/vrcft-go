@@ -46,6 +46,24 @@ func TestInputAcceptsKnownMessagesInWireOrder(t *testing.T) {
 	}
 }
 
+func TestInputAcceptsObservedTongueOutAlias(t *testing.T) {
+	packet := mustMarshalInput(t, osc.Message{
+		Address: "/sl/xrfb/facew/ToungeOut",
+		Args:    []osc.Value{osc.Float32(0.75)},
+	})
+
+	observations, report, err := decodeDatagram(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.InvalidMessages != 0 || report.UnknownMessages != 0 || len(report.UnknownAddresses) != 0 {
+		t.Fatalf("report = %#v, want no diagnostics", report)
+	}
+	if len(observations) != 1 || observations[0] != (observation{ID: rawTongueOut, Values: [3]float32{0.75}}) {
+		t.Fatalf("observations = %#v, want observed tongue-out alias", observations)
+	}
+}
+
 func TestInputRejectsUnsupportedSibling(t *testing.T) {
 	good, err := osc.MarshalMessage(osc.Message{
 		Address: "/sl/xrfb/facew/JawDrop", Args: []osc.Value{osc.Float32(0.5)},
