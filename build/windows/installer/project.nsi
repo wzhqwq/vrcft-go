@@ -96,6 +96,11 @@ Section
 
     !insertmacro wails.files
 
+    SetOutPath "$INSTDIR\plugins\steamlink"
+    File "..\..\bin\plugins\steamlink\manifest.json"
+    File "..\..\bin\plugins\steamlink\steamlink-plugin.exe"
+    SetOutPath "$INSTDIR"
+
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 

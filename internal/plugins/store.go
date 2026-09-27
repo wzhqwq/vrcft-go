@@ -173,7 +173,12 @@ func settingsFromWire(wire wireSettings, maxBytes int64) (PluginSettings, error)
 		if _, exists := settings.Plugins[preference.ID]; exists {
 			return PluginSettings{}, fmt.Errorf("plugins: duplicate preference ID %q", preference.ID)
 		}
-		config, err := validConfig(preference.ID, preference.Config, maxBytes)
+		storedConfig := preference.Config
+		// encoding/json writes a nil RawMessage as null; restore its empty-config meaning.
+		if storedConfig.Revision == 0 && bytes.Equal(bytes.TrimSpace(storedConfig.Data), []byte("null")) {
+			storedConfig.Data = nil
+		}
+		config, err := validConfig(preference.ID, storedConfig, maxBytes)
 		if err != nil {
 			return PluginSettings{}, err
 		}

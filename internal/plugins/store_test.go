@@ -63,6 +63,36 @@ func TestJSONStoreRoundTripsEnabledConfigAndUnknownIDs(t *testing.T) {
 	}
 }
 
+func TestJSONStoreRoundTripsEnabledEmptyConfig(t *testing.T) {
+	store, path := newTestJSONStore(t, 4096)
+	want := PluginSettings{Plugins: map[string]PluginPreference{
+		"steamlink": {Enabled: true, Config: pluginapi.Config{}},
+	}}
+
+	if err := store.Save(context.Background(), want); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"Data":null`) {
+		t.Fatalf("saved empty config = %s, want explicit null representation", data)
+	}
+
+	got, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	preference, ok := got.Plugins["steamlink"]
+	if !ok {
+		t.Fatal("Load().Plugins missing steamlink")
+	}
+	if !preference.Enabled || preference.Config.Revision != 0 || len(preference.Config.Data) != 0 {
+		t.Fatalf("Load().Plugins[steamlink] = %+v, want enabled empty config", preference)
+	}
+}
+
 func TestJSONStoreReplacesExistingSettingsWithCompleteNewVersion(t *testing.T) {
 	store, path := newTestJSONStore(t, 4096)
 	first := PluginSettings{Plugins: map[string]PluginPreference{

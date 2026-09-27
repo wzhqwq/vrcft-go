@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "steamlink",
+  "name": "Steam Link",
+  "version": "0.1.0",
+  "description": "Eye and expression tracking from Steam Link OSC.",
+  "protocolMin": 1,
+  "protocolMax": 1,
+  "entrypoint": "steamlink-plugin.exe",
+  "capabilities": 3
+}
