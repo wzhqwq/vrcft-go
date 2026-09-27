@@ -59,7 +59,8 @@ Session credentials remain owned and validated by `pkg/pluginruntime`; the comma
 Command tests validate the source manifest and its descriptor alignment. The adapter architecture test rejects non-public production imports.
 
 ## Known gaps
-Real process and catalog integration is covered by later Steam Link adapter tasks.
+The source command and its managed process/catalog integration are covered by
+offline acceptance. Pico 4 Pro hardware compatibility has not yet been validated.
 
 ## Completion definition
 The executable starts the Steam Link driver under the managed plugin runtime and the source manifest remains aligned with the driver descriptor.

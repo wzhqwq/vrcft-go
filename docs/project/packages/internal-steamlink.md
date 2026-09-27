@@ -73,7 +73,12 @@ The receiver binds only `127.0.0.1`. Strict JSON parsing and fixed address match
 Package tests cover strict configuration, whole-datagram codec rejection, packet limits, known field validation, mapping/freshness state, UDP queueing, lifecycle controls and rebinds, status transitions, bounded diagnostics, cleanup, and rejected frame handling. `FuzzDecodeDatagram` checks that arbitrary input cannot return observations with errors or non-finite values. Windows-only `internal/plugins/steamlink_integration_test.go` builds the real command, discovers it through `DirectoryCatalog`, persists configuration through `JSONStore`, and runs it through `Manager`, named-pipe IPC, `ProcessLauncher`, and a bounded `FrameSink`. It verifies dynamic loopback ports, subscription generations and field trimming, pause/resume, rebind fencing, malformed-datagram rejection, disable cleanup, and fresh-to-dropout delivery through the host tracking and processing pipeline without resetting it.
 
 ## Known gaps
-Hardware validation is still required before making claims about actual Pico 4 Pro Steam Link output.
+Offline acceptance on 2026-09-27 passed the targeted package/integration suite,
+race suite, adapter/command vet check, and desktop artifact staging; it also ran
+both fuzz targets for 30 seconds. The repository-wide test command still stops at
+the independent pre-existing `internal/projectstatus` `duplicate_check` failure.
+
+Pico 4 Pro hardware compatibility has not yet been validated.
 
 ## Completion definition
 The package is complete when the Driver safely manages loopback reception, controls, recovery, health, and bounded diagnostics while publishing only fresh subscribed data from the fixed profile.

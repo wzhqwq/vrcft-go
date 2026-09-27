@@ -40,7 +40,7 @@ checks:
     description: Steam Link build script stages the manifest and executable
     type: symbol
     path: build/build-steamlink.ps1
-    pattern: 'steamlink-plugin\\.exe'
+    pattern: 'steamlink-plugin\.exe'
     weight: 1
     required: true
 ---
