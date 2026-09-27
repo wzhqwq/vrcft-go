@@ -30,6 +30,18 @@ to this in your browser, and you can call your Go code from devtools.
 
 To build a redistributable, production mode package, use `wails build`.
 
+For the supported Windows desktop layout, use the scripts that stage the main
+application and the builtin Steam Link plugin together:
+
+```powershell
+.\build\build-desktop.ps1
+.\build\build-desktop.ps1 -NSIS
+```
+
+See [build/README.md](build/README.md) for artifact layout and
+[plugins/steamlink/README.md](plugins/steamlink/README.md) for development-root
+selection and Steam Link setup.
+
 ## Diagnostics and logs
 
 The 诊断 page shows module errors, the failed startup stage and correlation ID,

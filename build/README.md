@@ -2,6 +2,23 @@
 
 The build directory is used to house all the build files and assets for your application. 
 
+## Windows desktop and Steam Link plugin
+
+Run `./build/build-desktop.ps1` from PowerShell to produce
+`build/bin/vrcft-go2.exe` and the builtin plugin layout
+`build/bin/plugins/steamlink/{manifest.json,steamlink-plugin.exe}`. It uses the
+repository-local Go build cache at `F:\dev\vrcft-go\.go-gocache`.
+
+Use `./build/build-desktop.ps1 -NSIS` to stage the same files before Wails invokes
+the existing NSIS installer project. The installer copies the plugin alongside the
+desktop executable. Use `./build/build-steamlink.ps1 -PluginRoot <root>` when only
+a development-root plugin build is needed; its output is `<root>/steamlink/`.
+
+Plugin roots are selected by the user through application settings. The scripts do
+not edit settings or enable plugins. See
+[plugins/steamlink/README.md](../plugins/steamlink/README.md) for discovery,
+duplicate-ID, port, source-provenance, fixture, and hardware-support details.
+
 The structure is:
 
 * bin - Output directory

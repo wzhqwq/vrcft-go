@@ -161,6 +161,12 @@ Use the existing catalog's builtin/dev root layout: one plugin directory contain
 
 Provide an explicit development build command or PowerShell script that places the manifest and executable under `steamlink/` within a specified plugin root. Default development output belongs in an ignored build directory, with instructions for selecting it as a development root. Do not change persistent user settings or enable the plugin without the user's choice. Desktop release packaging places the same directory in the product's builtin root. The first version adds no installation mechanism.
 
+The release smoke test must build into a plugin-root path containing spaces, then
+scan the real staged manifest and executable with `DirectoryCatalog`. Windows NSIS
+packaging must copy that staged directory after the Wails application files without
+removing user settings. This is process/layout evidence only; it does not validate
+Steam Link or Pico hardware output.
+
 All Go commands reuse the absolute `GOCACHE=F:\dev\vrcft-go\.go-gocache` without clearing it. Add package specifications and command documentation. Generated status is not a source of requirements, and status.md must not be refreshed from unreviewed dirty source.
 
 ## Verification and Completion Criteria
