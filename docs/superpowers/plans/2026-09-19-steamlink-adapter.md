@@ -433,7 +433,8 @@ Require files rather than using `/nonfatal`. Existing uninstall removes the inst
 
 **Files:** Finalize package specs and plugin README with measured results; check completed steps in this plan. Refresh generated status only if intentionally requested, from a clean reviewed source commit.
 
-- [x] Run final verification with the fixed cache and stop on failures:
+- [x] Run final verification with the fixed cache and stop on failures. Both
+  30-second fuzz commands completed with `PASS` and exit code 0:
 
 ```powershell
 go test ./pkg/osc ./pkg/pluginapi ./pkg/pluginruntime ./pkg/trackingmodel ./internal/steamlink ./cmd/steamlink-plugin ./internal/plugins ./internal/tracking ./internal/processing

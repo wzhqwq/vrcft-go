@@ -61,7 +61,7 @@ not yet been validated.
 
 Offline acceptance on 2026-09-27 passed the targeted package and integration
 suite, its race-enabled counterpart, and `go vet` for the adapter and command.
-Both OSC fuzz targets ran for 30 seconds. The desktop build staged
+Both OSC fuzz targets passed after 30 seconds each. The desktop build staged
 `build/bin/vrcft-go2.exe` and
 `build/bin/plugins/steamlink/{manifest.json,steamlink-plugin.exe}`; the staged
 manifest declares `steamlink`, `Steam Link`, version `0.1.0`, and Eye plus

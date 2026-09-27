@@ -74,9 +74,10 @@ Package tests cover strict configuration, whole-datagram codec rejection, packet
 
 ## Known gaps
 Offline acceptance on 2026-09-27 passed the targeted package/integration suite,
-race suite, adapter/command vet check, and desktop artifact staging; it also ran
-both fuzz targets for 30 seconds. The repository-wide test command still stops at
-the independent pre-existing `internal/projectstatus` `duplicate_check` failure.
+race suite, adapter/command vet check, and desktop artifact staging; it also
+passed both fuzz targets after 30 seconds each. The repository-wide test command
+still stops at the independent pre-existing `internal/projectstatus`
+`duplicate_check` failure.
 
 Pico 4 Pro hardware compatibility has not yet been validated.
 
