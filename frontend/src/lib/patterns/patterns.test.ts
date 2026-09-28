@@ -75,6 +75,19 @@ describe('shared UI patterns', () => {
     expect(commands).toEqual([{pluginId: 'tracking.vendor', enabled: false}]);
   });
 
+  it('places the plugin switch in the card header and shows its label in a tooltip', async () => {
+    render(PluginCard, {props: {id: 'tracker', name: 'Tracker', enabled: true, onCommand: () => {}}});
+
+    const card = screen.getByRole('article', {name: 'Tracker'});
+    const header = card.querySelector('header');
+    expect(header).not.toBeNull();
+    const control = within(header!).getByRole('switch', {name: '启用 Tracker'});
+    expect(within(card).queryByText('启用 Tracker')).not.toBeInTheDocument();
+
+    await fireEvent.pointerEnter(control);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('启用 Tracker');
+  });
+
   it('never exposes an enabled diagnostic action when no copy command is provided', () => {
     render(ProblemBanner, {props: {title: '问题', detail: '安全摘要', tone: 'danger', diagnosticCode: 'internal'}});
     expect(screen.queryByRole('button', {name: '复制诊断信息'})).not.toBeInTheDocument();
