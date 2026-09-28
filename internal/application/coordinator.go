@@ -72,6 +72,7 @@ func (c *coordinator) run(ctx context.Context, inputs coordinatorInputs, ready c
 	pluginEvents := inputs.pluginEvents
 	merged := inputs.merged
 	ticks := inputs.ticks
+	loggedPluginStates := make(map[string]pluginLogState)
 
 	for {
 		if ctx.Err() != nil {
@@ -97,7 +98,11 @@ func (c *coordinator) run(ctx context.Context, inputs coordinatorInputs, ready c
 				pluginEvents = nil
 				continue
 			}
-			logPluginEvent(inputs.logger, event)
+			if event.Type == plugins.EventPluginStateChanged || event.Type == plugins.EventPluginRemoved {
+				logPluginState(inputs.logger, event, loggedPluginStates)
+			} else {
+				logPluginEvent(inputs.logger, event)
+			}
 			c.observePlugin(event)
 		case frame, ok := <-merged:
 			if !ok {

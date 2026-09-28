@@ -39,3 +39,25 @@ func logPluginEvent(logger *slog.Logger, event plugins.Event) {
 		}
 	}
 }
+
+type pluginLogState struct {
+	state     plugins.State
+	sessionID uint64
+	lastError string
+}
+
+func logPluginState(logger *slog.Logger, event plugins.Event, states map[string]pluginLogState) {
+	if event.Type == plugins.EventPluginRemoved {
+		delete(states, event.PluginID)
+		return
+	}
+	if event.Type != plugins.EventPluginStateChanged || event.Snapshot == nil {
+		return
+	}
+	current := pluginLogState{event.Snapshot.State, event.Snapshot.SessionID, event.Snapshot.LastError}
+	if previous, seen := states[event.PluginID]; seen && previous == current {
+		return
+	}
+	states[event.PluginID] = current
+	logPluginEvent(logger, event)
+}
