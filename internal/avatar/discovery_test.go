@@ -90,6 +90,9 @@ func TestValidateAvatarIDRejectsUnsafeValues(t *testing.T) {
 		":",
 		"\x00",
 		strings.Repeat("a", maxAvatarIDBytes+1),
+		"local:sdk_",
+		"local:sdk_../escape",
+		"local:sdk_other:bad",
 	}
 	for _, avatarID := range invalidIDs {
 		t.Run("invalid", func(t *testing.T) {
@@ -101,6 +104,9 @@ func TestValidateAvatarIDRejectsUnsafeValues(t *testing.T) {
 
 	if err := validateAvatarID("local_test_avatar"); err != nil {
 		t.Fatalf("validateAvatarID(local test ID) error = %v", err)
+	}
+	if err := validateAvatarID("local:sdk_V3_0_sleeve_test"); err != nil {
+		t.Fatalf("validateAvatarID(VRChat local SDK ID) error = %v", err)
 	}
 }
 

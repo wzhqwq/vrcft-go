@@ -159,6 +159,24 @@ func TestPlannerFailClosedTransitions(t *testing.T) {
 	}
 }
 
+func TestPlannerLocalSDKAvatarUsesConfiguredFallback(t *testing.T) {
+	const avatarID = "local:sdk_V3_0_sleeve_test"
+	root := filepath.Join(t.TempDir(), "OSC")
+	fallbackPath := filepath.Join(t.TempDir(), "fallback.json")
+	writePlannerConfig(t, fallbackPath, plannerConfigJSON("fallback_config",
+		plannerInput("/avatar/parameters/v2/EyeLeftX", "Float"),
+	))
+	planner, err := NewPlanner(PlannerConfig{OSCRoot: root, FallbackPath: fallbackPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := planner.Activate(avatarID)
+	if result.Err != nil {
+		t.Fatalf("Activate(%q) error = %v", avatarID, result.Err)
+	}
+	assertReadyPlannerResult(t, result, 1, avatarID, "fallback_config", fallbackPath, SourceFallback, []parameters.ParameterID{parameters.ParameterEyeLeftX})
+}
+
 func TestPlannerGenerationExhaustionNeverWraps(t *testing.T) {
 	const avatarID = "avtr_exhaustion"
 	root := filepath.Join(t.TempDir(), "OSC")

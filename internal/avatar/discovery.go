@@ -32,7 +32,11 @@ func validateAvatarID(avatarID string) error {
 	if avatarID == "" || len(avatarID) > maxAvatarIDBytes || avatarID == "." || avatarID == ".." {
 		return fmt.Errorf("%w: %q", ErrInvalidAvatarID, avatarID)
 	}
-	if strings.ContainsAny(avatarID, "<>:\"/\\|?*[]\x00") {
+	filename := avatarID
+	if strings.HasPrefix(avatarID, "local:sdk_") {
+		filename = strings.TrimPrefix(avatarID, "local:sdk_")
+	}
+	if filename == "" || filename == "." || filename == ".." || strings.ContainsAny(filename, "<>:\"/\\|?*[]\x00") {
 		return fmt.Errorf("%w: unsafe character in %q", ErrInvalidAvatarID, avatarID)
 	}
 	return nil
@@ -41,6 +45,9 @@ func validateAvatarID(avatarID string) error {
 func resolveConfig(oscRoot, fallbackPath, avatarID string) (resolvedConfig, error) {
 	if err := validateAvatarID(avatarID); err != nil {
 		return resolvedConfig{}, err
+	}
+	if strings.HasPrefix(avatarID, "local:sdk_") {
+		return resolveFallback(fallbackPath)
 	}
 
 	root, err := absoluteCleanPath(oscRoot)
