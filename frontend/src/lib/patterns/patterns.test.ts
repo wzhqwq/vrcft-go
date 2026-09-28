@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/svelte';
+import {fireEvent, render, screen, within} from '@testing-library/svelte';
 import {createRawSnippet} from 'svelte';
 import {describe, expect, it} from 'vitest';
 
@@ -19,6 +19,20 @@ describe('shared UI patterns', () => {
   it('labels the public plugin handshaking state for users', () => {
     render(PluginCard, {props: {id: 'handshake', name: 'Tracker', enabled: true, state: 'handshaking'}});
     expect(screen.getByRole('article', {name: 'Tracker'})).toHaveTextContent('正在握手');
+  });
+
+  it('keeps one decimal place for an active plugin frame rate', () => {
+    render(PluginCard, {props: {id: 'tracker', name: 'Tracker', enabled: true, active: true, frameRate: 90.24}});
+    expect(screen.getByText('90.2 FPS')).toBeVisible();
+  });
+
+  it('hides frame rate while a plugin is inactive but keeps diagnostic details', () => {
+    render(PluginCard, {props: {id: 'tracker', name: 'Tracker', enabled: true, active: false, state: 'stopped', frameRate: 90.5, restartCount: 2}});
+    const card = screen.getByRole('article', {name: 'Tracker'});
+    expect(card).not.toHaveTextContent('FPS');
+    expect(card).toHaveTextContent('已停止');
+    expect(within(card).getByText('重启次数')).toBeVisible();
+    expect(within(card).getByText('2')).toBeVisible();
   });
   it('keeps a long Avatar ID shrinkable while retaining an available copy action', () => {
     const longId = 'avtr_'.padEnd(180, 'a');

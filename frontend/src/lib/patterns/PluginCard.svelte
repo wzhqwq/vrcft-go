@@ -18,6 +18,11 @@
   let {id, name, description, enabled, active = false, state = '', capabilities = [], frameRate = 0,
     restartCount = 0, loading = false, error, problem, onCommand, onCopyDiagnostic}: Props = $props();
   const titleId = $props.id();
+  let details = $derived([
+    {label: copy.pluginCard.lifecycle, value: localizedState(copy.state.plugin, state)},
+    ...(active ? [{label: copy.pluginCard.frameRate, value: `${frameRate.toFixed(1)} FPS`}] : []),
+    {label: copy.pluginCard.restarts, value: String(restartCount)},
+  ]);
 </script>
 
 <article class="surface-card grid min-w-0 gap-4" aria-labelledby={titleId}>
@@ -32,11 +37,7 @@
   <div aria-label={copy.pluginCard.capabilities(name)}>
     <Inline gap="sm">{#each capabilities as capability (capability)}<Badge label={capability} />{/each}</Inline>
   </div>
-  <DetailList items={[
-    {label: copy.pluginCard.lifecycle, value: localizedState(copy.state.plugin, state)},
-    {label: copy.pluginCard.frameRate, value: `${frameRate} FPS`},
-    {label: copy.pluginCard.restarts, value: String(restartCount)},
-  ]} />
+  <DetailList items={details} />
   {#if onCommand}
     <SwitchField label={copy.pluginCard.enable(name)} description={loading ? copy.pluginCard.pending : undefined}
       disabled={loading} bind:checked={() => enabled, (value) => onCommand?.({pluginId: id, enabled: value})} />
