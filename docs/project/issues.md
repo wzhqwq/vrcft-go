@@ -104,35 +104,40 @@ Copy the entire entry and replace the angle-bracket placeholders. Use `COM` inst
 
 ### DEV-0004 · Discover the active VRChat avatar when the application starts
 
-- Status: open
+- Status: resolved
 - Discovered: 2026-09-28
 - Updated: 2026-09-28
-- Owner: Unassigned
+- Owner: Codex
 - Affected scope: application - avatar plan installation - plugin activation
-- Source/links: `internal/osc/controller.go`, `internal/application/install.go`; Pico 4 Pro manual validation
+- Source/links: `internal/osc/controller.go`, `internal/osc/controller_test.go`, `internal/osc/mdns.go`, `internal/avatar/discovery.go`, `scripts/diagnose-avatar-oscquery.ps1`, `scripts/diagnose-controller-avatar.go`; Pico 4 Pro manual validation; [VRChat OSCQuery documentation](https://docs.vrchat.com/docs/oscquery), [upstream VRCFaceTracking OSCQuery avatar parser](https://github.com/benaclejames/VRCFaceTracking/blob/master/VRCFaceTracking.Core/OSC/Query/OscQueryAvatarInfo.cs)
 - Description: When the application starts after VRChat already has an avatar active, it does not know that avatar until VRChat sends a later `/avatar/change` message. A managed tracking plugin can therefore be enabled with its lifecycle running while remaining inactive at 0 FPS. Switching avatars sends the notification and activates the matching subscription. Startup should acquire the current avatar and install its plan without requiring a manual avatar switch.
-- Next action: Evaluate an authoritative startup query, such as the existing OSCQuery facilities, then add an integration test for startup with an already-active avatar.
-- End date: —
-- Resolution/closure reason: —
-- Verification evidence: Manual Pico 4 Pro validation reproduced the inactive 0 FPS state and confirmed that switching avatars activated Steam Link frame delivery.
+- Next action: None.
+- End date: 2026-09-28
+- Resolution/closure reason: Startup OSCQuery discovery now reads the active avatar from VRChat's `/avatar` subtree and publishes it to the application; local SDK IDs can use the configured fallback plan. Real-device validation confirmed the issue is fixed.
+- Verification evidence: Manual Pico 4 Pro validation originally reproduced the inactive 0 FPS state. Live `scripts/diagnose-avatar-oscquery.ps1` queried VRChat and obtained `local:sdk_V3_0_sleeve_test`; `go run ./scripts/diagnose-controller-avatar.go` then published that ID on the real Controller mailbox without an avatar switch. `go test ./... -count=1`, `go test -race ./internal/avatar ./internal/osc ./internal/application ./internal/plugins -count=1`, and `go vet ./internal/avatar ./internal/osc ./internal/application ./internal/plugins` passed. User subsequently confirmed the issue is fixed in a real-device run.
 - History:
   - 2026-09-28: Recorded after successful Steam Link hardware validation identified the missing startup avatar notification.
+  - 2026-09-28: Added OSCQuery `/avatar` startup discovery and controller regression coverage; awaiting live VRChat validation.
+  - 2026-09-28: Live diagnostics found a subroot lookup error, a shared mDNS browse-channel panic on shutdown, and rejection of VRChat's `local:sdk_` ID. Corrected all three; real Controller now publishes the startup ID. Full desktop plan activation awaits fallback configuration and retest.
+  - 2026-09-28: User confirmed the startup avatar issue is fixed in a real-device run; marked resolved.
 
 ### DEV-0005 · Suppress the console window for managed plugins on Windows
 
-- Status: open
+- Status: resolved
 - Discovered: 2026-09-28
 - Updated: 2026-09-28
-- Owner: Unassigned
+- Owner: Codex
 - Affected scope: plugins - Windows process launcher
-- Source/links: `internal/plugins/process_windows.go`, `build/build-steamlink.ps1`; Pico 4 Pro manual validation
+- Source/links: `internal/plugins/process_windows.go`, `internal/plugins/process_windows_test.go`, `build/build-steamlink.ps1`; Pico 4 Pro manual validation
 - Description: Starting the Steam Link plugin from the desktop application opens a Command Prompt window. The plugin is built as a console executable, and the Windows process launcher does not currently set process creation flags that suppress the child console window. Managed background plugins should start without opening a separate console window.
-- Next action: Add and verify Windows launcher configuration that hides managed plugin consoles while preserving named-pipe IPC, supervision, and shutdown behavior.
-- End date: —
-- Resolution/closure reason: —
-- Verification evidence: Manual Windows validation observed the console window whenever the Steam Link managed process started; `configureProcess` is currently empty on Windows.
+- Next action: None.
+- End date: 2026-09-28
+- Resolution/closure reason: The Windows launcher hides the managed plugin console; desktop validation confirmed no Command Prompt window appears.
+- Verification evidence: User confirmed on Windows that the managed Steam Link plugin no longer opens a console window. `TestConfigureProcessSuppressesManagedPluginConsole`, `go test ./... -count=1`, and `go test -race ./internal/osc ./internal/application ./internal/plugins -count=1` passed; plugin tests cover real-process IPC and supervisor paths.
 - History:
   - 2026-09-28: Recorded from the Steam Link hardware validation session.
+  - 2026-09-28: Set the Windows child process to hide its console and verified launcher configuration and plugin package tests; awaiting visual desktop validation.
+  - 2026-09-28: User confirmed the console window no longer appears; marked resolved.
 
 ### DEV-0006 · Validate and map additional Steam Link telemetry
 
