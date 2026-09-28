@@ -1,11 +1,11 @@
 # Project Status
 
-- Generated: 2026-09-19T18:43:08Z
-- Commit: `af13a6d2130cebf793e009d16540f408d377a4aa`
-- Source fingerprint: `339330d11cadb437d3d796b7eb1ca278811553a2864dca371c4aaf70f3c6b0b5`
+- Generated: 2026-09-28T02:13:32Z
+- Commit: `b78a33affa059822537ca6be7442ba1ed68fac1b`
+- Source fingerprint: `e54135d94e7c2aa9c993f805ffe1edab6a4a52dd7731dc086e6862f95ea95d35`
 - Dirty: `false`
 - State: `complete`
-- Progress: 100.0% (204/204 weight)
+- Progress: 100.0% (217/217 weight)
 
 ## Milestones
 
@@ -13,12 +13,12 @@
 |---|---|---:|
 | M0 | complete | 100.0% (10/10) |
 | M1 | complete | 100.0% (56/56) |
-| M2 | complete | 100.0% (42/42) |
+| M2 | complete | 100.0% (52/52) |
 | M3 | complete | 100.0% (7/7) |
 | M4 | complete | 100.0% (10/10) |
 | M5 | complete | 100.0% (10/10) |
 | M6 | complete | 100.0% (35/35) |
-| M7 | complete | 100.0% (34/34) |
+| M7 | complete | 100.0% (37/37) |
 
 ## Packages and Subsystems
 
@@ -36,8 +36,10 @@
 | M1 | pkg-pluginapi | pkg/pluginapi | complete | 100.0% (7/7) |
 | M1 | pkg-protocol | pkg/protocol | complete | 100.0% (6/6) |
 | M1 | pkg-trackingmodel | pkg/trackingmodel | complete | 100.0% (7/7) |
+| M2 | cmd-steamlink-plugin | cmd/steamlink-plugin | complete | 100.0% (3/3) |
 | M2 | internal-ipc | internal/ipc | complete | 100.0% (16/16) |
 | M2 | internal-plugins | internal/plugins | complete | 100.0% (18/18) |
+| M2 | internal-steamlink | internal/steamlink | complete | 100.0% (7/7) |
 | M2 | pkg-pluginruntime | pkg/pluginruntime | complete | 100.0% (8/8) |
 | M3 | internal-tracking | internal/tracking | complete | 100.0% (7/7) |
 | M4 | internal-evaluator | internal/evaluator | complete | 100.0% (5/5) |
@@ -46,7 +48,7 @@
 | M6 | end-to-end | docs/project | complete | 100.0% (10/10) |
 | M6 | internal-application | internal/application | complete | 100.0% (11/11) |
 | M6 | internal-osc | internal/osc | complete | 100.0% (14/14) |
-| M7 | build-release | build | complete | 100.0% (5/5) |
+| M7 | build-release | build | complete | 100.0% (8/8) |
 | M7 | frontend | frontend | complete | 100.0% (7/7) |
 | M7 | internal-userconfig | internal/userconfig | complete | 100.0% (9/9) |
 | M7 | root | . | complete | 100.0% (13/13) |
