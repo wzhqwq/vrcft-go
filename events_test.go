@@ -150,6 +150,41 @@ func TestEventBridgeBlockedPluginsEmitterSkipsIntermediatePendingSnapshot(t *tes
 	}
 }
 
+func TestEventBridgeRateLimitsPluginBroadcastsToLatestSnapshot(t *testing.T) {
+	pluginsAPI := newPluginsAPI(time.Now)
+	t.Cleanup(pluginsAPI.close)
+	firstFrameAt := time.Now()
+	pluginsAPI.store.update([]PluginDTO{{ID: "tracker", FrameRate: 90.1, LastFrameAt: &firstFrameAt}}, nil)
+	emitter := &recordingEventEmitter{calls: make(chan emittedEvent, 4)}
+	forwarders := startEventForwarders(context.Background(), emitter, nil, pluginsAPI, nil)
+	t.Cleanup(forwarders.stop)
+	_ = receiveEmittedEvent(t, emitter.calls)
+
+	started := time.Now()
+	intermediateFrameAt := firstFrameAt.Add(10 * time.Millisecond)
+	pluginsAPI.store.update([]PluginDTO{{ID: "tracker", FrameRate: 91.1, LastFrameAt: &intermediateFrameAt}}, nil)
+	select {
+	case event := <-emitter.calls:
+		t.Fatalf("plugin update broadcast without rate limit: %+v", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+	latestFrameAt := intermediateFrameAt.Add(10 * time.Millisecond)
+	pluginsAPI.store.update([]PluginDTO{{ID: "tracker", FrameRate: 92.2, LastFrameAt: &latestFrameAt}}, nil)
+
+	select {
+	case event := <-emitter.calls:
+		if elapsed := time.Since(started); elapsed < 900*time.Millisecond {
+			t.Fatalf("plugin update broadcast after %v, want one-second window", elapsed)
+		}
+		got := event.values[0].(PluginListResponse)
+		if len(got.Plugins) != 1 || got.Plugins[0].ID != "tracker" || got.Plugins[0].FrameRate != 92.2 {
+			t.Fatalf("rate-limited plugin event = %+v, want latest snapshot", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for rate-limited plugin broadcast")
+	}
+}
+
 func TestEventBridgeBlockedSettingsEmitterSkipsIntermediatePendingSnapshot(t *testing.T) {
 	previousProcs := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(previousProcs)

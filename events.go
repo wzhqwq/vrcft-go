@@ -2,15 +2,18 @@ package main
 
 import (
 	"context"
+	"reflect"
 	"sync"
+	"time"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 const (
-	eventRuntimeStatus   = "vrcft:v1:runtime-status"
-	eventPluginsChanged  = "vrcft:v1:plugins-changed"
-	eventSettingsChanged = "vrcft:v1:settings-changed"
+	eventRuntimeStatus      = "vrcft:v1:runtime-status"
+	eventPluginsChanged     = "vrcft:v1:plugins-changed"
+	eventSettingsChanged    = "vrcft:v1:settings-changed"
+	pluginBroadcastInterval = time.Second
 )
 
 type eventEmitter interface {
@@ -52,7 +55,7 @@ func startEventForwarders(
 		})
 	}
 	if pluginsAPI != nil {
-		startEventForwarder(ctx, &workers, emitter, eventPluginsChanged, pluginsAPI.store.subscribe(ctx), func(envelope moduleEnvelope[[]PluginDTO]) any {
+		startPluginEventForwarder(ctx, &workers, emitter, pluginsAPI.store.subscribe(ctx), func(envelope moduleEnvelope[[]PluginDTO]) any {
 			problem := envelope.Problem
 			if unavailable := pluginsAPI.unavailableProblem(envelope.Revision); unavailable != nil {
 				problem = unavailable
@@ -74,6 +77,73 @@ func startEventForwarders(
 		close(forwarders.done)
 	}()
 	return forwarders
+}
+
+func startPluginEventForwarder(ctx context.Context, workers *sync.WaitGroup, emitter eventEmitter, source <-chan moduleEnvelope[[]PluginDTO], response func(moduleEnvelope[[]PluginDTO]) any) {
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		ticker := time.NewTicker(pluginBroadcastInterval)
+		defer ticker.Stop()
+		var lastEmitted moduleEnvelope[[]PluginDTO]
+		var pending moduleEnvelope[[]PluginDTO]
+		hasPending := false
+		emittedInitial := false
+		for {
+			select {
+			case <-ctx.Done():
+				drainEventSource(source)
+				return
+			case value, ok := <-source:
+				if !ok || ctx.Err() != nil {
+					if ok {
+						drainEventSource(source)
+					}
+					return
+				}
+				if !emittedInitial {
+					emitter.Emit(ctx, eventPluginsChanged, response(value))
+					lastEmitted = value
+					emittedInitial = true
+					continue
+				}
+				if !pluginTelemetryOnlyChange(lastEmitted, value) {
+					emitter.Emit(ctx, eventPluginsChanged, response(value))
+					lastEmitted = value
+					hasPending = false
+					ticker.Reset(pluginBroadcastInterval)
+					continue
+				}
+				pending = value
+				hasPending = true
+			case <-ticker.C:
+				if !hasPending {
+					continue
+				}
+				emitter.Emit(ctx, eventPluginsChanged, response(pending))
+				lastEmitted = pending
+				hasPending = false
+			}
+		}
+	}()
+}
+
+func pluginTelemetryOnlyChange(previous, current moduleEnvelope[[]PluginDTO]) bool {
+	if !reflect.DeepEqual(previous.Problem, current.Problem) || len(previous.Value) != len(current.Value) {
+		return false
+	}
+	for index := range previous.Value {
+		before := previous.Value[index]
+		after := current.Value[index]
+		before.FrameRate = 0
+		before.LastFrameAt = nil
+		after.FrameRate = 0
+		after.LastFrameAt = nil
+		if !reflect.DeepEqual(before, after) {
+			return false
+		}
+	}
+	return true
 }
 
 func startEventForwarder[T any](ctx context.Context, workers *sync.WaitGroup, emitter eventEmitter, name string, source <-chan T, response func(T) any) {
