@@ -69,7 +69,7 @@ func (s DiscoveredService) Addresses() []net.IP {
 }
 
 type Browser struct {
-	resolver *zeroconf.Resolver
+	ifaces []net.Interface
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -79,34 +79,42 @@ type Browser struct {
 }
 
 func NewBrowser(parent context.Context, ifaces []net.Interface) (*Browser, error) {
-	options := make([]zeroconf.ClientOption, 0, 1)
-	if len(ifaces) > 0 {
-		options = append(options, zeroconf.SelectIfaces(ifaces))
-	}
-	resolver, err := zeroconf.NewResolver(options...)
-	if err != nil {
-		return nil, fmt.Errorf("create mDNS resolver: %w", err)
-	}
 	if parent == nil {
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent)
 	return &Browser{
-		resolver: resolver,
-		ctx:      ctx,
-		cancel:   cancel,
-		updates:  make(chan DiscoveredService, 64),
+		ifaces:  append([]net.Interface(nil), ifaces...),
+		ctx:     ctx,
+		cancel:  cancel,
+		updates: make(chan DiscoveredService, 64),
 	}, nil
 }
 
 func (b *Browser) Updates() <-chan DiscoveredService { return b.updates }
 
 func (b *Browser) Start() error {
-	entries := make(chan *zeroconf.ServiceEntry, 64)
-	for _, service := range []string{ServiceOSCQuery, ServiceOSC} {
-		if err := b.resolver.Browse(b.ctx, service, ServiceDomain, entries); err != nil {
+	options := make([]zeroconf.ClientOption, 0, 1)
+	if len(b.ifaces) > 0 {
+		options = append(options, zeroconf.SelectIfaces(b.ifaces))
+	}
+	queryEntries := make(chan *zeroconf.ServiceEntry, 64)
+	oscEntries := make(chan *zeroconf.ServiceEntry, 64)
+	for _, target := range []struct {
+		service string
+		entries chan *zeroconf.ServiceEntry
+	}{
+		{ServiceOSCQuery, queryEntries},
+		{ServiceOSC, oscEntries},
+	} {
+		resolver, err := zeroconf.NewResolver(options...)
+		if err != nil {
 			b.cancel()
-			return fmt.Errorf("browse %s: %w", service, err)
+			return fmt.Errorf("create mDNS resolver: %w", err)
+		}
+		if err := resolver.Browse(b.ctx, target.service, ServiceDomain, target.entries); err != nil {
+			b.cancel()
+			return fmt.Errorf("browse %s: %w", target.service, err)
 		}
 	}
 
@@ -114,33 +122,45 @@ func (b *Browser) Start() error {
 	go func() {
 		defer b.wg.Done()
 		defer close(b.updates)
-		for {
+		for queryEntries != nil || oscEntries != nil {
+			var entry *zeroconf.ServiceEntry
 			select {
 			case <-b.ctx.Done():
 				return
-			case entry := <-entries:
-				if entry == nil {
+			case item, ok := <-queryEntries:
+				if !ok {
+					queryEntries = nil
 					continue
 				}
-				service := DiscoveredService{
-					Instance: entry.Instance,
-					Service:  entry.Service,
-					HostName: entry.HostName,
-					Port:     entry.Port,
-					Text:     append([]string(nil), entry.Text...),
-					LastSeen: time.Now(),
+				entry = item
+			case item, ok := <-oscEntries:
+				if !ok {
+					oscEntries = nil
+					continue
 				}
-				for _, ip := range entry.AddrIPv4 {
-					service.IPv4 = append(service.IPv4, append(net.IP(nil), ip...))
-				}
-				for _, ip := range entry.AddrIPv6 {
-					service.IPv6 = append(service.IPv6, append(net.IP(nil), ip...))
-				}
-				select {
-				case b.updates <- service:
-				case <-b.ctx.Done():
-					return
-				}
+				entry = item
+			}
+			if entry == nil {
+				continue
+			}
+			service := DiscoveredService{
+				Instance: entry.Instance,
+				Service:  entry.Service,
+				HostName: entry.HostName,
+				Port:     entry.Port,
+				Text:     append([]string(nil), entry.Text...),
+				LastSeen: time.Now(),
+			}
+			for _, ip := range entry.AddrIPv4 {
+				service.IPv4 = append(service.IPv4, append(net.IP(nil), ip...))
+			}
+			for _, ip := range entry.AddrIPv6 {
+				service.IPv6 = append(service.IPv6, append(net.IP(nil), ip...))
+			}
+			select {
+			case b.updates <- service:
+			case <-b.ctx.Done():
+				return
 			}
 		}
 	}()

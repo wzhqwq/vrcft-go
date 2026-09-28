@@ -102,9 +102,11 @@ type Controller struct {
 	activeMu sync.Mutex
 	active   *activeVRChat
 
-	generation    atomic.Uint64
-	avatarID      atomic.Value // string
-	avatarChanges avatarChangeMailbox
+	generation     atomic.Uint64
+	avatarID       atomic.Value // string
+	avatarChanges  avatarChangeMailbox
+	avatarMu       sync.Mutex
+	avatarRevision uint64
 
 	refreshCh chan refreshRequest
 	failedCh  chan error
@@ -361,13 +363,7 @@ func (c *Controller) runUDPReceiver() {
 	defer c.wg.Done()
 	err := c.udp.Serve(c.ctx, func(message Message, remote *net.UDPAddr) {
 		if message.Address == "/avatar/change" && len(message.Args) > 0 && message.Args[0].Kind == ValueString {
-			avatarID := message.Args[0].Str
-			c.avatarID.Store(avatarID)
-			c.publishAvatarChange(avatarID)
-			c.emit(ControllerEvent{Kind: EventAvatarChanged, AvatarID: avatarID})
-			if c.config.CatalogMode == CatalogOSCQuery {
-				c.enqueueAvatarRefreshes()
-			}
+			c.acceptAvatarChange(message.Args[0].Str)
 		}
 		if c.onIncoming != nil {
 			c.onIncoming(message, remote)
@@ -616,6 +612,7 @@ func (c *Controller) runActiveVRChat(ctx context.Context, active *activeVRChat) 
 	defer c.wg.Done()
 	pollTicker := time.NewTicker(c.config.QueryPollInterval)
 	defer pollTicker.Stop()
+	c.discoverActiveAvatar(ctx, active)
 
 	if supportsPathNotifications(active.hostInfo) {
 		c.wg.Add(1)
@@ -672,6 +669,59 @@ func (c *Controller) runActiveVRChat(ctx context.Context, active *activeVRChat) 
 			}
 		}
 	}
+}
+
+func (c *Controller) discoverActiveAvatar(ctx context.Context, active *activeVRChat) {
+	c.avatarMu.Lock()
+	revision := c.avatarRevision
+	c.avatarMu.Unlock()
+	queryCtx, cancel := context.WithTimeout(ctx, c.config.QueryTimeout)
+	defer cancel()
+	avatar, err := c.queryClient.Node(queryCtx, active.baseURL, "/avatar")
+	if err != nil || avatar == nil {
+		return
+	}
+	change := avatar.Contents["change"]
+	if avatar.FullPath != "/avatar" || change == nil || change.FullPath != "/avatar/change" ||
+		change.Type != "s" || len(change.Value) != 1 ||
+		(change.Access != nil && *change.Access&AccessReadOnly == 0) {
+		return
+	}
+	avatarID, ok := change.Value[0].(string)
+	if !ok || avatarID == "" || ctx.Err() != nil {
+		return
+	}
+	c.avatarMu.Lock()
+	if c.avatarRevision != revision || ctx.Err() != nil {
+		c.avatarMu.Unlock()
+		return
+	}
+	if c.AvatarID() == avatarID {
+		c.avatarMu.Unlock()
+		return
+	}
+	c.publishAvatarChangeLocked(avatarID)
+	c.avatarMu.Unlock()
+	c.emit(ControllerEvent{Kind: EventAvatarChanged, AvatarID: avatarID})
+	if c.config.CatalogMode == CatalogOSCQuery {
+		c.enqueueAvatarRefreshes()
+	}
+}
+
+func (c *Controller) acceptAvatarChange(avatarID string) {
+	c.avatarMu.Lock()
+	c.publishAvatarChangeLocked(avatarID)
+	c.avatarMu.Unlock()
+	c.emit(ControllerEvent{Kind: EventAvatarChanged, AvatarID: avatarID})
+	if c.config.CatalogMode == CatalogOSCQuery {
+		c.enqueueAvatarRefreshes()
+	}
+}
+
+func (c *Controller) publishAvatarChangeLocked(avatarID string) {
+	c.avatarRevision++
+	c.avatarID.Store(avatarID)
+	c.publishAvatarChange(avatarID)
 }
 
 func (c *Controller) refreshCatalog(ctx context.Context, active *activeVRChat, force bool) error {

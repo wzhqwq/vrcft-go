@@ -2,8 +2,11 @@ package osc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
@@ -303,6 +306,58 @@ func TestControllerExternalCatalogModeDoesNotRefreshCatalog(t *testing.T) {
 	}
 }
 
+func TestControllerDiscoversAlreadyActiveAvatarOnConnect(t *testing.T) {
+	controller := newRuntimeController(t, CatalogExternal, &recordingPacketSender{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	controller.ctx = ctx
+	controller.udp = &UDPTransport{}
+	controller.config.QueryPollInterval = time.Hour
+	avatar := NewContainer("/avatar")
+	avatar.Contents["change"] = NewMethod("/avatar/change", "s", AccessReadOnly, "avtr_startup")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/avatar" {
+			_ = json.NewEncoder(w).Encode(avatar)
+			return
+		}
+		if r.URL.Path == "/" {
+			_ = json.NewEncoder(w).Encode(NewQueryRoot())
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	controller.queryClient = NewQueryClient(time.Second)
+	changes := controller.AvatarChanges(ctx)
+	controller.setActive(&activeVRChat{service: DiscoveredService{Instance: "VRChat"}, baseURL: server.URL})
+	change := receiveAvatarChange(t, changes)
+	if change.AvatarID != "avtr_startup" || controller.AvatarID() != "avtr_startup" {
+		t.Fatalf("startup avatar = %#v, controller ID = %q", change, controller.AvatarID())
+	}
+	cancel()
+	controller.wg.Wait()
+}
+
+func TestControllerStartupQueryDoesNotReplaceLaterUDPAvatarChange(t *testing.T) {
+	controller := newUnstartedController(t, CatalogExternal)
+	controller.ctx = context.Background()
+	avatar := NewContainer("/avatar")
+	avatar.Contents["change"] = NewMethod("/avatar/change", "s", AccessReadOnly, "avtr_stale")
+	controller.queryClient = &fakeControllerQueryClient{
+		nodes: map[string]*QueryNode{"/avatar": avatar},
+		onNode: func(path string) {
+			if path == "/avatar" {
+				controller.acceptAvatarChange("avtr_new")
+			}
+		},
+	}
+	changes := controller.AvatarChanges(context.Background())
+	controller.discoverActiveAvatar(context.Background(), &activeVRChat{baseURL: "http://vrchat.test"})
+	if got := receiveAvatarChange(t, changes); got.AvatarID != "avtr_new" || controller.AvatarID() != "avtr_new" {
+		t.Fatalf("avatar after concurrent notification = %#v, controller ID = %q", got, controller.AvatarID())
+	}
+}
+
 func TestControllerExternalCatalogOwnsInstallAndFencesPublish(t *testing.T) {
 	controller := newRuntimeController(t, CatalogExternal, &recordingPacketSender{})
 	catalog := runtimeTestCatalog(t, 7)
@@ -407,6 +462,7 @@ type fakeControllerQueryClient struct {
 	nodes       map[string]*QueryNode
 	paths       []string
 	err         error
+	onNode      func(string)
 }
 
 func (client *fakeControllerQueryClient) HostInfo(context.Context, string) (HostInfo, error) {
@@ -418,6 +474,9 @@ func (client *fakeControllerQueryClient) HostInfo(context.Context, string) (Host
 
 func (client *fakeControllerQueryClient) Node(_ context.Context, _ string, path string) (*QueryNode, error) {
 	client.paths = append(client.paths, path)
+	if client.onNode != nil {
+		client.onNode(path)
+	}
 	if client.err != nil {
 		return nil, client.err
 	}
