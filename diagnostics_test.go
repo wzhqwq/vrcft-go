@@ -70,6 +70,53 @@ func TestDiagnosticLogRotationAndBoundedSnapshot(t *testing.T) {
 	}
 }
 
+func TestDiagnosticLogsAreSeparatedAndRetainThirtyRuns(t *testing.T) {
+	dir := t.TempDir()
+	paths := make([]string, 0, 31)
+	for i := 0; i < 31; i++ {
+		logs := newDiagnosticLog()
+		logs.open(dir, 512)
+		logs.write(slog.LevelInfo, "runtime", "running", "run marker")
+		logs.close()
+		paths = append(paths, logs.snapshot().LogPath)
+		if i > 0 && paths[i] == paths[i-1] {
+			t.Fatalf("successive runs reused a log file: %s", paths[i])
+		}
+	}
+	if _, err := os.Stat(paths[0]); !os.IsNotExist(err) {
+		t.Fatalf("oldest run still present: %v", err)
+	}
+	for _, path := range paths[1:] {
+		data, err := os.ReadFile(path)
+		if err != nil || strings.Count(string(data), "run marker") != 1 {
+			t.Fatalf("run log %s: %q, %v", path, data, err)
+		}
+	}
+}
+
+func TestDiagnosticRunPruningRemovesAllSegments(t *testing.T) {
+	dir := t.TempDir()
+	first := newDiagnosticLog()
+	first.open(dir, 512)
+	for i := 0; i < 10; i++ {
+		first.write(slog.LevelInfo, "runtime", "running", strings.Repeat("x", 100))
+	}
+	first.close()
+	oldPath := first.snapshot().LogPath
+	if _, err := os.Stat(strings.TrimSuffix(oldPath, ".jsonl") + ".1.jsonl"); err != nil {
+		t.Fatalf("missing first run segment: %v", err)
+	}
+	for i := 0; i < 30; i++ {
+		logs := newDiagnosticLog()
+		logs.open(dir, 512)
+		logs.close()
+	}
+	matches, err := filepath.Glob(strings.TrimSuffix(oldPath, ".jsonl") + "*.jsonl")
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("old run segments remain: %v, %v", matches, err)
+	}
+}
+
 func TestDiagnosticLogUnwritableFallsBackAndRedacts(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(dir, []byte("occupied"), 0600); err != nil {

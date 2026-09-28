@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 )
@@ -17,6 +19,10 @@ import (
 const diagnosticCapacity = 200
 const diagnosticFileBytes int64 = 5 * 1024 * 1024
 const diagnosticMessageBytes = 4096
+const diagnosticRetainedRuns = 30
+
+var diagnosticRunFile = regexp.MustCompile(`^(application-\d{8}T\d{6}\.\d{9}Z-[0-9a-f]+-[0-9a-f]{16}(?:-[0-9a-f]{2})?)(?:\.[1-4])?\.jsonl$`)
+var diagnosticRunSequence atomic.Uint64
 
 // DiagnosticEntry is a bounded, redacted operational record, never a config
 // document or a frame. IDs correlate the retained failure with local JSON logs.
@@ -53,7 +59,7 @@ type diagnosticLog struct {
 }
 
 func newDiagnosticLog() *diagnosticLog {
-	return &diagnosticLog{entries: make([]DiagnosticEntry, 0, diagnosticCapacity), prefix: fmt.Sprintf("%x", time.Now().UnixNano())}
+	return &diagnosticLog{entries: make([]DiagnosticEntry, 0, diagnosticCapacity), prefix: fmt.Sprintf("%x-%016x", time.Now().UnixNano(), diagnosticRunSequence.Add(1))}
 }
 
 func (d *diagnosticLog) logger() *slog.Logger { return slog.New(&diagnosticHandler{log: d}) }
@@ -66,7 +72,6 @@ func (d *diagnosticLog) open(directory string, maxBytes int64) {
 	if d.closed || d.queue != nil {
 		return
 	}
-	d.path = filepath.Join(directory, "application.jsonl")
 	if maxBytes <= 0 {
 		maxBytes = diagnosticFileBytes
 	}
@@ -74,10 +79,25 @@ func (d *diagnosticLog) open(directory string, maxBytes int64) {
 		d.diskError = redactDiagnostic(fmt.Sprintf("create log directory: %v", err))
 		return
 	}
-	file, err := os.OpenFile(d.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	var file *os.File
+	var err error
+	for attempt := 0; attempt < 10; attempt++ {
+		key := d.prefix
+		if attempt > 0 {
+			key = fmt.Sprintf("%s-%02x", key, attempt)
+		}
+		d.path = filepath.Join(directory, fmt.Sprintf("application-%s-%s.jsonl", time.Now().UTC().Format("20060102T150405.000000000Z"), key))
+		file, err = os.OpenFile(d.path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if !os.IsExist(err) {
+			break
+		}
+	}
 	if err != nil {
 		d.diskError = redactDiagnostic(fmt.Sprintf("open log file: %v", err))
 		return
+	}
+	if err := pruneDiagnosticRuns(directory); err != nil {
+		d.diskError = redactDiagnostic(fmt.Sprintf("prune log files: %v", err))
 	}
 	info, err := file.Stat()
 	if err != nil {
@@ -91,6 +111,36 @@ func (d *diagnosticLog) open(directory string, maxBytes int64) {
 		d.queue <- entry
 	}
 	go d.runWriter(file, info.Size(), maxBytes, d.queue, d.done)
+}
+
+func pruneDiagnosticRuns(directory string) error {
+	files, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	runs := make(map[string][]string)
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		match := diagnosticRunFile.FindStringSubmatch(file.Name())
+		if match != nil {
+			runs[match[1]] = append(runs[match[1]], file.Name())
+		}
+	}
+	ids := make([]string, 0, len(runs))
+	for id := range runs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids[:max(0, len(ids)-diagnosticRetainedRuns)] {
+		for _, name := range runs[id] {
+			if err := os.Remove(filepath.Join(directory, name)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (d *diagnosticLog) runWriter(file *os.File, size, maxBytes int64, queue <-chan DiagnosticEntry, done chan<- struct{}) {
