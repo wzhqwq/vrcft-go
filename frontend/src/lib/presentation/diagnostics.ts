@@ -1,7 +1,7 @@
 /** Retain actionable error text, but never credentials or local private paths. */
 export function diagnosticLogPath(value: string): string {
   if (/[\\/]vrcft-go[\\/]logs[\\/]application\.jsonl$/i.test(value)) return String.raw`%APPDATA%\vrcft-go\logs\application.jsonl`
-  const run = value.match(/[\\/]vrcft-go[\\/]logs[\\/](application-\d{8}T\d{6}\.\d{9}Z-[0-9a-f]+-[0-9a-f]{16}(?:-[0-9a-f]{2})?\.jsonl)$/i)
+  const run = value.match(/[\\/]vrcft-go[\\/]logs[\\/](application-(?:\d{8}T\d{6}Z-[0-9a-f]{8}|\d{8}T\d{6}\.\d{9}Z-[0-9a-f]+-[0-9a-f]{16}(?:-[0-9a-f]{2})?)\.jsonl)$/i)
   if (run) return '%APPDATA%\\vrcft-go\\logs\\' + run[1]
   return diagnosticText(value)
 }

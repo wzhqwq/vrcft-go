@@ -49,7 +49,7 @@ and recent logs with level filtering. Update times use the system timezone and
 Chinese date/time formatting. Copy diagnostic information when reporting a
 startup problem; status decoding failures do not prevent querying logs.
 
-Windows writes redacted JSON-line logs to one timestamped `application-*.jsonl`
+Windows writes redacted JSON-line logs to one `application-YYYYMMDDTHHMMSSZ-XXXXXXXX.jsonl`
 file per startup in `%APPDATA%\vrcft-go\logs\`. Each run rotates into up to four
 numbered segments at 5 MiB per file; the latest 30 runs are retained. The page
 retains the latest 200 records for the current

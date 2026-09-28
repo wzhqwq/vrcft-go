@@ -21,7 +21,7 @@ const diagnosticFileBytes int64 = 5 * 1024 * 1024
 const diagnosticMessageBytes = 4096
 const diagnosticRetainedRuns = 30
 
-var diagnosticRunFile = regexp.MustCompile(`^(application-\d{8}T\d{6}\.\d{9}Z-[0-9a-f]+-[0-9a-f]{16}(?:-[0-9a-f]{2})?)(?:\.[1-4])?\.jsonl$`)
+var diagnosticRunFile = regexp.MustCompile(`^(application-(?:\d{8}T\d{6}Z-[0-9a-f]{8}|\d{8}T\d{6}\.\d{9}Z-[0-9a-f]+-[0-9a-f]{16}(?:-[0-9a-f]{2})?))(?:\.[1-4])?\.jsonl$`)
 var diagnosticRunSequence atomic.Uint64
 
 // DiagnosticEntry is a bounded, redacted operational record, never a config
@@ -81,12 +81,10 @@ func (d *diagnosticLog) open(directory string, maxBytes int64) {
 	}
 	var file *os.File
 	var err error
+	startedAt := time.Now().UTC()
+	started := startedAt.Format("20060102T150405Z")
 	for attempt := 0; attempt < 10; attempt++ {
-		key := d.prefix
-		if attempt > 0 {
-			key = fmt.Sprintf("%s-%02x", key, attempt)
-		}
-		d.path = filepath.Join(directory, fmt.Sprintf("application-%s-%s.jsonl", time.Now().UTC().Format("20060102T150405.000000000Z"), key))
+		d.path = filepath.Join(directory, fmt.Sprintf("application-%s-%08x.jsonl", started, uint32(startedAt.Nanosecond())+uint32(attempt)))
 		file, err = os.OpenFile(d.path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if !os.IsExist(err) {
 			break

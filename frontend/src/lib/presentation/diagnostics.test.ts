@@ -6,6 +6,7 @@ describe('diagnostic presentation', () => {
   it('retains the known log destination without disclosing a profile path', () => {
     expect(diagnosticLogPath(String.raw`C:\Users\Jane Doe\AppData\Roaming\vrcft-go\logs\application.jsonl`)).toBe(String.raw`%APPDATA%\vrcft-go\logs\application.jsonl`)
     expect(diagnosticLogPath(String.raw`C:\Users\Jane Doe\AppData\Roaming\vrcft-go\logs\application-20260928T023302.123456789Z-18d95b5c5267fc68-0000000000000001.jsonl`)).toBe(String.raw`%APPDATA%\vrcft-go\logs\application-20260928T023302.123456789Z-18d95b5c5267fc68-0000000000000001.jsonl`)
+    expect(diagnosticLogPath(String.raw`C:\Users\Jane Doe\AppData\Roaming\vrcft-go\logs\application-20260929T081424Z-00000001.jsonl`)).toBe(String.raw`%APPDATA%\vrcft-go\logs\application-20260929T081424Z-00000001.jsonl`)
   })
   it('formats valid timestamps in the operating system timezone and handles invalid dates', () => {
     const time = '2026-09-10T04:30:00Z'

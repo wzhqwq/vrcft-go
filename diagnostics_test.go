@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -79,6 +80,9 @@ func TestDiagnosticLogsAreSeparatedAndRetainThirtyRuns(t *testing.T) {
 		logs.write(slog.LevelInfo, "runtime", "running", "run marker")
 		logs.close()
 		paths = append(paths, logs.snapshot().LogPath)
+		if !regexp.MustCompile(`^application-\d{8}T\d{6}Z-[0-9a-f]{8}\.jsonl$`).MatchString(filepath.Base(paths[i])) {
+			t.Fatalf("log filename is not compact: %s", paths[i])
+		}
 		if i > 0 && paths[i] == paths[i-1] {
 			t.Fatalf("successive runs reused a log file: %s", paths[i])
 		}
@@ -91,6 +95,29 @@ func TestDiagnosticLogsAreSeparatedAndRetainThirtyRuns(t *testing.T) {
 		if err != nil || strings.Count(string(data), "run marker") != 1 {
 			t.Fatalf("run log %s: %q, %v", path, data, err)
 		}
+	}
+}
+
+func TestDiagnosticRunPruningIncludesOldLongNames(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "application-20000101T171424.111090300Z-18d98b757abb3bc8-0000000000000001.jsonl")
+	if err := os.WriteFile(old, []byte("old run"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldSegment := strings.TrimSuffix(old, ".jsonl") + ".1.jsonl"
+	if err := os.WriteFile(oldSegment, []byte("old segment"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 30; i++ {
+		logs := newDiagnosticLog()
+		logs.open(dir, 512)
+		logs.close()
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("old format run escaped retention: %v", err)
+	}
+	if _, err := os.Stat(oldSegment); !os.IsNotExist(err) {
+		t.Fatalf("old format segment escaped retention: %v", err)
 	}
 }
 
