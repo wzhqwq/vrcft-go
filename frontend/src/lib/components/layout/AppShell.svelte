@@ -17,16 +17,10 @@
 
 <div
   data-testid="app-shell"
-  class={`grid h-dvh min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] nav:grid-cols-[12rem_minmax(0,1fr)] nav:grid-rows-[minmax(0,1fr)] ${className}`}
+  class={`grid h-dvh min-w-0 grid-rows-[auto_minmax(0,1fr)] ${className}`}
 >
-  <nav class="hidden min-w-0 flex-col border-r border-border bg-surface nav:flex" aria-label="主导航">
-    <NavigationItems items={navigation} {activePage} {onNavigate} orientation="vertical" />
-  </nav>
-  <header class="flex min-w-0 items-center border-b border-border bg-surface px-4 py-3 text-lg font-bold text-text nav:hidden">
-    VRCFaceTracking
-  </header>
-  <nav class="min-w-0 overflow-x-auto border-b border-border bg-surface nav:hidden" aria-label="主导航">
-    <NavigationItems items={navigation} {activePage} {onNavigate} orientation="horizontal" />
+  <nav class="min-w-0 overflow-x-auto border-b border-border bg-surface" aria-label="主导航">
+    <NavigationItems items={navigation} {activePage} {onNavigate} />
   </nav>
   <div class="min-h-0 min-w-0 overflow-y-auto p-3">{@render content()}</div>
 </div>

@@ -8,36 +8,35 @@
 </script>
 
 <script lang="ts">
+  import {Activity, Blocks, LayoutDashboard, Settings2} from 'lucide-svelte';
   import {Button} from '../ui/index.js';
-
-  type Orientation = 'horizontal' | 'vertical';
 
   type Props = {
     items: NavigationItem[];
     activePage: PageId;
     onNavigate: (page: PageId) => void;
-    orientation: Orientation;
     class?: string;
   };
-
-  const orientationClasses: Record<Orientation, string> = {
-    horizontal: 'flex min-w-max w-full items-center gap-2 px-4 py-2',
-    vertical: 'flex min-w-0 flex-col gap-2 p-4',
-  };
-
-  let {items, activePage, onNavigate, orientation, class: className = ''}: Props = $props();
+  const icons = {overview: LayoutDashboard, plugins: Blocks, settings: Settings2, diagnostics: Activity};
+  let {items, activePage, onNavigate, class: className = ''}: Props = $props();
 </script>
 
-<ul class={`${orientationClasses[orientation]} ${className}`}>
+<ul class={`flex min-w-max items-center justify-start gap-2 px-3 py-2 ${className}`}>
   {#each items as item (item.id)}
-    <li class={orientation === 'vertical' ? 'min-w-0' : 'min-w-32 flex-1'}>
+    {@const Icon = icons[item.id]}
+    <li class="shrink-0">
       <Button
         label={item.label}
         tone={item.id === activePage ? "primary" : "secondary"}
         aria-current={item.id === activePage ? 'page' : undefined}
-        class="w-full"
+        class="min-h-10 whitespace-nowrap"
         onclick={() => onNavigate(item.id)}
-      />
+      >
+        {#snippet children()}
+          <Icon size={18} aria-hidden="true" />
+          <span>{item.label}</span>
+        {/snippet}
+      </Button>
     </li>
   {/each}
 </ul>

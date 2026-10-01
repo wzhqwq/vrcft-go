@@ -10,7 +10,7 @@ const navigation: NavigationItem[] = [
 ];
 
 describe('responsive layout', () => {
-  it('provides an elastic shell with accessible primary navigation', async () => {
+  it('keeps one top navigation at every width', async () => {
     let activePage: NavigationItem['id'] = 'overview';
     render(AppShell, {
       props: {
@@ -23,15 +23,20 @@ describe('responsive layout', () => {
 
     expect(screen.getByTestId('app-shell')).toHaveClass('min-w-0');
     const navigationLandmarks = screen.getAllByRole('navigation', {name: '主导航'});
-    expect(navigationLandmarks).toHaveLength(2);
-    expect(navigationLandmarks[0]).toHaveClass('hidden', 'nav:flex');
-    expect(navigationLandmarks[1]).toHaveClass('nav:hidden');
+    expect(navigationLandmarks).toHaveLength(1);
+    expect(navigationLandmarks[0]).toHaveClass('overflow-x-auto');
+    expect(navigationLandmarks[0]?.querySelector('ul')).toHaveClass('justify-start');
+    for (const button of navigationLandmarks[0]?.querySelectorAll('button') ?? []) {
+      expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+      expect(button.querySelector('span')?.textContent).toBeTruthy();
+    }
+    expect(screen.getByRole('button', {name: '概览'})).toHaveAttribute('aria-current', 'page');
 
-    await fireEvent.click(screen.getAllByRole('button', {name: '设置'})[0]);
+    await fireEvent.click(screen.getByRole('button', {name: '设置'}));
     expect(activePage).toBe('settings');
   });
 
-  it('grows narrow tab items evenly until their readable width requires scrolling', () => {
+  it('contains navigation overflow in the top bar', () => {
     render(AppShell, {
       props: {
         navigation,
@@ -41,13 +46,13 @@ describe('responsive layout', () => {
       },
     });
 
-    const tabBar = screen.getAllByRole('navigation', {name: '主导航'})[1];
+    const tabBar = screen.getByRole('navigation', {name: '主导航'});
     expect(tabBar).toHaveClass('overflow-x-auto');
 
     const tabStrip = tabBar.querySelector('ul');
-    expect(tabStrip).toHaveClass('flex', 'w-full', 'min-w-max');
+    expect(tabStrip).toHaveClass('flex', 'min-w-max');
     for (const tabItem of tabBar.querySelectorAll('li')) {
-      expect(tabItem).toHaveClass('flex-1', 'min-w-32');
+      expect(tabItem).toHaveClass('shrink-0');
     }
   });
 });
