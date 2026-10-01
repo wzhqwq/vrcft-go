@@ -8,9 +8,30 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
 )
+
+func TestPluginPreferenceTimesPersist(t *testing.T) {
+	store, _ := newTestJSONStore(t, 4096)
+	installed := time.Date(2026, 10, 2, 3, 4, 5, 0, time.UTC)
+	enabled := installed.Add(time.Hour)
+	settings := PluginSettings{Plugins: map[string]PluginPreference{
+		"vendor.device": {InstalledAt: installed, LastEnabledAt: enabled},
+	}}
+	if err := store.Save(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	preference := got.Plugins["vendor.device"]
+	if !preference.InstalledAt.Equal(installed) || !preference.LastEnabledAt.Equal(enabled) {
+		t.Fatalf("loaded times = %v, %v", preference.InstalledAt, preference.LastEnabledAt)
+	}
+}
 
 func testConfig(revision uint64, data string) pluginapi.Config {
 	return pluginapi.Config{Revision: revision, Data: json.RawMessage(data)}

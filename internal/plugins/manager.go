@@ -40,6 +40,7 @@ func DefaultOptions() Options {
 type managerDependencies struct {
 	newSupervisor func(pluginSupervisorConfig) (pluginSupervisor, error)
 	newSession    func(context.Context, uint64, sessionConfig, sessionDependencies) pluginSession
+	now           func() time.Time
 }
 
 type managerLifecycle uint8
@@ -114,6 +115,9 @@ func newManager(
 	}
 	if dependencies.newSession == nil {
 		dependencies.newSession = newPluginSession
+	}
+	if dependencies.now == nil {
+		dependencies.now = time.Now
 	}
 	startDone := make(chan struct{})
 	close(startDone)
@@ -194,6 +198,21 @@ func (m *pluginManager) Start(ctx context.Context) error {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	changed := false
+	for _, id := range ids {
+		preference := settings.Plugins[id]
+		if preference.InstalledAt.IsZero() {
+			preference.InstalledAt = m.deps.now().UTC()
+			settings.Plugins[id] = preference
+			changed = true
+		}
+	}
+	if changed {
+		if err := m.store.Save(ctx, settings); err != nil {
+			m.finishFailedStart(startDone)
+			return err
+		}
+	}
 
 	supervisors := make(map[string]pluginSupervisor, len(ids))
 	admissions := make(map[string]chan struct{}, len(ids))
@@ -413,6 +432,8 @@ func (m *pluginManager) PluginConfig(id string) (pluginapi.Config, bool) {
 func overlayPreference(snapshot RuntimeSnapshot, preference PluginPreference) RuntimeSnapshot {
 	snapshot.Enabled = preference.Enabled
 	snapshot.ConfigRevision = preference.Config.Revision
+	snapshot.InstalledAt = preference.InstalledAt
+	snapshot.LastEnabledAt = preference.LastEnabledAt
 	return snapshot.clone()
 }
 
@@ -436,6 +457,9 @@ func (m *pluginManager) updateEnabled(
 			return false, nil
 		}
 		preference.Enabled = enabled
+		if enabled {
+			preference.LastEnabledAt = m.deps.now().UTC()
+		}
 		preference.Config = preference.Config.Clone()
 		settings.Plugins[id] = preference
 		return true, nil

@@ -12,6 +12,67 @@ import (
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
 
+func TestManagerRecordsDiscoveryAndManualEnableTimes(t *testing.T) {
+	first := time.Date(2026, 10, 2, 3, 4, 5, 0, time.UTC)
+	now := first
+	store := newManagerTestStore(emptyPluginSettings())
+	factory := newManagerTestSupervisorFactory()
+	managerAPI, err := newManager(&managerTestCatalog{plugins: []InstalledPlugin{managerTestPlugin("vendor.alpha")}}, store, managerTestLauncher{}, managerTestFrameSink{}, DefaultOptions(), managerDependencies{
+		newSupervisor: factory.create,
+		now:           func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := managerAPI.(*pluginManager)
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	if got := store.latest().Plugins["vendor.alpha"].InstalledAt; !got.Equal(first) {
+		t.Fatalf("installed at = %v, want %v", got, first)
+	}
+	if got := manager.List()[0].InstalledAt; !got.Equal(first) {
+		t.Fatalf("snapshot installed at = %v", got)
+	}
+	now = now.Add(time.Minute)
+	if err := manager.Enable(context.Background(), "vendor.alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.latest().Plugins["vendor.alpha"].LastEnabledAt; !got.Equal(now) {
+		t.Fatalf("enabled at = %v, want %v", got, now)
+	}
+	now = now.Add(time.Minute)
+	if err := manager.Enable(context.Background(), "vendor.alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.List()[0].LastEnabledAt; !got.Equal(first.Add(time.Minute)) {
+		t.Fatalf("repeated enable advanced time to %v", got)
+	}
+	if err := manager.Disable(context.Background(), "vendor.alpha"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if err := manager.Enable(context.Background(), "vendor.alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.latest().Plugins["vendor.alpha"].LastEnabledAt; !got.Equal(now) {
+		t.Fatalf("re-enabled at = %v, want %v", got, now)
+	}
+	if err := manager.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	restarted := newManagerForTest(t, &managerTestCatalog{plugins: []InstalledPlugin{managerTestPlugin("vendor.alpha")}}, store, newManagerTestSupervisorFactory())
+	if err := restarted.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close(context.Background()) })
+	if got := restarted.List()[0].LastEnabledAt; !got.Equal(first.Add(3 * time.Minute)) {
+		t.Fatalf("automatic start advanced enable time to %v", got)
+	}
+}
+
 func TestManagerConstructionDefersEventHubUntilFirstSubscription(t *testing.T) {
 	managerAPI, err := newManager(
 		&managerTestCatalog{},
@@ -95,8 +156,8 @@ func TestManagerPluginConfigReturnsOwnedPreference(t *testing.T) {
 	if _, ok := manager.PluginConfig("missing"); ok {
 		t.Fatal("unknown plugin reported present")
 	}
-	if _, ok := manager.PluginConfig("vendor.no-preference"); ok {
-		t.Fatal("installed plugin without preference reported present")
+	if config, ok := manager.PluginConfig("vendor.no-preference"); !ok || config.Revision != 0 {
+		t.Fatal("discovered plugin preference is unavailable")
 	}
 	if _, ok := manager.PluginConfig("vendor.unavailable"); ok {
 		t.Fatal("uninstalled plugin preference reported present")
@@ -682,14 +743,15 @@ func TestManagerRoutesRuntimeControlsAndHonorsCancellationAndBackpressure(t *tes
 	}
 	t.Cleanup(func() { _ = manager.Close(context.Background()) })
 	supervisor := factory.supervisor("vendor.alpha")
+	startupSaves := store.saves
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := manager.Enable(ctx, "vendor.alpha"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Enable(canceled) error = %v, want context.Canceled", err)
 	}
-	if store.saves != 0 {
-		t.Fatalf("Save calls after pre-canceled command = %d, want 0", store.saves)
+	if store.saves != startupSaves {
+		t.Fatalf("Save calls after pre-canceled command = %d, want %d", store.saves, startupSaves)
 	}
 
 	subscription := pluginapi.Subscription{}
@@ -1010,6 +1072,7 @@ func TestManagerPersistentSaveOrderMatchesSamePluginAdmissionOrder(t *testing.T)
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	_ = awaitManagerSettings(t, store.saveEvents) // initial discovery timestamp
 	supervisor := factory.supervisor("vendor.alpha")
 
 	firstEntered := make(chan struct{})
@@ -1147,6 +1210,7 @@ func TestManagerCloseRejectsControlsStopsConcurrentlyJoinsErrorsAndIsIdempotent(
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	startupSaves := store.saves
 	events := manager.Subscribe(context.Background())
 
 	alphaErr := errors.New("alpha close")
@@ -1163,8 +1227,8 @@ func TestManagerCloseRejectsControlsStopsConcurrentlyJoinsErrorsAndIsIdempotent(
 	if err := manager.Restart(context.Background(), "vendor.alpha"); !errors.Is(err, ErrManagerClosed) {
 		t.Fatalf("Restart during Close error = %v, want ErrManagerClosed", err)
 	}
-	if store.saves != 0 {
-		t.Fatalf("Manager Close persisted Enabled=false with %d Save calls", store.saves)
+	if store.saves != startupSaves {
+		t.Fatalf("Manager Close added Save calls: %d vs %d", store.saves, startupSaves)
 	}
 
 	close(alpha.closeGate)

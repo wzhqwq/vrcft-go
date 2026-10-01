@@ -11,13 +11,16 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
 )
 
 type PluginPreference struct {
-	Enabled bool             `json:"enabled"`
-	Config  pluginapi.Config `json:"config"`
+	Enabled       bool             `json:"enabled"`
+	Config        pluginapi.Config `json:"config"`
+	InstalledAt   time.Time        `json:"installedAt"`
+	LastEnabledAt time.Time        `json:"lastEnabledAt"`
 }
 
 type PluginSettings struct {
@@ -49,13 +52,16 @@ type jsonStoreOps struct {
 }
 
 type wireSettings struct {
+	Version int              `json:"version"`
 	Plugins []wirePreference `json:"plugins"`
 }
 
 type wirePreference struct {
-	ID      string           `json:"id"`
-	Enabled bool             `json:"enabled"`
-	Config  pluginapi.Config `json:"config"`
+	ID            string           `json:"id"`
+	Enabled       bool             `json:"enabled"`
+	Config        pluginapi.Config `json:"config"`
+	InstalledAt   time.Time        `json:"installedAt"`
+	LastEnabledAt time.Time        `json:"lastEnabledAt"`
 }
 
 func NewJSONStore(path string, maxBytes int64) (Store, error) {
@@ -148,13 +154,13 @@ func defaultJSONStoreOps() jsonStoreOps {
 }
 
 func encodeSettings(settings PluginSettings, maxBytes int64) ([]byte, error) {
-	wire := wireSettings{Plugins: make([]wirePreference, 0, len(settings.Plugins))}
+	wire := wireSettings{Version: 2, Plugins: make([]wirePreference, 0, len(settings.Plugins))}
 	for id, preference := range settings.Plugins {
 		config, err := validConfig(id, preference.Config, maxBytes)
 		if err != nil {
 			return nil, err
 		}
-		wire.Plugins = append(wire.Plugins, wirePreference{ID: id, Enabled: preference.Enabled, Config: config})
+		wire.Plugins = append(wire.Plugins, wirePreference{ID: id, Enabled: preference.Enabled, Config: config, InstalledAt: preference.InstalledAt.UTC(), LastEnabledAt: preference.LastEnabledAt.UTC()})
 	}
 	sort.Slice(wire.Plugins, func(i, j int) bool { return wire.Plugins[i].ID < wire.Plugins[j].ID })
 	data, err := json.Marshal(wire)
@@ -169,6 +175,9 @@ func encodeSettings(settings PluginSettings, maxBytes int64) ([]byte, error) {
 
 func settingsFromWire(wire wireSettings, maxBytes int64) (PluginSettings, error) {
 	settings := emptyPluginSettings()
+	if wire.Version != 2 {
+		return settings, nil
+	}
 	for _, preference := range wire.Plugins {
 		if _, exists := settings.Plugins[preference.ID]; exists {
 			return PluginSettings{}, fmt.Errorf("plugins: duplicate preference ID %q", preference.ID)
@@ -182,7 +191,7 @@ func settingsFromWire(wire wireSettings, maxBytes int64) (PluginSettings, error)
 		if err != nil {
 			return PluginSettings{}, err
 		}
-		settings.Plugins[preference.ID] = PluginPreference{Enabled: preference.Enabled, Config: config}
+		settings.Plugins[preference.ID] = PluginPreference{Enabled: preference.Enabled, Config: config, InstalledAt: preference.InstalledAt, LastEnabledAt: preference.LastEnabledAt}
 	}
 	return settings, nil
 }
@@ -200,7 +209,7 @@ func validConfig(id string, config pluginapi.Config, maxBytes int64) (pluginapi.
 func clonePluginSettings(settings PluginSettings) PluginSettings {
 	clone := emptyPluginSettings()
 	for id, preference := range settings.Plugins {
-		clone.Plugins[id] = PluginPreference{Enabled: preference.Enabled, Config: preference.Config.Clone()}
+		clone.Plugins[id] = PluginPreference{Enabled: preference.Enabled, Config: preference.Config.Clone(), InstalledAt: preference.InstalledAt, LastEnabledAt: preference.LastEnabledAt}
 	}
 	return clone
 }

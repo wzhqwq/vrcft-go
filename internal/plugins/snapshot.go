@@ -42,6 +42,8 @@ type RuntimeSnapshot struct {
 	StartedAt       time.Time
 	LastHeartbeatAt time.Time
 	LastFrameAt     time.Time
+	InstalledAt     time.Time
+	LastEnabledAt   time.Time
 	NextRestartAt   time.Time
 
 	FrameRate float64
