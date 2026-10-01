@@ -1,6 +1,5 @@
 <script lang="ts">
   import {CircleAlert, Radio} from 'lucide-svelte'
-  import {PageHeader} from '../lib/components/layout/index.js'
   import type {PageId} from '../lib/components/layout/NavigationItems.svelte'
   import {Button} from '../lib/components/ui/index.js'
   import {AvatarDrivePanel, PluginOverviewPanel} from '../lib/patterns/index.js'
@@ -14,7 +13,7 @@
 </script>
 
 <main class="page-grid min-w-0" aria-label="概览">
-  <PageHeader title="概览" />
+  <header class="min-w-0"><h1 class="text-xl font-bold">概览</h1></header>
   <div class="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(18rem,1fr)]">
     <AvatarDrivePanel state={runtime.state} {onNavigate} />
     <div class="grid min-w-0 content-start gap-4">
