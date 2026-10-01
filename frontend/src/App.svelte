@@ -82,7 +82,7 @@
 
 {#snippet content()}
   {#if activePage === 'overview'}
-    <OverviewPage {runtime} {plugins} />
+    <OverviewPage {runtime} {plugins} onNavigate={navigate} />
   {:else if activePage === 'plugins'}
     <PluginsPage {plugins} />
   {:else if activePage === 'settings'}

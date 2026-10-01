@@ -1,4 +1,7 @@
 export {default as AvatarSummary} from './AvatarSummary.svelte';
+export {default as AvatarDrivePanel} from './AvatarDrivePanel.svelte';
+export {default as ParameterListDialog} from './ParameterListDialog.svelte';
+export {default as PluginOverviewPanel} from './PluginOverviewPanel.svelte';
 export {default as DetailList} from './DetailList.svelte';
 export {default as EmptyState} from './EmptyState.svelte';
 export {default as FormRow} from './FormRow.svelte';

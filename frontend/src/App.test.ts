@@ -139,7 +139,7 @@ describe('App', () => {
     expect(mock.runtime.onChanged).toHaveBeenCalledOnce()
     expect(mock.plugins.onChanged).toHaveBeenCalledOnce()
     expect(mock.settings.onChanged).toHaveBeenCalledOnce()
-    await waitFor(() => expect(screen.getByText('暂无可显示的运行状态')).toBeVisible())
+    await waitFor(() => expect(screen.getByText(/等待 Avatar/)).toBeVisible())
   })
 
   it('renders one active page and switches clean navigation without confirmation', async () => {

@@ -7,6 +7,15 @@ export const copy = {
     settings: '设置',
     diagnostics: '诊断',
   },
+  overview: {
+    avatarDrive: '角色驱动状态',
+    pluginInput: '插件输入',
+    oscOutput: 'OSC 输出',
+    parameterList: '查看参数列表',
+    allPlugins: '查看全部插件',
+    toSettings: '前往设置',
+    stale: '数据可能已过期',
+  },
   actions: {
     save: '保存',
     cancel: '取消',
