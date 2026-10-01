@@ -80,7 +80,7 @@ func TestMainWindowUsesDesktopDefaultAndUsableMinimumSize(t *testing.T) {
 		name  string
 		value string
 	}{
-		{name: "Width", value: "1024"},
+		{name: "Width", value: "1200"},
 		{name: "Height", value: "768"},
 		{name: "MinWidth", value: "640"},
 		{name: "MinHeight", value: "480"},

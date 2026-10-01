@@ -18,7 +18,7 @@ func main() {
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:     "vrcft-go2",
-		Width:     1024,
+		Width:     1200,
 		Height:    768,
 		MinWidth:  640,
 		MinHeight: 480,

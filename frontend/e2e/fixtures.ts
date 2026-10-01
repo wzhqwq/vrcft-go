@@ -4,6 +4,7 @@ export const viewports = [
   {width: 640, height: 480},
   {width: 720, height: 600},
   {width: 1024, height: 768},
+  {width: 1200, height: 768},
   {width: 1440, height: 900},
 ] as const;
 
