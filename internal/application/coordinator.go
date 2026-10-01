@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/wzhqwq/vrcft-go/internal/avatar"
+	"github.com/wzhqwq/vrcft-go/internal/evaluator"
 	"github.com/wzhqwq/vrcft-go/internal/osc"
 	"github.com/wzhqwq/vrcft-go/internal/plugins"
 	"github.com/wzhqwq/vrcft-go/internal/processing"
@@ -40,20 +41,22 @@ type runtimePublisher interface {
 }
 
 type coordinator struct {
-	planner          activationPlanner
-	installer        *planInstaller
-	pipeline         framePipeline
-	tracking         sourceRemover
-	runtime          runtimePublisher
-	status           *statusStore
-	clock            *monotonicClock
-	current          planView
-	latest           tracking.MergedFrame
-	hasLatest        bool
-	suspended        bool
-	outputBlocked    bool
-	pluginSessionsMu sync.Mutex
-	pluginSessions   map[string]uint64
+	planner            activationPlanner
+	installer          *planInstaller
+	pipeline           framePipeline
+	tracking           sourceRemover
+	runtime            runtimePublisher
+	status             *statusStore
+	clock              *monotonicClock
+	current            planView
+	driveProbe         parameterDriveProbe
+	lastDrivePublishNS int64
+	latest             tracking.MergedFrame
+	hasLatest          bool
+	suspended          bool
+	outputBlocked      bool
+	pluginSessionsMu   sync.Mutex
+	pluginSessions     map[string]uint64
 }
 
 func (c *coordinator) run(ctx context.Context, inputs coordinatorInputs, ready chan<- struct{}) {
@@ -134,6 +137,14 @@ func (c *coordinator) activate(ctx context.Context, change osc.AvatarChange) {
 	}
 	outcome := c.installer.install(ctx, current)
 	c.current = outcome.plan
+	c.driveProbe = parameterDriveProbe{}
+	c.lastDrivePublishNS = 0
+	if usablePlan(outcome.plan) {
+		probe, err := newParameterDriveProbe(outcome.plan.ParameterIDs())
+		if err == nil {
+			c.driveProbe = probe
+		}
+	}
 	c.outputBlocked = outcome.outputBlocked
 	c.suspended = !c.outputBlocked && outcome.runtimeErr != nil && usablePlan(outcome.plan)
 	c.publishInstallStatus(change.AvatarID, outcome)
@@ -161,6 +172,7 @@ func (c *coordinator) process(ctx context.Context, frame tracking.MergedFrame, n
 		return
 	}
 	snapshot := evaluatorPlan.Evaluate(canonical)
+	c.refreshDriveStatus(frame, canonical, snapshot, nowNS)
 	if c.suspended {
 		if err := c.runtime.InstallCatalog(c.current.Catalog()); err != nil {
 			c.failRuntime(fmt.Errorf("recover OSC catalog generation %d: %w", generation, err))
@@ -172,11 +184,47 @@ func (c *coordinator) process(ctx context.Context, frame tracking.MergedFrame, n
 		return
 	}
 	c.suspended = false
+	oscStatus := c.runtime.Status()
+	previous := c.status.snapshot()
+	if previous.OSC != oscStatus || previous.RuntimeError != "" || previous.Lifecycle != lifecycleForStatus(&previous) {
+		c.status.update(func(status *Status) {
+			status.OSC = oscStatus
+			status.RuntimeError = ""
+			status.Lifecycle = lifecycleForStatus(status)
+		})
+	}
+}
+
+func (c *coordinator) refreshDriveStatus(frame tracking.MergedFrame, canonical processing.CanonicalFrame, values evaluator.Snapshot, nowNS int64) {
+	if len(c.driveProbe.entries) == 0 {
+		return
+	}
+	next := c.driveProbe.Evaluate(frame, canonical, values)
+	previous := c.status.snapshot().PlanParameters
+	if sameParameterDrive(previous, next) {
+		return
+	}
+	if c.lastDrivePublishNS != 0 && nowNS-c.lastDrivePublishNS < int64(time.Second) {
+		return
+	}
 	c.status.update(func(status *Status) {
-		status.OSC = c.runtime.Status()
-		status.RuntimeError = ""
-		status.Lifecycle = lifecycleForStatus(status)
+		if status.PlanGeneration == frame.Generation {
+			status.PlanParameters = next
+		}
 	})
+	c.lastDrivePublishNS = nowNS
+}
+
+func sameParameterDrive(left, right []ParameterDriveStatus) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *coordinator) hasUsablePlan(generation uint64) bool {
@@ -208,6 +256,7 @@ func (c *coordinator) publishInstallStatus(requestedAvatarID string, outcome ins
 		status.PlanGeneration = 0
 		status.PlanStatus = 0
 		status.PlanSource = 0
+		status.PlanParameters = nil
 		status.ConfigPath = ""
 		status.ConfigID = ""
 		if outcome.plan != nil {
@@ -218,6 +267,12 @@ func (c *coordinator) publishInstallStatus(requestedAvatarID string, outcome ins
 			status.PlanSource = outcome.plan.Source()
 			status.ConfigPath = outcome.plan.ConfigPath()
 			status.ConfigID = outcome.plan.ConfigID()
+			if usablePlan(outcome.plan) {
+				status.PlanParameters = make([]ParameterDriveStatus, len(c.driveProbe.entries))
+				for i, entry := range c.driveProbe.entries {
+					status.PlanParameters[i].Name = entry.name
+				}
+			}
 		}
 		status.GenerationExhausted = outcome.exhausted
 		status.PluginFailures = append([]PluginControlFailure(nil), outcome.pluginFailures...)

@@ -19,7 +19,46 @@ import (
 	"github.com/wzhqwq/vrcft-go/internal/processing"
 	"github.com/wzhqwq/vrcft-go/internal/tracking"
 	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
+	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
+
+func TestCoordinatorParameterDriveStatusFollowsPlanAndInput(t *testing.T) {
+	plan := coordinatorReadyPlan(t, 7)
+	planner := &fixedActivationPlanner{activation: activation{plan: plan}}
+	runtime := newFakeRuntimePublisher()
+	status := newStatusStore(nil)
+	pipeline := &fakeFramePipeline{result: processing.CanonicalFrame{Generation: 7, EyeActive: true}}
+	c := &coordinator{planner: planner, installer: &planInstaller{plugins: &coordinatorPluginControls{}, tracking: newFakeCoordinatorTracking(), osc: runtime, pluginControlTimeout: time.Second}, pipeline: pipeline, runtime: runtime, status: status, clock: newMonotonicClock(nil)}
+	c.activate(context.Background(), osc.AvatarChange{AvatarID: "avtr_test"})
+	initial := status.snapshot()
+	if len(initial.PlanParameters) != 1 || initial.PlanParameters[0].Driven {
+		t.Fatalf("initial drive = %+v", initial.PlanParameters)
+	}
+	frame := tracking.MergedFrame{Generation: 7, Capabilities: trackingmodel.CapabilityEye, EyeSourceID: "eye"}
+	c.process(context.Background(), frame, 1_000_000_000)
+	if got := status.snapshot().PlanParameters; len(got) != 1 || !got[0].Driven {
+		t.Fatalf("active drive = %+v", got)
+	}
+	runtime.oscStatus = osc.OSCStatus{}
+	c.observeOSC(osc.ControllerEvent{})
+	if !status.snapshot().PlanParameters[0].Driven {
+		t.Fatal("OSC event cleared plugin drive")
+	}
+	pipeline.result = processing.CanonicalFrame{Generation: 7}
+	c.process(context.Background(), frame, 3_000_000_000)
+	if status.snapshot().PlanParameters[0].Driven {
+		t.Fatal("stale source remains driven")
+	}
+	nextEvaluator, err := evaluator.Compile([]parameters.ParameterID{parameters.ParameterExpressionTrackingActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner.activation = activation{plan: &fakeInstallPlan{generation: 8, status: avatar.StatusReady, avatarID: "avtr_next", parameterIDs: []parameters.ParameterID{parameters.ParameterExpressionTrackingActive}, catalog: &osc.Catalog{Generation: 8, Bindings: map[parameters.ParameterID]osc.ParameterBinding{parameters.ParameterExpressionTrackingActive: {}}}, evaluator: nextEvaluator}}
+	c.activate(context.Background(), osc.AvatarChange{AvatarID: "avtr_next"})
+	if got := status.snapshot(); got.PlanGeneration != 8 || len(got.PlanParameters) != 1 || got.PlanParameters[0].Name != "ExpressionTrackingActive" || got.PlanParameters[0].Driven {
+		t.Fatalf("new plan = %+v", got)
+	}
+}
 
 func TestCoordinatorProcessesNewFrameImmediatelyAndLatestFrameOnTick(t *testing.T) {
 	harness := newCoordinatorHarness(t)

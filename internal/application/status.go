@@ -37,6 +37,7 @@ type Status struct {
 	PlanGeneration      uint64
 	PlanStatus          avatar.Status
 	PlanSource          avatar.Source
+	PlanParameters      []ParameterDriveStatus
 	ConfigPath          string
 	ConfigID            string
 	GenerationExhausted bool
@@ -144,5 +145,6 @@ func nextRevision(current uint64) uint64 {
 
 func cloneStatus(status Status) Status {
 	status.PluginFailures = append([]PluginControlFailure(nil), status.PluginFailures...)
+	status.PlanParameters = append([]ParameterDriveStatus(nil), status.PlanParameters...)
 	return status
 }
