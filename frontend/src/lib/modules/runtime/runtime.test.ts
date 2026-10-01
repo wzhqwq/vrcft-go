@@ -4,6 +4,12 @@ import {acceptRevision} from '../shared/revision.js'
 import type {RuntimePort, Stop} from '../../wails/ports.js'
 import type {RuntimeApplicationWire, RuntimeOscWire, RuntimeWire} from '../../wails/types.js'
 import {createRuntimeModule} from './index.js'
+import {mapRuntimeWire} from './map.js'
+
+it('maps current plan parameters', () => {
+  const wire = runtimeWire(1, 'avtr_current', {planGeneration: 4, planParameters: [{name: 'v2/EyeLeftX', driven: true}]})
+  expect(mapRuntimeWire(wire).plan?.parameters).toEqual([{name: 'v2/EyeLeftX', driven: true}])
+})
 
 class RuntimeMock implements RuntimePort {
   readonly listeners = new Set<(value: unknown) => void>()
@@ -73,6 +79,7 @@ function runtimeWire(
       configPath: 'C:/avatars/current.json',
       configId: 'cfg_current',
       generationExhausted: false,
+      planParameters: [],
       osc: {
         running: true,
         connected: true,

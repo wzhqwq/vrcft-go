@@ -16,6 +16,7 @@ function plugin(id: string): PluginView {
   return {
     id, name: id, description: '', version: '1.0.0', capabilities: [], enabled: true, active: true,
     state: 'running', configRevision: 1, frameRate: 60, consecutiveFailures: 0, restartCount: 0,
+    installedAt: '2026-10-01T00:00:00Z',
   }
 }
 
@@ -23,7 +24,7 @@ function runtimeSnapshot(overrides: Partial<RuntimeView> = {}): RuntimeView {
   return {
     phase: 'running', platformSupported: true, avatar: {name: 'Demo Avatar', id: 'avtr_demo'},
     osc: {state: 'discovered', target: {host: '127.0.0.1', port: 9000}},
-    plan: {status: 'ready', source: 'VRChat', generation: 8, configPath: 'C:/Avatar/demo.json', configId: 'avtr_demo', generationExhausted: false},
+    plan: {status: 'ready', source: 'VRChat', generation: 8, configPath: 'C:/Avatar/demo.json', configId: 'avtr_demo', generationExhausted: false, parameters: []},
     pluginFailures: [{pluginId: 'eye', operation: 'start', message: 'Eye Tracker 启动失败'}],
     ...overrides,
   }
@@ -174,7 +175,7 @@ describe('OverviewPage', () => {
   it('prompts for a fallback configuration when the current avatar has no configuration', () => {
     const runtime = createRuntimeFixture(runtimeState({snapshot: runtimeSnapshot({
       avatar: {name: '', id: 'local:sdk_test'},
-      plan: {status: 'failed', source: '', generation: 9, configPath: '', configId: '', generationExhausted: false},
+      plan: {status: 'failed', source: '', generation: 9, configPath: '', configId: '', generationExhausted: false, parameters: []},
       planError: 'avatar: configuration not found',
       pluginFailures: [],
     })}))

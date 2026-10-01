@@ -1,6 +1,6 @@
 import {describe, expect, it, vi} from 'vitest'
 
-import {selectPlugins} from './selectors.js'
+import {selectPlugins, selectOverviewPlugins} from './selectors.js'
 import {createPluginsModule} from './index.js'
 import type {PluginsPort, Stop} from '../../wails/ports.js'
 import type {PluginListWire, PluginMutationWire, PluginWire, ProblemWire} from '../../wails/types.js'
@@ -65,9 +65,23 @@ function plugin(id: string, overrides: Partial<PluginWire> = {}): PluginWire {
     frameRate: 60,
     consecutiveFailures: 0,
     restartCount: 0,
+    installedAt: '2026-10-01T00:00:00Z',
     ...overrides,
   }
 }
+
+it('selects three overview plugins by status and effective time', () => {
+  const items = [
+    plugin('working', {state: 'running'}),
+    plugin('fault-old', {state: 'crashed', installedAt: '2026-09-01T00:00:00Z'}),
+    plugin('fault-new', {state: 'crashed', lastEnabledAt: '2026-10-02T00:00:00Z'}),
+    plugin('recovery', {state: 'backoff'}),
+  ]
+  expect(selectOverviewPlugins(items).map((item) => item.id)).toEqual(['fault-new', 'fault-old', 'recovery'])
+  expect(items[0]?.id).toBe('working')
+  const ties = [plugin('beta', {name: 'Same'}), plugin('alpha', {name: 'Same'}), plugin('zulu', {name: 'Zulu'})]
+  expect(selectOverviewPlugins(ties).map((item) => item.id)).toEqual(['alpha', 'beta', 'zulu'])
+})
 
 function listWire(revision: number, plugins: PluginWire[], problem?: ProblemWire): PluginListWire {
   return {

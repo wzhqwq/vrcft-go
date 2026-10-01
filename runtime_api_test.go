@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,7 +12,31 @@ import (
 	"github.com/wzhqwq/vrcft-go/internal/application"
 	"github.com/wzhqwq/vrcft-go/internal/avatar"
 	"github.com/wzhqwq/vrcft-go/internal/osc"
+	"github.com/wzhqwq/vrcft-go/internal/parameters"
 )
+
+func TestRuntimeParameterDriveDTOIsBoundedAndOwned(t *testing.T) {
+	api := newRuntimeAPI(true, time.Now)
+	items := make([]application.ParameterDriveStatus, parameters.ParameterCount+3)
+	for i := range items {
+		items[i] = application.ParameterDriveStatus{Name: "EyeTrackingActive", Driven: true}
+	}
+	api.setApplicationStatus(application.Status{PlanGeneration: 7, PlanStatus: avatar.StatusReady, PlanParameters: items})
+	items[0].Driven = false
+	got := api.GetStatus().Application.PlanParameters
+	if len(got) != int(parameters.ParameterCount) || !got[0].Driven {
+		t.Fatalf("parameter DTO = %+v", got)
+	}
+	got[0].Driven = false
+	if !api.GetStatus().Application.PlanParameters[0].Driven {
+		t.Fatal("response aliases stored list")
+	}
+	api.setApplicationStatus(application.Status{})
+	encoded, err := json.Marshal(api.GetStatus())
+	if err != nil || !strings.Contains(string(encoded), `"planParameters":[]`) {
+		t.Fatalf("empty parameter JSON = %s, %v", encoded, err)
+	}
+}
 
 func TestRuntimeAPIRootPhasesAndExactPublicSurface(t *testing.T) {
 	now := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)

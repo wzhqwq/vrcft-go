@@ -56,6 +56,7 @@ type RuntimeApplicationDTO struct {
 	PlanGeneration      uint64                    `json:"planGeneration"`
 	PlanStatus          string                    `json:"planStatus"`
 	PlanSource          string                    `json:"planSource"`
+	PlanParameters      []ParameterDriveDTO       `json:"planParameters"`
 	ConfigPath          string                    `json:"configPath"`
 	ConfigID            string                    `json:"configId"`
 	GenerationExhausted bool                      `json:"generationExhausted"`
@@ -63,6 +64,11 @@ type RuntimeApplicationDTO struct {
 	PluginFailures      []PluginControlFailureDTO `json:"pluginFailures"`
 	PlanError           string                    `json:"planError,omitempty"`
 	RuntimeError        string                    `json:"runtimeError,omitempty"`
+}
+
+type ParameterDriveDTO struct {
+	Name   string `json:"name"`
+	Driven bool   `json:"driven"`
 }
 
 type RuntimeOSCDTO struct {
@@ -109,6 +115,8 @@ type PluginDTO struct {
 	LastHeartbeatAt     *time.Time `json:"lastHeartbeatAt,omitempty"`
 	LastFrameAt         *time.Time `json:"lastFrameAt,omitempty"`
 	NextRestartAt       *time.Time `json:"nextRestartAt,omitempty"`
+	InstalledAt         time.Time  `json:"installedAt"`
+	LastEnabledAt       *time.Time `json:"lastEnabledAt,omitempty"`
 	LastError           string     `json:"lastError,omitempty"`
 }
 
@@ -170,6 +178,8 @@ func pluginDTO(snapshot plugins.RuntimeSnapshot) PluginDTO {
 		LastHeartbeatAt:     optionalTime(snapshot.LastHeartbeatAt),
 		LastFrameAt:         optionalTime(snapshot.LastFrameAt),
 		NextRestartAt:       optionalTime(snapshot.NextRestartAt),
+		InstalledAt:         snapshot.InstalledAt.UTC(),
+		LastEnabledAt:       optionalTime(snapshot.LastEnabledAt),
 		LastError:           boundedMessage(snapshot.LastError),
 	}
 }
@@ -201,7 +211,7 @@ func validatePublicPluginSnapshot(snapshot plugins.RuntimeSnapshot) error {
 	if !validPublicPluginState(snapshot.State) {
 		return &userconfig.ValidationError{Field: "plugins", Err: pluginDataValidation("plugin state violates public bounds")}
 	}
-	for _, value := range []time.Time{snapshot.StartedAt, snapshot.LastHeartbeatAt, snapshot.LastFrameAt, snapshot.NextRestartAt} {
+	for _, value := range []time.Time{snapshot.StartedAt, snapshot.LastHeartbeatAt, snapshot.LastFrameAt, snapshot.NextRestartAt, snapshot.InstalledAt, snapshot.LastEnabledAt} {
 		if value.IsZero() {
 			continue
 		}

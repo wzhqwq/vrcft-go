@@ -9,6 +9,7 @@ import (
 
 	"github.com/wzhqwq/vrcft-go/internal/application"
 	"github.com/wzhqwq/vrcft-go/internal/avatar"
+	"github.com/wzhqwq/vrcft-go/internal/parameters"
 )
 
 type runtimePhase string
@@ -168,8 +169,18 @@ func runtimeApplicationDTO(status application.Status) RuntimeApplicationDTO {
 			TargetMode: boundedMessage(string(status.OSC.TargetMode)),
 			LastError:  boundedMessage(status.OSC.LastError),
 		},
-		PlanError:    boundedMessage(status.PlanError),
-		RuntimeError: boundedMessage(status.RuntimeError),
+		PlanError:      boundedMessage(status.PlanError),
+		RuntimeError:   boundedMessage(status.RuntimeError),
+		PlanParameters: make([]ParameterDriveDTO, 0),
+	}
+	if status.PlanStatus == avatar.StatusReady && status.PlanGeneration != 0 {
+		count := len(status.PlanParameters)
+		if count > int(parameters.ParameterCount) {
+			count = int(parameters.ParameterCount)
+		}
+		for _, item := range status.PlanParameters[:count] {
+			result.PlanParameters = append(result.PlanParameters, ParameterDriveDTO{Name: boundedMessage(item.Name), Driven: item.Driven})
+		}
 	}
 	if status.OSC.HasTarget {
 		result.OSC.Target = OSCTargetDTO{Host: boundedMessage(status.OSC.Target.Host), Port: status.OSC.Target.Port}
@@ -226,6 +237,7 @@ func cloneRuntimeSnapshot(value runtimeSnapshot) runtimeSnapshot {
 
 func cloneRuntimeApplicationDTO(value RuntimeApplicationDTO) RuntimeApplicationDTO {
 	value.PluginFailures = append([]PluginControlFailureDTO{}, value.PluginFailures...)
+	value.PlanParameters = append([]ParameterDriveDTO{}, value.PlanParameters...)
 	return value
 }
 

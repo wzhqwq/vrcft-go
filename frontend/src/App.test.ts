@@ -27,6 +27,7 @@ function runtimeWire(): RuntimeWire {
     application: {
       lifecycle: 'started', avatarId: 'avtr_demo', avatarName: 'Demo Avatar', planGeneration: 1,
       planStatus: 'ready', planSource: 'VRChat', configPath: '', configId: 'avtr_demo', generationExhausted: false,
+      planParameters: [],
       osc: {running: true, connected: true, hasTarget: true, targetMode: 'auto', target: {host: '127.0.0.1', port: 9000}},
       pluginFailures: [],
     },

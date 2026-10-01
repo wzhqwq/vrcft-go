@@ -23,6 +23,8 @@ export interface PluginView {
   readonly frameRate: number
   readonly consecutiveFailures: number
   readonly restartCount: number
+  readonly installedAt: string
+  readonly lastEnabledAt?: string | null
   readonly startedAt?: string | null
   readonly lastHeartbeatAt?: string | null
   readonly lastFrameAt?: string | null

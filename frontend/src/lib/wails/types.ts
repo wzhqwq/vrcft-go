@@ -40,11 +40,14 @@ export interface RuntimeApplicationWire {
   configPath: string
   configId: string
   generationExhausted: boolean
+  planParameters: ParameterDriveWire[]
   osc: RuntimeOscWire
   pluginFailures: PluginControlFailureWire[] | null
   planError?: string
   runtimeError?: string
 }
+
+export interface ParameterDriveWire { name: string; driven: boolean }
 
 export interface RuntimeOscWire {
   running: boolean
@@ -86,6 +89,8 @@ export interface PluginWire {
   frameRate: number
   consecutiveFailures: number
   restartCount: number
+  installedAt: string
+  lastEnabledAt?: string | null
   startedAt?: string | null
   lastHeartbeatAt?: string | null
   lastFrameAt?: string | null

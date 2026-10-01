@@ -22,6 +22,7 @@ function runtimeView(overrides: Partial<RuntimeView> = {}): RuntimeView {
     plan: {
       status: 'ready', source: 'VRChat', generation: 8,
       configId: 'avtr_demo', configPath: 'C:/Users/name/AppData/LocalLow/VRChat/VRChat/OSC/avatar.json', generationExhausted: false,
+      parameters: [],
     },
     osc: {state: 'manual', target: {host: '127.0.0.1', port: 9000}, error: '目标暂时不可达'},
     pluginFailures: [{pluginId: 'eye', operation: 'start', message: 'Eye Tracker 启动失败'}],

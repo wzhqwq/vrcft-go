@@ -11,6 +11,26 @@ export function selectImportantPlugins(plugins: readonly PluginView[]): readonly
   return selectPlugins(plugins, {query: '', filter: 'problem', page: 1, pageSize: 24}).items.slice(0, 4)
 }
 
+export function selectOverviewPlugins(plugins: readonly PluginView[]): readonly PluginView[] {
+  return Object.freeze([...plugins].sort((left, right) => {
+    const rank = overviewRank(left) - overviewRank(right)
+    if (rank !== 0) return rank
+    const leftTime = Date.parse(left.lastEnabledAt || left.installedAt) || 0
+    const rightTime = Date.parse(right.lastEnabledAt || right.installedAt) || 0
+    if (leftTime !== rightTime) return rightTime - leftTime
+    const name = compareText(left.name, right.name)
+    return name !== 0 ? name : compareText(left.id, right.id)
+  }).slice(0, 3))
+}
+
+function overviewRank(plugin: PluginView): number {
+  const state = plugin.state.toLowerCase()
+  if (failedStates.has(state)) return 0
+  if (recoveryStates.has(state) || plugin.consecutiveFailures > 0 || Boolean(plugin.lastError)) return 1
+  if (plugin.active && state === 'running') return 2
+  return 3
+}
+
 export function selectPlugins(plugins: readonly PluginView[], query: PluginQuery): PluginSelection {
   const needle = query.query.trim().toLowerCase()
   const filtered = plugins.filter((plugin) => {

@@ -15,7 +15,7 @@ function plugin(id: string, overrides: Partial<PluginView> = {}): PluginView {
   return {
     id, name: id === 'eye' ? 'Eye Tracker' : `Plugin ${id}`, description: `${id} description`, version: '1.0.0',
     capabilities: ['Eye', 'Expression'], enabled: true, active: true, state: 'running', configRevision: 1,
-    frameRate: 60, consecutiveFailures: 0, restartCount: 0, ...overrides,
+    frameRate: 60, consecutiveFailures: 0, restartCount: 0, installedAt: '2026-10-01T00:00:00Z', ...overrides,
   }
 }
 

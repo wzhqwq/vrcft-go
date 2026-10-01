@@ -18,6 +18,20 @@ import (
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
 
+func TestPluginDTOIncludesPreferenceTimes(t *testing.T) {
+	installed := time.Date(2026, 10, 2, 1, 2, 3, 0, time.UTC)
+	enabled := installed.Add(time.Minute)
+	dto := pluginDTO(plugins.RuntimeSnapshot{ID: "vendor.eye", InstalledAt: installed, LastEnabledAt: enabled})
+	if !dto.InstalledAt.Equal(installed) || dto.LastEnabledAt == nil || !dto.LastEnabledAt.Equal(enabled) {
+		t.Fatalf("times = %+v", dto)
+	}
+	clone := clonePluginDTOs([]PluginDTO{dto})
+	*clone[0].LastEnabledAt = time.Time{}
+	if !dto.LastEnabledAt.Equal(enabled) {
+		t.Fatal("timestamp pointer aliases source")
+	}
+}
+
 type fakePluginsBackend struct {
 	mu sync.Mutex
 
@@ -141,6 +155,7 @@ func TestPluginsAPIExposesOnlyApprovedWailsMethods(t *testing.T) {
 		{"ConsecutiveFailures", "int", "consecutiveFailures"}, {"RestartCount", "int", "restartCount"},
 		{"StartedAt", "*time.Time", "startedAt,omitempty"}, {"LastHeartbeatAt", "*time.Time", "lastHeartbeatAt,omitempty"},
 		{"LastFrameAt", "*time.Time", "lastFrameAt,omitempty"}, {"NextRestartAt", "*time.Time", "nextRestartAt,omitempty"},
+		{"InstalledAt", "time.Time", "installedAt"}, {"LastEnabledAt", "*time.Time", "lastEnabledAt,omitempty"},
 		{"LastError", "string", "lastError,omitempty"},
 	}
 	typeOfDTO := reflect.TypeOf(PluginDTO{})

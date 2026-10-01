@@ -17,6 +17,7 @@ export function mapRuntimeWire(wire: RuntimeWire): RuntimeView {
       configPath: application.configPath,
       configId: application.configId,
       generationExhausted: application.generationExhausted,
+      parameters: (application.planParameters ?? []).map((item) => ({name: item.name, driven: item.driven})),
     },
     osc: application === undefined ? undefined : mapOsc(application.osc),
     pluginFailures: application === undefined
@@ -66,7 +67,7 @@ export function classifyOsc(osc: RuntimeOscWire): OscState {
 
 function freezeRuntimeView(view: RuntimeView): RuntimeView {
   const avatar = Object.freeze({...view.avatar})
-  const plan = view.plan === undefined ? undefined : Object.freeze({...view.plan})
+  const plan = view.plan === undefined ? undefined : Object.freeze({...view.plan, parameters: Object.freeze(view.plan.parameters.map((item) => Object.freeze({...item})))})
   const osc = view.osc === undefined
     ? undefined
     : Object.freeze({

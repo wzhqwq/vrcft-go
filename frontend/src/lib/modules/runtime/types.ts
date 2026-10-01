@@ -26,6 +26,7 @@ export interface RuntimePlanView {
   readonly configPath: string
   readonly configId: string
   readonly generationExhausted: boolean
+  readonly parameters: readonly {readonly name: string; readonly driven: boolean}[]
 }
 
 export interface RuntimePluginFailureView {
