@@ -10,7 +10,7 @@
   const snapshot = $derived(state.snapshot)
   const plan = $derived(snapshot?.plan)
   const missingConfig = $derived(Boolean(snapshot?.avatar.id && plan?.status === 'failed' && !plan.configPath))
-  const fault = $derived(Boolean(plan?.status === 'failed' || state.status === 'problem'))
+  const fault = $derived(Boolean(plan?.status === 'failed' || state.status === 'problem' || snapshot?.runtimeError))
   const pending = $derived(state.status === 'loading' || Boolean(snapshot?.avatar.id && plan?.status !== 'ready' && plan?.status !== 'failed'))
   const count = $derived(plan?.parameters.filter((item) => item.driven).length ?? 0)
 </script>
@@ -27,7 +27,7 @@
       {#if plan.parameters.length > 0}
         <p class="mt-3 text-lg font-semibold">{state.status === 'stale' ? '最近记录' : '当前驱动'} {count} / 可驱动 {plan.parameters.length}</p>
         <p class="mt-1 text-sm text-text-muted">依据近期有效插件输入</p>
-        <div class="mt-4"><ParameterListDialog parameters={plan.parameters} /></div>
+        <div class="mt-4"><ParameterListDialog parameters={plan.parameters} stale={state.status === 'stale'} /></div>
       {:else}
         <p class="mt-3 text-text-muted">该 Avatar 没有请求软件支持的驱动参数。</p>
       {/if}
@@ -45,5 +45,9 @@
   {/if}
   {#if state.status === 'problem' && state.problem}
     <p class="mt-2 break-words text-sm text-danger">{state.problem.detail}</p>
+  {/if}
+  {#if snapshot?.runtimeError}
+    <p class="mt-3 break-words rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">运行时异常：{snapshot.runtimeError}</p>
+    <div class="mt-3"><Button label="前往诊断" tone="secondary" onclick={() => onNavigate('diagnostics')} /></div>
   {/if}
 </section>
