@@ -33,6 +33,7 @@ export async function installWailsMocks(page: Page): Promise<void> {
           lifecycle: 'started', avatarId: 'avtr_authoritative', avatarName: 'Authoritative Avatar',
           planGeneration: 7, planStatus: 'ready', planSource: 'VRChat', configPath: 'C:\\RAW_CONFIG_PATH_DO_NOT_LEAK',
           configId: 'avtr_authoritative', generationExhausted: false,
+          planParameters: [{name: 'v2/EyeLeftX', driven: true}, {name: 'v2/MouthSmileRight', driven: false}],
           osc: {running: true, connected: true, hasTarget: true, targetMode: 'auto', target: {host: '192.168.1.10', port: 9000}},
           pluginFailures: [], planError: 'Avatar plan unavailable: token=RAW_PLAN_ERROR_DO_NOT_LEAK', runtimeError: 'Runtime warning: password=RAW_RUNTIME_ERROR_DO_NOT_LEAK',
         },
@@ -40,14 +41,19 @@ export async function installWailsMocks(page: Page): Promise<void> {
       plugins: {
         revision: 1, updatedAt: '2026-09-01T00:00:00Z', plugins: [
           {
-            id: 'eye', name: 'Eye Tracker', description: 'Eye tracking input', version: '1.0.0', capabilities: ['eyes'],
+            id: 'eye', name: 'Eye Tracker', description: 'Eye tracking input', version: '1.0.0', capabilities: ['eye'],
             enabled: true, active: true, state: 'running', configRevision: 1, frameRate: 60,
-            consecutiveFailures: 0, restartCount: 0, startedAt: null, lastHeartbeatAt: null, lastFrameAt: null, nextRestartAt: null,
+            consecutiveFailures: 0, restartCount: 0, installedAt: '2026-09-01T00:00:00Z', lastEnabledAt: '2026-09-01T01:00:00Z', startedAt: null, lastHeartbeatAt: null, lastFrameAt: null, nextRestartAt: null,
           },
           {
-            id: 'lip', name: 'Lip Tracker', description: 'Lip tracking input', version: '1.0.0', capabilities: ['lips'],
+            id: 'lip', name: 'Lip Tracker', description: 'Lip tracking input', version: '1.0.0', capabilities: ['lip'],
             enabled: true, active: true, state: 'running', configRevision: 1, frameRate: 60,
-            consecutiveFailures: 0, restartCount: 0, startedAt: null, lastHeartbeatAt: null, lastFrameAt: null, nextRestartAt: null,
+            consecutiveFailures: 0, restartCount: 0, installedAt: '2026-09-01T00:00:00Z', lastEnabledAt: null, startedAt: null, lastHeartbeatAt: null, lastFrameAt: null, nextRestartAt: null,
+          },
+          {
+            id: 'face', name: 'Face Tracker', description: 'Expression input', version: '1.0.0', capabilities: ['expression'],
+            enabled: true, active: false, state: 'crashed', configRevision: 1, frameRate: 0,
+            consecutiveFailures: 1, restartCount: 1, installedAt: '2026-09-01T00:00:00Z', lastEnabledAt: '2026-09-01T02:00:00Z', startedAt: null, lastHeartbeatAt: null, lastFrameAt: null, nextRestartAt: null,
           },
         ],
       },
@@ -164,6 +170,7 @@ export async function installWailsMocks(page: Page): Promise<void> {
         resolve?.({revision: state.plugins.revision, updatedAt: state.plugins.updatedAt, pluginId: pluginID});
       },
       conflictNextSave: () => { nextSaveConflict = true; },
+      setOSCFailure: () => { Object.assign(state.runtime.application.osc, {connected: false, lastError: 'OSC offline'}); state.runtime.revision += 1; },
     };
   });
 }

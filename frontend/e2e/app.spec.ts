@@ -8,15 +8,38 @@ test.beforeEach(async ({page}) => {
   await expect(page.getByRole('heading', {name: '概览', exact: true})).toBeVisible();
 });
 
-test('shows authoritative overview avatar and OSC target', async ({page}) => {
+test('shows the drive summary, parameter flags, and independent OSC failure', async ({page}) => {
   await expect(page.getByText('Authoritative Avatar')).toBeVisible();
-  await expect(page.getByLabel('当前 Avatar').getByText('avtr_authoritative')).toBeVisible();
+  await expect(page.getByText('当前驱动 1 / 可驱动 2')).toBeVisible();
+  const trigger = page.getByRole('button', {name: '查看参数列表'});
+  await trigger.click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('v2/EyeLeftX');
+  await expect(dialog).toContainText('暂无有效输入');
+  await page.keyboard.press('Escape');
+  await expect(trigger).toBeFocused();
   await expect(page.getByText('192.168.1.10:9000')).toBeVisible();
-  await expect(page.getByText('自动发现')).toBeVisible();
+  await page.evaluate(() => (window as unknown as {__vrcftAcceptance: {setOSCFailure(): void}}).__vrcftAcceptance.setOSCFailure());
+  await emit(page, 'vrcft:v1:runtime-status');
+  await expect(page.getByText('OSC offline')).toBeVisible();
+  await expect(page.getByText('当前驱动 1 / 可驱动 2')).toBeVisible();
+});
+
+test('offers three ordered plugin controls and visible page buttons', async ({page}) => {
+  const rows = page.getByTestId('overview-plugin-row');
+  await expect(rows).toHaveCount(3);
+  expect(await rows.evaluateAll((elements) => elements.map((element) => element.getAttribute('data-plugin-id')))).toEqual(['face', 'eye', 'lip']);
+  await expect(rows.nth(0).getByLabel('Expression 输出能力')).toBeVisible();
+  await expect(rows.nth(1).getByLabel('Eye 输出能力')).toBeVisible();
+  await expect(rows.nth(2).getByLabel('Lip 输出能力')).toBeVisible();
+  await rows.nth(1).getByRole('button', {name: '停用 Eye Tracker'}).click();
+  expect(await calls(page)).toContainEqual(['PluginsAPI.SetEnabled', 'eye', false]);
+  await page.getByRole('button', {name: '前往设置'}).click();
+  await expect(page.getByRole('heading', {name: '设置', exact: true})).toBeVisible();
 });
 
 test('searches plugins and isolates a pending toggle to its target card', async ({page}) => {
-  await page.getByRole('button', {name: '插件'}).click();
+  await page.getByRole('button', {name: '插件', exact: true}).click();
   await page.getByRole('searchbox', {name: '搜索插件'}).fill('Eye');
   await expect(page.getByRole('heading', {name: 'Eye Tracker'})).toBeVisible();
   await expect(page.getByRole('heading', {name: 'Lip Tracker'})).toBeHidden();
@@ -33,13 +56,13 @@ test('searches plugins and isolates a pending toggle to its target card', async 
 });
 
 test('protects a dirty settings draft, restores dialog focus, saves, and shows restart status', async ({page}) => {
-  await page.getByRole('button', {name: '设置'}).click();
+  await page.getByRole('button', {name: '设置', exact: true}).click();
   const oscRoot = page.getByRole('textbox', {name: 'Avatar OSC 根目录'});
   await oscRoot.fill('C:\\New OSC');
   await oscRoot.blur();
   await expect(page.getByRole('region', {name: '未保存的更改'})).toBeVisible();
 
-  const overview = page.getByRole('button', {name: '概览'});
+  const overview = page.getByRole('button', {name: '概览', exact: true});
   await overview.click();
   const confirmation = page.getByRole('dialog');
   await expect(confirmation).toBeVisible();
@@ -54,7 +77,7 @@ test('protects a dirty settings draft, restores dialog focus, saves, and shows r
   await expect(confirmation).toBeVisible();
   await confirmation.getByRole('button', {name: '放弃更改'}).click();
   await expect(page.getByRole('heading', {name: '概览', exact: true})).toBeVisible();
-  await page.getByRole('button', {name: '设置'}).click();
+  await page.getByRole('button', {name: '设置', exact: true}).click();
   await expect(oscRoot).toHaveValue('C:\\New OSC');
   await expect(page.getByRole('region', {name: '未保存的更改'})).toBeVisible();
 
@@ -64,7 +87,7 @@ test('protects a dirty settings draft, restores dialog focus, saves, and shows r
 });
 
 test('keeps a dirty settings draft on conflict and offers confirmed reload', async ({page}) => {
-  await page.getByRole('button', {name: '设置'}).click();
+  await page.getByRole('button', {name: '设置', exact: true}).click();
   const oscRoot = page.getByRole('textbox', {name: 'Avatar OSC 根目录'});
   await oscRoot.fill('C:\\Conflict OSC');
   await page.evaluate(() => (window as unknown as {__vrcftAcceptance: {conflictNextSave(): void}}).__vrcftAcceptance.conflictNextSave());
@@ -124,7 +147,7 @@ test('retains detailed startup diagnostics when runtime status decoding fails', 
 });
 
 test('moves internal settings tabs with the keyboard', async ({page}) => {
-  await page.getByRole('button', {name: '设置'}).click();
+  await page.getByRole('button', {name: '设置', exact: true}).click();
   const general = page.getByRole('tab', {name: '常规'});
   await general.focus();
   await page.keyboard.press('ArrowRight');
