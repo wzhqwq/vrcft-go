@@ -43,7 +43,7 @@ Adapt managed Steam Link loopback OSC telemetry into subscribed tracking frames 
 Decode the one supported configuration object; receive bounded loopback UDP datagrams; maintain the fixed raw-field registry; decode complete OSC datagrams through `pkg/osc`; map fresh subscribed fields; and drive plugin activation, configuration recovery, health, and bounded diagnostics through `pluginapi.Host`.
 
 ## Non-responsibilities
-This package does not select sources, apply host-side filtering or calibration, perform final OSC output, configure SteamVR, or promise hardware compatibility beyond the documented synthetic input profile.
+This package does not select sources, apply host-side filtering or calibration, perform final OSC output, configure SteamVR, or promise hardware compatibility beyond the Pico 4 Pro eye tracking path confirmed in production testing.
 
 ## Current implementation
 The package accepts only an optional `listenPort` integer from 1 through 65535, defaulting to 9015, and listens only on IPv4 loopback. Its input boundary accepts the fixed Steam Link gaze and face-weight address profile, including both the documented `TongueOut` spelling and the observed `ToungeOut` alias, preserves valid wire order, and rejects malformed, unsupported, oversized, over-message-limit, and over-address-limit datagrams as a whole. Observed but deliberately unmapped Steam Link addresses and VRChat `/avatar/parameters/*` traffic are ignored without unknown-address warnings; unexpected addresses remain diagnostic. A Driver receives startup once, then applies typed host controls. It publishes only subscribed, fresh mapped fields at no more than 100 Hz; it retains no numeric cache while inactive or unsubscribed. Activation, subscription changes, and successful port rebinds reset the stream and fence queued receiver data by epoch and local receive time. Invalid configuration and failed binds leave controls alive; initial bind failures retry every two seconds, while a failed live port change preserves the working receiver. Health is Ready only after recognized valid input, Disconnected before input or after two seconds, and Error while a configuration or bind failure is unresolved.
@@ -83,7 +83,7 @@ passed both fuzz targets after 30 seconds each. The repository-wide test command
 still stops at the independent pre-existing `internal/projectstatus`
 `duplicate_check` failure.
 
-Pico 4 Pro validation on 2026-09-28 confirmed live OSC decoding, managed-process frame delivery, and independent eye and expression publication after an avatar plan was activated. Deferred telemetry and host startup limitations are tracked in `docs/project/issues.md`.
+Pico 4 Pro validation on 2026-09-28 confirmed live OSC decoding, managed-process frame delivery, and independent eye and expression publication after an avatar plan was activated. Production testing with Steam Link connected to a Pico 4 Pro confirmed correct eye tracking data; expression and other tracking parameter correctness was not verified in that test. Deferred telemetry and host startup limitations are tracked in `docs/project/issues.md`.
 
 ## Completion definition
 The package is complete when the Driver safely manages loopback reception, controls, recovery, health, and bounded diagnostics while publishing only fresh subscribed data from the fixed profile.

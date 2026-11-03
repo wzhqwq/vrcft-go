@@ -1,8 +1,10 @@
 # Steam Link tracking plugin
 
 This builtin plugin receives Steam Link OSC tracking on IPv4 loopback and publishes
-eye and expression data to vrcft-go. It is an offline implementation of the
-`steamlink-osc-v1` profile; it does not establish Pico 4 Pro compatibility.
+eye and expression data to vrcft-go. It implements the `steamlink-osc-v1` profile.
+Production testing with Steam Link connected to a Pico 4 Pro confirmed correct
+eye tracking data. Expression and other tracking parameters were not verified
+in that test.
 
 ## Build and discover
 
@@ -54,8 +56,9 @@ own mapping; it does not reuse LinkFT source code. Those sources describe
 provenance, not a guarantee that a Pico headset sends the same data. Test packets
 in this repository are synthetic fixtures, never Pico recordings. The plugin
 intentionally leaves pupil diameter, dilation, Lip data, and unverified
-face-confidence fields unsupported. Actual Pico 4 Pro hardware compatibility has
-not yet been validated.
+face-confidence fields unsupported. Production testing confirmed the eye tracking
+path with a Pico 4 Pro connected through Steam Link; it did not verify the
+expression mapping or other tracking parameters.
 
 ## Offline acceptance evidence
 
@@ -71,4 +74,5 @@ The repository-wide `go test ./...` still reports the independent,
 pre-existing `internal/projectstatus` `TestParseSpecRejectsInvalidMetadata`
 `duplicate_check` failure. It is not an adapter test failure.
 
-Pico 4 Pro hardware compatibility has not yet been validated.
+The production hardware test covered eye tracking only. Expression and other
+tracking parameters still need hardware validation.
