@@ -3,6 +3,7 @@ package steamlink
 import (
 	"errors"
 	"math"
+	"strings"
 
 	"github.com/wzhqwq/vrcft-go/pkg/osc"
 )
@@ -93,6 +94,39 @@ var inputRegistry = map[string]inputField{
 	"/sl/xrfb/facew/ToungeOut":           {id: rawTongueOut, argCount: 1},
 }
 
+// These observed addresses are intentionally outside steamlink-osc-v1. Keep
+// unexpected addresses visible in diagnostics without warning on every frame
+// of the known, unmapped telemetry stream.
+var ignoredInputAddresses = map[string]struct{}{
+	"/sl/xrfb/facec/UpperFace":            {},
+	"/sl/xrfb/facec/LowerFace":            {},
+	"/sl/xrfb/facew/BackDorsalVelar":      {},
+	"/sl/xrfb/facew/FrontDorsalPalate":    {},
+	"/sl/xrfb/facew/MidDorsalPalate":      {},
+	"/sl/xrfb/facew/TongueRetreat":        {},
+	"/sl/xrfb/facew/TongueTipAlveolar":    {},
+	"/sl/xrfb/facew/TongueTipInterdental": {},
+	"/sl/xrfb/facew/ToungeRetreat":        {},
+	"/sl/xrfb/facew/ToungeTipAlveolar":    {},
+	"/sl/xrfb/facew/ToungeTipInterdental": {},
+	"/tracking/eye/CenterVecFull":         {},
+	"/tracking/eye/EyesClosedAmount":      {},
+}
+
+func ignoredInputAddress(address string) bool {
+	if strings.HasPrefix(address, "/avatar/parameters/") {
+		return true
+	}
+	if strings.HasPrefix(address, "/sl/xrfb/facew/EyesLook") {
+		switch strings.TrimPrefix(address, "/sl/xrfb/facew/EyesLook") {
+		case "DownL", "DownR", "LeftL", "LeftR", "RightL", "RightR", "UpL", "UpR":
+			return true
+		}
+	}
+	_, ignored := ignoredInputAddresses[address]
+	return ignored
+}
+
 func decodeDatagram(packet []byte) ([]observation, inputReport, error) {
 	if len(packet) > maxDatagramBytes {
 		return nil, inputReport{}, errPacketLimit
@@ -115,6 +149,9 @@ func decodeDatagram(packet []byte) ([]observation, inputReport, error) {
 	for _, message := range messages {
 		field, ok := inputRegistry[message.Address]
 		if !ok {
+			if ignoredInputAddress(message.Address) {
+				continue
+			}
 			report.UnknownMessages++
 			if len(report.UnknownAddresses) < maxUnknownAddresses {
 				report.UnknownAddresses = append(report.UnknownAddresses, message.Address)

@@ -64,6 +64,52 @@ func TestInputAcceptsObservedTongueOutAlias(t *testing.T) {
 	}
 }
 
+func TestInputIgnoresKnownUnmappedSteamLinkTraffic(t *testing.T) {
+	addresses := []string{
+		"/avatar/parameters/LeftEyeLid",
+		"/avatar/parameters/Face/v2/JawOpen",
+		"/sl/xrfb/facec/UpperFace",
+		"/sl/xrfb/facec/LowerFace",
+		"/sl/xrfb/facew/EyesLookDownL",
+		"/sl/xrfb/facew/EyesLookDownR",
+		"/sl/xrfb/facew/EyesLookLeftL",
+		"/sl/xrfb/facew/EyesLookLeftR",
+		"/sl/xrfb/facew/EyesLookRightL",
+		"/sl/xrfb/facew/EyesLookRightR",
+		"/sl/xrfb/facew/EyesLookUpL",
+		"/sl/xrfb/facew/EyesLookUpR",
+		"/sl/xrfb/facew/BackDorsalVelar",
+		"/sl/xrfb/facew/FrontDorsalPalate",
+		"/sl/xrfb/facew/MidDorsalPalate",
+		"/sl/xrfb/facew/TongueRetreat",
+		"/sl/xrfb/facew/TongueTipAlveolar",
+		"/sl/xrfb/facew/TongueTipInterdental",
+		"/sl/xrfb/facew/ToungeRetreat",
+		"/sl/xrfb/facew/ToungeTipAlveolar",
+		"/sl/xrfb/facew/ToungeTipInterdental",
+		"/tracking/eye/CenterVecFull",
+		"/tracking/eye/EyesClosedAmount",
+	}
+	elements := make([][]byte, 0, len(addresses)+2)
+	for _, address := range addresses {
+		elements = append(elements, mustMarshalInput(t, osc.Message{Address: address, Args: []osc.Value{osc.Float32(0.5)}}))
+	}
+	elements = append(elements,
+		mustMarshalInput(t, osc.Message{Address: "/sl/xrfb/facew/JawDrop", Args: []osc.Value{osc.Float32(0.5)}}),
+		mustMarshalInput(t, osc.Message{Address: "/sl/xrfb/facew/NewField", Args: []osc.Value{osc.Float32(0.5)}}),
+	)
+	observations, report, err := decodeDatagram(mustMarshalBundleInput(t, elements...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 1 || observations[0].ID != rawJawDrop {
+		t.Fatalf("observations = %#v, want only JawDrop", observations)
+	}
+	if report.InvalidMessages != 0 || report.UnknownMessages != 1 || len(report.UnknownAddresses) != 1 || report.UnknownAddresses[0] != "/sl/xrfb/facew/NewField" {
+		t.Fatalf("report = %#v, want only the new field as unknown", report)
+	}
+}
+
 func TestInputRejectsUnsupportedSibling(t *testing.T) {
 	good, err := osc.MarshalMessage(osc.Message{
 		Address: "/sl/xrfb/facew/JawDrop", Args: []osc.Value{osc.Float32(0.5)},
