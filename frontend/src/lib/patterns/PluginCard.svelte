@@ -5,7 +5,7 @@
   import DetailList from './DetailList.svelte';
   import ProblemBanner from './ProblemBanner.svelte';
   import type {ProblemView} from '../presentation/problem.js';
-  import {copy} from '../../copy/zh-CN.js';
+  import {copy} from '../../copy/index.svelte.js';
   import {localizedState} from '../presentation/status.js';
 
   export interface PluginCardCommand {pluginId: string; enabled: boolean}

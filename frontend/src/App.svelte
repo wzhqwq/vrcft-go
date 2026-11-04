@@ -1,7 +1,7 @@
 <script lang="ts">
   import {onMount} from 'svelte'
 
-  import {copy} from './copy/zh-CN.js'
+  import {copy} from './copy/index.svelte.js'
   import {AppShell, type NavigationItem, type PageId} from './lib/components/layout/index.js'
   import {Button, Dialog} from './lib/components/ui/index.js'
   import {createPluginsModule} from './lib/modules/plugins/index.js'
@@ -23,12 +23,12 @@
   const runtime = createRuntimeModule(appPorts.runtime)
   const plugins = createPluginsModule(appPorts.plugins)
   const settings: SettingsModule = createSettingsModule(appPorts.settings)
-  const navigation: NavigationItem[] = [
+  let navigation = $derived<NavigationItem[]>([
     {id: 'overview', label: copy.navigation.overview},
     {id: 'plugins', label: copy.navigation.plugins},
     {id: 'settings', label: copy.navigation.settings},
     {id: 'diagnostics', label: copy.navigation.diagnostics},
-  ]
+  ])
 
   let activePage = $state<PageId>('overview')
   let pendingPage = $state<PageId | null>(null)

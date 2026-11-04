@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte"
   import { CircleAlert } from "lucide-svelte"
-  import { copy } from "../copy/zh-CN.js"
+  import { copy } from "../copy/index.svelte.js"
   import { copyText } from "../lib/presentation/clipboard.js"
   import { diagnosticText, diagnosticLogPath } from "../lib/presentation/diagnostics.js"
   import { localTime } from "../lib/presentation/time.js"
@@ -129,9 +129,9 @@
     try {
       if (!navigator.clipboard) throw new Error("clipboard unavailable")
       await navigator.clipboard.writeText(text)
-      copyStatus = "已复制"
+      copyStatus = copy.text.copied
     } catch {
-      copyStatus = "复制失败，请重试"
+      copyStatus = copy.text.copyFailed
     }
   }
 </script>
@@ -145,12 +145,12 @@
   <Stack gap="md">
     <section class="surface-card grid gap-2" aria-labelledby="recent-logs-title">
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <h2 id="recent-logs-title" class="font-semibold">最近日志</h2>
+        <h2 id="recent-logs-title" class="font-semibold">{copy.text.recentLogs}</h2>
         <div class="flex flex-wrap items-center gap-2">
           <label class="flex items-center gap-2 text-sm">
-            日志级别
+            {copy.text.logLevel}
             <select class="form-control focus-ring w-auto" bind:value={level}>
-              <option value="ALL">全部</option>
+              <option value="ALL">{copy.text.filterAll}</option>
               {#each ["DEBUG", "INFO", "WARN", "ERROR"] as value}
                 <option {value}>
                   {value}
@@ -159,13 +159,13 @@
             </select>
           </label>
           <Button
-            label="刷新日志"
+            label={copy.text.refreshLogs}
             tone="secondary"
             disabled={runtime.diagnostics?.loading ?? false}
             onclick={() => void runtime.refreshDiagnostics?.()}
           />
           <Button
-            label="复制日志"
+            label={copy.text.copyLogs}
             tone="secondary"
             onclick={() =>
               void copyDiagnosticText(
@@ -181,15 +181,15 @@
       {/if}
       {#if runtime.diagnostics?.snapshot?.diskError}
         <p class="break-words text-sm text-warning">
-          磁盘日志不可用：{safeText(runtime.diagnostics.snapshot.diskError)}
+          {copy.text.diskLogsUnavailable(safeText(runtime.diagnostics.snapshot.diskError))}
         </p>
       {/if}
       {#if runtime.diagnostics?.snapshot?.logPath}
         <p class="break-words text-xs text-text-muted">
-          日志位置：{diagnosticLogPath(runtime.diagnostics.snapshot.logPath)}
+          {copy.text.logLocation(diagnosticLogPath(runtime.diagnostics.snapshot.logPath))}
         </p>
       {/if}
-      <div class="max-h-72 min-w-0 overflow-y-auto" role="region" aria-label="最近日志内容">
+      <div class="max-h-72 min-w-0 overflow-y-auto" role="region" aria-label={copy.text.recentLogContent}>
         {#each filteredLogs as entry}
           <article class="grid gap-1 border-b border-border py-2 last:border-b-0">
             <p class="break-words text-xs text-text-muted">
@@ -206,7 +206,7 @@
           </article>
         {:else}
           <p class="py-3 text-sm text-text-muted">
-            {runtime.diagnostics?.loading ? "正在读取日志…" : "暂无匹配日志"}
+            {runtime.diagnostics?.loading ? copy.text.readingLogs : copy.text.noMatchingLogs}
           </p>
         {/each}
       </div>
@@ -229,7 +229,7 @@
                 <button
                   type="button"
                   class="focus-ring inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-warning text-warning hover:bg-warning/10 aria-pressed:bg-warning/20"
-                  aria-label={`查看 ${module.name} 报错`}
+                  aria-label={copy.text.viewModuleError(module.name)}
                   aria-pressed={selectedModule === module.name}
                   aria-controls="module-problem"
                   onclick={() => (selectedModule = module.name)}
@@ -253,7 +253,7 @@
               {selectedModule}：{problemTitle(selectedProblem)}
             </p>
             <p class="min-w-0 break-words text-xs text-text-muted">
-              错误代码：{safeText(selectedProblem.code)}
+              {copy.text.errorCode}: {safeText(selectedProblem.code)}
             </p>
             <p class="min-w-0 break-words text-sm text-text-muted">
               {safeText(selectedProblem.detail)}
@@ -266,7 +266,7 @@
     {#if runtime.diagnostics?.snapshot?.failure}
       {@const failure = runtime.diagnostics.snapshot.failure}
       <section class="surface-card grid gap-2 border-danger" aria-labelledby="startup-error-title">
-        <h2 id="startup-error-title" class="font-semibold text-danger">启动错误</h2>
+        <h2 id="startup-error-title" class="font-semibold text-danger">{copy.text.startupError}</h2>
         <p class="break-words text-sm text-text-muted">
           {localTime(failure.time)} · {safeText(failure.component)}/{safeText(failure.stage)} · {safeText(
             failure.id,

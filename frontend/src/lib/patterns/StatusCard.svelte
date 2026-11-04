@@ -1,5 +1,4 @@
 <script lang="ts">
-  import {copy} from '../../copy/zh-CN.js'
   import {Badge, Spinner} from '../components/ui/index.js';
 
   export type StatusTone = 'neutral' | 'success' | 'warning' | 'danger';
@@ -13,7 +12,7 @@
     loadingLabel?: string;
   };
 
-  let {title, detail, label, tone = 'neutral', loading = false, loadingLabel = copy.state.loading}: Props = $props();
+  let {title, detail, label, tone = 'neutral', loading = false, loadingLabel}: Props = $props();
 </script>
 
 <article class="surface-card grid min-w-0 gap-3" aria-label={title}>

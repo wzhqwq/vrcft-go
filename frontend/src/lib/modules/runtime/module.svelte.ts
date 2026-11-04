@@ -1,4 +1,5 @@
 import {presentProblem, type ProblemView} from '../../presentation/problem.js'
+import {copy} from '../../../copy/index.svelte.js'
 import {diagnosticText, diagnosticLogPath} from '../../presentation/diagnostics.js'
 import type {DiagnosticsWire} from '../../wails/types.js'
 import type {RuntimePort, Stop} from '../../wails/ports.js'
@@ -50,7 +51,7 @@ export function createRuntimeModule(port: RuntimePort): RuntimeModule {
       }
       diagnostics.error = null
     } catch (error) {
-      if (!disposed && request === diagnosticRequest) diagnostics.error = `读取日志失败：${diagnosticText(error)}`
+      if (!disposed && request === diagnosticRequest) diagnostics.error = copy.text.readLogsFailed(diagnosticText(error))
     } finally {
       if (!disposed && request === diagnosticRequest) diagnostics.loading = false
     }
@@ -74,7 +75,7 @@ export function createRuntimeModule(port: RuntimePort): RuntimeModule {
       stage = 'parse_status'
       const currentRevision = state.revision ?? -1
       if (!acceptRevision(currentRevision, wire.revision)) {
-        fail('revision', '收到无效或早于当前状态的修订号')
+        fail('revision', copy.text.invalidRevision)
         return
       }
 
@@ -136,7 +137,7 @@ export function createRuntimeModule(port: RuntimePort): RuntimeModule {
 
   function fail(stage: string, error: unknown) {
     const message = diagnosticText(error)
-    const labels: Record<string, string> = {get_status: '状态请求失败', parse_status: '状态解析失败', revision: '状态修订异常', subscribe: '事件订阅失败'}
+    const labels: Record<string, string> = {get_status: copy.text.statusRequestFailed, parse_status: copy.text.statusParseFailed, revision: copy.text.statusRevisionFailed, subscribe: copy.text.eventSubscriptionFailed}
     state.problem = presentProblem({code: 'internal', message: `${labels[stage]} (${stage})：${message}`})
     state.status = state.snapshot === null ? 'problem' : 'stale'
     try { void port.reportFrontendError?.(stage, message).catch(() => undefined) } catch { /* Reporting must not break status handling. */ }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import {Plus, Trash2} from 'lucide-svelte'
-  import {copy} from '../../../copy/zh-CN.js'
+  import {copy} from '../../../copy/index.svelte.js'
   import {IconButton, SelectField} from '../../components/ui/index.js'
   import type {ProcessingChannel, ProcessingOverride} from '../../modules/settings/form.js'
   import {createRowKeys} from './row-keys.js'

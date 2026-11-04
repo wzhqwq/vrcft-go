@@ -1,5 +1,5 @@
 <script lang="ts">
-  import {copy} from '../copy/zh-CN.js'
+  import {copy} from '../copy/index.svelte.js'
   import {copyText} from '../lib/presentation/clipboard.js'
   import {Button, TextField} from '../lib/components/ui/index.js'
   import {Inline, PageHeader, ResponsiveGrid, Stack} from '../lib/components/layout/index.js'
@@ -8,12 +8,12 @@
 
   type Props = {plugins: PluginsModule}
 
-  const filters: Array<{value: PluginFilter; label: string}> = [
+  let filters = $derived<Array<{value: PluginFilter; label: string}>>([
     {value: 'all', label: copy.text.filterAll},
     {value: 'enabled', label: copy.state.enabled},
     {value: 'disabled', label: copy.state.disabled},
     {value: 'problem', label: copy.text.filterProblems},
-  ]
+  ])
 
   let {plugins}: Props = $props()
 

@@ -1,6 +1,6 @@
 <script lang="ts">
   import {Pencil} from 'lucide-svelte'
-  import {copy} from '../../../copy/zh-CN.js'
+  import {copy} from '../../../copy/index.svelte.js'
   import {Dialog} from '../../components/ui/index.js'
   import ChannelSelector from './ChannelSelector.svelte'
   import {channelLabel} from './channels.js'
@@ -22,7 +22,7 @@
     triggerLabel,
     title,
     description,
-    emptyText = copy.text.noChannelsSelected,
+    emptyText,
     mode = 'multiple',
     unavailable = {},
     id = 'channel-selector-dialog',
@@ -49,7 +49,7 @@
       {#each selected as channel (channel)}
         <span class="min-w-0 truncate rounded-full border border-accent bg-accent/15 px-3 py-1.5 text-sm font-normal" title={channel}>{channelLabel(channel)}</span>
       {:else}
-        <span class="text-sm font-normal text-text-muted">{emptyText}</span>
+        <span class="text-sm font-normal text-text-muted">{emptyText ?? copy.text.noChannelsSelected}</span>
       {/each}
     </span>
     <Pencil aria-hidden="true" class="size-4 shrink-0 text-text-muted" />

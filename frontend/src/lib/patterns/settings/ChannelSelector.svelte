@@ -1,5 +1,5 @@
 <script lang="ts">
-  import {copy} from '../../../copy/zh-CN.js'
+  import {copy} from '../../../copy/index.svelte.js'
   import {TextField} from '../../components/ui/index.js'
   import {channelGroups} from './channels.js'
 
@@ -14,7 +14,7 @@
   let {selected, mode = 'multiple', unavailable = {}, id = 'channel-selector', onChange}: Props = $props()
   let query = $state('')
   let normalizedQuery = $derived(query.trim().toLocaleLowerCase())
-  let groups = $derived(channelGroups.map((group) => ({
+  let groups = $derived(channelGroups().map((group) => ({
     ...group,
     channels: group.channels.filter((channel) => !normalizedQuery
       || channel.label.toLocaleLowerCase().includes(normalizedQuery)

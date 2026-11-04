@@ -1,6 +1,6 @@
 <script lang="ts">
   import {Trash2} from 'lucide-svelte'
-  import {copy} from '../../../copy/zh-CN.js'
+  import {copy} from '../../../copy/index.svelte.js'
   import {Button, IconButton} from '../../components/ui/index.js'
   import ChannelSelectorDialog from './ChannelSelectorDialog.svelte'
   import {createRowKeys} from './row-keys.js'

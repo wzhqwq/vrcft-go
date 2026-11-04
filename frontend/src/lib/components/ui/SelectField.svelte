@@ -10,6 +10,7 @@
 <script lang="ts" generics="T extends string">
   import {Select} from 'bits-ui';
   import {ChevronDown} from 'lucide-svelte';
+  import {copy} from '../../../copy/index.svelte.js';
 
   type Props = {
     label: string;
@@ -30,7 +31,7 @@
     options,
     description,
     error,
-    placeholder = '请选择',
+    placeholder,
     value = $bindable<T | undefined>(undefined),
     onValueChange,
     id = globalThis.crypto?.randomUUID?.() ?? `field-${Math.random().toString(36).slice(2)}`,
@@ -44,7 +45,7 @@
 </script>
 
 <div class="grid min-w-0 gap-1.5">
-  <p class="min-w-0 font-semibold text-text" id={labelId}>{label}{#if required}<span aria-hidden="true" class="ml-1 text-text-muted">（必填）</span>{/if}</p>
+  <p class="min-w-0 font-semibold text-text" id={labelId}>{label}{#if required}<span aria-hidden="true" class="ml-1 text-text-muted">{copy.text.required}</span>{/if}</p>
   {#if description}<p class="text-sm text-text-muted" id={descriptionId}>{description}</p>{/if}
   <Select.Root bind:value={() => value, (next) => { value = next; if (next !== undefined) onValueChange?.(next) }} items={options} type="single" {disabled} {name} {required}>
     <Select.Trigger
@@ -55,7 +56,7 @@
       aria-required={required || undefined}
       class="group form-control focus-ring flex items-center justify-between gap-3 text-left data-[placeholder]:text-text-muted disabled:cursor-not-allowed disabled:opacity-60"
     >
-      <Select.Value {placeholder} />
+      <Select.Value placeholder={placeholder ?? copy.text.selectPlaceholder} />
       <ChevronDown aria-hidden="true" class="size-4 shrink-0 text-text-muted transition-transform group-data-[state=open]:rotate-180" />
     </Select.Trigger>
     <Select.Portal>

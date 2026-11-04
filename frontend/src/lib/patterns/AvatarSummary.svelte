@@ -1,5 +1,5 @@
 <script lang="ts">
-  import {copy} from '../../copy/zh-CN.js'
+  import {copy} from '../../copy/index.svelte.js'
   import {Button, Spinner} from '../components/ui/index.js';
 
   type Props = {

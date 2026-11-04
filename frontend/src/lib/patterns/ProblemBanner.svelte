@@ -1,5 +1,5 @@
 <script lang="ts">
-  import {copy} from '../../copy/zh-CN.js'
+  import {copy} from '../../copy/index.svelte.js'
   import {Button} from '../components/ui/index.js';
   import type {StatusTone} from './StatusCard.svelte';
 

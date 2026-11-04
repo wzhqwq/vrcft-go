@@ -1,4 +1,5 @@
 <script lang="ts">
+  import {copy} from '../../../copy/index.svelte.js';
   import {Switch} from 'bits-ui';
 
   type Props = {
@@ -30,7 +31,7 @@
 <div class="grid min-w-0 gap-1.5">
   <div class="flex min-w-0 items-center justify-between gap-3">
     <div class="min-w-0">
-      <p class="font-semibold text-text" id={labelId}>{label}{#if required}<span aria-hidden="true" class="ml-1 text-text-muted">（必填）</span>{/if}</p>
+      <p class="font-semibold text-text" id={labelId}>{label}{#if required}<span aria-hidden="true" class="ml-1 text-text-muted">{copy.text.required}</span>{/if}</p>
       {#if description}<p class="text-sm text-text-muted" id={descriptionId}>{description}</p>{/if}
     </div>
     <Switch.Root

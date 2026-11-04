@@ -2,6 +2,7 @@ import {fireEvent, render, screen, waitFor, within} from '@testing-library/svelt
 import {describe, expect, it, vi} from 'vitest'
 
 import SettingsPage from './SettingsPage.svelte'
+import {copy as liveCopy, getLanguagePreference, setLanguagePreference} from '../copy/index.svelte.js'
 import {createSettingsModule} from '../lib/modules/settings/index.js'
 import type {SettingsPort, Stop} from '../lib/wails/ports.js'
 import type {
@@ -91,6 +92,22 @@ async function renderReady(initial = candidate()) {
 }
 
 describe('SettingsPage', () => {
+  it('changes interface language immediately and persists it separately from restart-required settings', async () => {
+    setLanguagePreference('zh-CN')
+    const {port, settings} = await renderReady()
+    await fireEvent.pointerDown(screen.getByRole('button', {name: '语言'}), {button: 0, ctrlKey: false})
+    const english = screen.getByRole('option', {name: 'English'})
+    await fireEvent.pointerDown(english, {button: 0, ctrlKey: false})
+    await fireEvent.pointerUp(english, {button: 0, ctrlKey: false})
+    await waitFor(() => expect(screen.getByRole('heading', {name: 'Settings'})).toBeVisible())
+    expect(liveCopy.navigation.settings).toBe('Settings')
+    expect(getLanguagePreference()).toBe('en-US')
+    expect(localStorage.getItem('vrcft-go.language')).toBe('en-US')
+    expect(settings.state.dirty).toBe(false)
+    expect(port.saves).toHaveLength(0)
+    setLanguagePreference('zh-CN')
+  })
+
   it('routes the real aggregate processing backend field to a focusable summary', async () => {
     const {port, settings} = await renderReady()
     const checking = settings.validate()

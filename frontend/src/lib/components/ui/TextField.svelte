@@ -1,4 +1,5 @@
 <script lang="ts">
+  import {copy} from '../../../copy/index.svelte.js';
   import type {HTMLInputAttributes} from 'svelte/elements';
 
   type Props = Omit<HTMLInputAttributes, 'id' | 'value'> & {
@@ -25,7 +26,7 @@
 
 <div class="grid min-w-0 gap-1.5">
   <label class="min-w-0 font-semibold text-text" for={id}>
-    {label}{#if required}<span aria-hidden="true" class="ml-1 text-text-muted">（必填）</span>{/if}
+    {label}{#if required}<span aria-hidden="true" class="ml-1 text-text-muted">{copy.text.required}</span>{/if}
   </label>
   {#if description}<p class="text-sm text-text-muted" id={descriptionId}>{description}</p>{/if}
   <input

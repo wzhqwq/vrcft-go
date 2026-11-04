@@ -1,4 +1,4 @@
-import {copy} from '../../../copy/zh-CN.js'
+import {copy} from '../../../copy/index.svelte.js'
 import type {ProblemView} from '../../presentation/problem.js'
 import type {SettingsCandidate} from './form.js'
 

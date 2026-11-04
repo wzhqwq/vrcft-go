@@ -1,5 +1,5 @@
 <script lang="ts">
-  import {copy} from '../../../copy/zh-CN.js'
+  import {copy} from '../../../copy/index.svelte.js'
   import {Button, TextField} from '../../components/ui/index.js'
   import {createRowKeys} from './row-keys.js'
 

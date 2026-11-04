@@ -1,4 +1,4 @@
-import {copy} from '../../copy/zh-CN.js'
+import {copy} from '../../copy/index.svelte.js'
 
 type Tone = 'neutral' | 'success' | 'warning' | 'danger'
 export function phasePresentation(phase: string): {label: string; tone: Tone} {

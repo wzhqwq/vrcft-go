@@ -1,6 +1,7 @@
 <script lang="ts">
   import type {Snippet} from 'svelte';
   import {Dialog as BitsDialog} from 'bits-ui';
+  import {copy} from '../../../copy/index.svelte.js';
 
   type Props = {
     triggerLabel: string;
@@ -18,7 +19,7 @@
     triggerLabel,
     title,
     description,
-    closeLabel = '关闭',
+    closeLabel,
     open = $bindable(false),
     showTrigger = true,
     trigger,
@@ -45,7 +46,7 @@
       </div>
       {#if children}{@render children()}{/if}
       <div class="flex justify-end">
-        <BitsDialog.Close class="focus-ring rounded-lg border border-border bg-surface-raised px-4 py-2 font-semibold text-text transition-colors hover:bg-surface">{closeLabel}</BitsDialog.Close>
+        <BitsDialog.Close class="focus-ring rounded-lg border border-border bg-surface-raised px-4 py-2 font-semibold text-text transition-colors hover:bg-surface">{closeLabel ?? copy.text.close}</BitsDialog.Close>
       </div>
     </BitsDialog.Content>
   </BitsDialog.Portal>

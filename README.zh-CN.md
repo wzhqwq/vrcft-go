@@ -11,6 +11,7 @@ VRCFaceTracking-Go 是一款 Windows 桌面应用，可通过 OSC 将本地插�
 - **调节追踪效果。** 为所有通道或指定通道设置输入校准、响应、平滑及信号丢失处理；互斥组可避免冲突通道同时驱动 Avatar。
 - **连接 VRChat OSC。** 自动发现 OSC 输出目标，或手动指定 IP 地址与端口。
 - **查看运行情况。** “概览”展示 Avatar 驱动状态、支持与正在驱动的参数、插件输入和 OSC 输出；“诊断”展示启动故障、模块状态和可复制的近期脱敏日志。
+- **选择界面语言。** 支持简体中文和英语；可在“设置”中跟随系统或手动选择。系统语言不受支持时回退为英语。
 
 ## 项目来源与致谢
 
@@ -21,7 +22,7 @@ VRCFaceTracking-Go 是对 [VRCFaceTracking](https://github.com/benaclejames/VRCF
 ## Windows 上手
 
 1. 在 PowerShell 中运行 `./build/build-desktop.ps1` 构建桌面应用。生成的程序位于 `build/bin/vrcft-go2.exe`，内置 Steam Link 插件位于 `build/bin/plugins/steamlink/`。如已安装 NSIS，也可以运行 `./build/build-desktop.ps1 -NSIS` 制作安装包。产物目录详见[构建说明](build/README.md)。
-2. 启动应用，在“设置”中检查 Avatar OSC 目录，必要时指定备用 Avatar 配置。保存后的“设置”修改会在重启应用后生效。
+2. 启动应用，在“设置”中检查 Avatar OSC 目录，必要时指定备用 Avatar 配置。追踪设置在重启后生效；语言选择立即生效。
 3. 如使用 Steam Link，请在 Steam Link / SteamVR 中开启眼部、面部追踪共享及 OSC 输出，将输出端口设为插件的 `listenPort`（默认 `9015`），然后在“插件”页启用 **Steam Link**。具体操作见 [Steam Link 设置说明](plugins/steamlink/README.md)。
 4. 打开 VRChat，在“概览”查看当前 Avatar、插件活动状态和 OSC 目标。如果追踪数据没有到达 Avatar，可在“诊断”中检查启动状态与近期日志。
 

@@ -1,4 +1,4 @@
-import {copy} from '../../copy/zh-CN'
+import {copy} from '../../copy/index.svelte'
 import type {ProblemWire} from '../wails/types'
 
 export type ProblemTone = 'danger' | 'warning'

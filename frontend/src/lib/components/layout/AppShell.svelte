@@ -1,5 +1,6 @@
 <script lang="ts">
   import type {Snippet} from 'svelte';
+  import {copy} from '../../../copy/index.svelte.js';
 
   import NavigationItems from './NavigationItems.svelte';
   import type {NavigationItem, PageId} from './NavigationItems.svelte';
@@ -19,7 +20,7 @@
   data-testid="app-shell"
   class={`grid h-dvh min-w-0 grid-rows-[auto_minmax(0,1fr)] ${className}`}
 >
-  <nav class="min-w-0 overflow-x-auto border-b border-border bg-surface" aria-label="主导航">
+  <nav class="min-w-0 overflow-x-auto border-b border-border bg-surface" aria-label={copy.text.mainNavigation}>
     <NavigationItems items={navigation} {activePage} {onNavigate} />
   </nav>
   <div class="min-h-0 min-w-0 overflow-y-auto p-3">{@render content()}</div>

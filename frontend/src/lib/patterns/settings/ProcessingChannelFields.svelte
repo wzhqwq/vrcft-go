@@ -1,6 +1,6 @@
 <script lang="ts">
   import {Tabs as BitsTabs} from 'bits-ui'
-  import {copy} from '../../../copy/zh-CN.js'
+  import {copy} from '../../../copy/index.svelte.js'
   import {ResponsiveGrid} from '../../components/layout/index.js'
   import {NumberField, SelectField, SwitchField} from '../../components/ui/index.js'
   import type {ProcessingChannel} from '../../modules/settings/form.js'
@@ -12,17 +12,17 @@
     onChange: (value: ProcessingChannel) => void;
   }
 
-  const stages = [
+  let stages = $derived([
     {value: 'calibration', label: copy.text.calibration},
     {value: 'tuning', label: copy.text.tuning},
     {value: 'filter', label: copy.text.filter},
     {value: 'dropout', label: copy.text.dropout},
-  ] satisfies Array<{value: ProcessingStage; label: string}>
-  const filterModes = [
+  ] satisfies Array<{value: ProcessingStage; label: string}>)
+  let filterModes = $derived([
     {value: 'none', label: copy.text.noFilter},
     {value: 'ema', label: 'EMA'},
     {value: 'one_euro', label: 'One Euro'},
-  ]
+  ])
 
   let {value, id = 'processing-channel', onChange}: Props = $props()
   let stage = $state<ProcessingStage>('calibration')

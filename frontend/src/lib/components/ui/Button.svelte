@@ -1,6 +1,7 @@
 <script lang="ts">
   import type {Snippet} from 'svelte';
   import type {HTMLButtonAttributes} from 'svelte/elements';
+  import {copy} from '../../../copy/index.svelte.js';
 
   type Tone = 'primary' | 'secondary' | 'danger';
   type Props = Omit<HTMLButtonAttributes, 'children' | 'class' | 'disabled' | 'type'> & {
@@ -26,7 +27,7 @@
     type = 'button',
     disabled = false,
     loading = false,
-    loadingLabel = '正在处理',
+    loadingLabel,
     children,
     class: className = '',
     ...rest
@@ -51,4 +52,4 @@
     {label}
   {/if}
 </button>
-{#if loading}<span class="sr-only" id={statusId} role="status">{loadingLabel}</span>{/if}
+{#if loading}<span class="sr-only" id={statusId} role="status">{loadingLabel ?? copy.text.processingAction}</span>{/if}

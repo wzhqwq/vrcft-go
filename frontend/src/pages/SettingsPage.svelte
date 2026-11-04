@@ -1,5 +1,6 @@
 <script lang="ts">
-  import {copy} from '../copy/zh-CN.js'
+  import {copy} from '../copy/index.svelte.js'
+  import {getLanguagePreference, setLanguagePreference, type LanguagePreference} from '../copy/index.svelte.js'
   import {copyText} from '../lib/presentation/clipboard.js'
   import {tick} from 'svelte'
 
@@ -20,15 +21,21 @@
   type Section = 'general' | 'processing' | 'osc'
   type Props = {settings: SettingsModule}
 
-  const sections = [
+  let sections = $derived([
     {value: 'general', label: copy.text.general},
     {value: 'processing', label: copy.text.processing},
     {value: 'osc', label: 'OSC'},
-  ] satisfies Array<{value: Section; label: string}>
-  const targetModes = [
+  ] satisfies Array<{value: Section; label: string}>)
+  let targetModes = $derived([
     {value: 'auto', label: copy.text.automatic},
     {value: 'manual', label: copy.text.manual},
-  ]
+  ])
+  let languageOptions = $derived([
+    {value: 'system', label: copy.text.languageSystem},
+    {value: 'en-US', label: copy.text.languageEnglish},
+    {value: 'zh-CN', label: copy.text.languageChinese},
+  ])
+  let languagePreference = $derived(getLanguagePreference())
 
   let {settings}: Props = $props()
   let section = $state<Section>('general')
@@ -86,6 +93,16 @@
 
 <main class="page-grid min-w-0" aria-label={copy.navigation.settings}>
   <PageHeader title={copy.navigation.settings} description={copy.text.settingsDescription} />
+
+  <FormSection title={copy.text.language} description={copy.text.languageDescription}>
+    <SelectField
+      id="interface-language"
+      label={copy.text.language}
+      value={languagePreference}
+      options={languageOptions}
+      onValueChange={(value) => setLanguagePreference(value as LanguagePreference)}
+    />
+  </FormSection>
 
   {#if settings.state.status === 'loading'}
     <StatusCard title={copy.navigation.settings} label={copy.state.loading} tone="neutral" loading loadingLabel={copy.text.readSettings} />

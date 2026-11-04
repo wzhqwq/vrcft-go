@@ -11,6 +11,7 @@ VRCFaceTracking-Go is a Windows desktop app that sends face and eye tracking dat
 - **Tunes tracking output.** Set input calibration, response, smoothing, and signal-loss behavior globally or per channel. Mutual exclusion groups prevent conflicting channels from driving an avatar at the same time.
 - **Connects to VRChat OSC.** Discover the OSC output target automatically or set an IP address and port manually.
 - **Shows what is happening.** Overview displays avatar drive status, supported and currently driven parameters, plugin input, and OSC output. Diagnostics shows startup failures, module state, and recent redacted logs that can be copied when reporting a problem.
+- **Uses your preferred language.** The interface supports English and Simplified Chinese. Choose a language in Settings or follow the system language; unsupported system languages use English.
 
 ## Project origins and credits
 
@@ -21,7 +22,7 @@ Some bundled plugin work draws on community projects. In particular, the Steam L
 ## Get started on Windows
 
 1. Build the desktop app with `./build/build-desktop.ps1` in PowerShell. The output is `build/bin/vrcft-go2.exe`, with the included Steam Link plugin under `build/bin/plugins/steamlink/`. You can also use `./build/build-desktop.ps1 -NSIS` to create an installer when NSIS is available. See [build instructions](build/README.md) for the artifact layout.
-2. Run the app. In **Settings**, check the Avatar OSC directory and, if needed, choose a fallback avatar configuration. Saved Settings changes take effect after restarting the app.
+2. Run the app. In **Settings**, check the Avatar OSC directory and, if needed, choose a fallback avatar configuration. Tracking settings take effect after restarting; the language choice applies immediately.
 3. If using Steam Link, enable its eye and face tracking sharing and OSC output in Steam Link / SteamVR. Match its output port to the plugin's `listenPort` (default `9015`), then enable **Steam Link** on the **Plugins** page. See the [Steam Link setup guide](plugins/steamlink/README.md) for details.
 4. Open VRChat and check **Overview** for the active avatar, plugin activity, and OSC target. If tracking does not reach the avatar, open **Diagnostics** to inspect the startup state and recent logs.
 

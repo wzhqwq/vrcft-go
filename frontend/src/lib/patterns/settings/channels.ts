@@ -1,3 +1,5 @@
+import {getLocale} from '../../../copy/index.svelte.js'
+
 export interface ChannelOption {
   id: string
   label: string
@@ -58,10 +60,18 @@ export const channels: readonly ChannelOption[] = [
 
 const labels = new Map(channels.map((channel) => [channel.id, channel.label]))
 
-export const channelGroups = categoryOrder.map((category) => ({
-  category,
-  channels: channels.filter((channel) => channel.category === category),
-})).filter((group) => group.channels.length > 0)
+const englishCategories: Record<string, string> = {
+  '眼动': 'Eye tracking', '眼部表情': 'Eye expressions', '眉部': 'Brows', '鼻部': 'Nose',
+  '面颊': 'Cheeks', '下颌': 'Jaw', '嘴部': 'Mouth', '舌部': 'Tongue', '颈部与其他': 'Neck and other',
+}
+
+export function channelGroups(): Array<{category: string; channels: ChannelOption[]}> {
+  const english = getLocale() === 'en-US'
+  return categoryOrder.map((category) => ({
+    category: english ? englishCategories[category]! : category,
+    channels: channels.filter((channel) => channel.category === category),
+  })).filter((group) => group.channels.length > 0)
+}
 
 export function channelLabel(id: string): string {
   return labels.get(id) ?? id
