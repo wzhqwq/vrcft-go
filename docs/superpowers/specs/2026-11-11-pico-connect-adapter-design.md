@@ -1,6 +1,6 @@
 # Pico Connect Adapter Design
 
-Date: 2026-11-11. Status: proposed for approval.
+Date: 2026-11-11. Status: approved for implementation.
 
 ## Intent and evidence
 
