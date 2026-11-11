@@ -99,6 +99,9 @@ Section
     SetOutPath "$INSTDIR\plugins\steamlink"
     File "..\..\bin\plugins\steamlink\manifest.json"
     File "..\..\bin\plugins\steamlink\steamlink-plugin.exe"
+    SetOutPath "$INSTDIR\plugins\pico-connect"
+    File "..\..\bin\plugins\pico-connect\manifest.json"
+    File "..\..\bin\plugins\pico-connect\pico-connect-plugin.exe"
     SetOutPath "$INSTDIR"
 
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"

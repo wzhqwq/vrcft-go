@@ -43,6 +43,19 @@ checks:
     pattern: 'steamlink-plugin\.exe'
     weight: 1
     required: true
+  - id: pico-connect-plugin-build-script
+    description: PICO Connect development plugin build script exists
+    type: file
+    path: build/build-pico-connect.ps1
+    weight: 1
+    required: true
+  - id: pico-connect-plugin-layout
+    description: PICO Connect build script stages the manifest and executable
+    type: symbol
+    path: build/build-pico-connect.ps1
+    pattern: 'pico-connect-plugin\.exe'
+    weight: 1
+    required: true
 ---
 # Subsystem: build-release
 
@@ -54,8 +67,8 @@ Own Wails configuration, platform assets, version metadata, packaging, and relea
 Feature implementation and runtime update policy belong to product packages.
 ## Current implementation
 Wails configuration and Windows/macOS asset directories exist. The Windows build
-scripts stage the desktop executable and the builtin Steam Link manifest/executable
-pair in the same `plugins` directory derived by `internal/userconfig/paths.go`.
+scripts stage the desktop executable and the builtin Steam Link and PICO Connect
+manifest/executable pairs in the same `plugins` directory derived by `internal/userconfig/paths.go`.
 ## Public/internal interfaces
 Documented developer build commands and release artifacts.
 ## Owned data
@@ -78,6 +91,7 @@ spaces and scans its real manifest/executable pair through `DirectoryCatalog`.
 No complete CI/release workflow is specified in the current repository.
 ## Completion definition
 A clean checkout produces verified versioned release artifacts, including
-`plugins/steamlink/{manifest.json,steamlink-plugin.exe}` beside the desktop
+`plugins/steamlink/{manifest.json,steamlink-plugin.exe}` and
+`plugins/pico-connect/{manifest.json,pico-connect-plugin.exe}` beside the desktop
 executable. NSIS compilation is additionally verified when NSIS tooling is
 available.

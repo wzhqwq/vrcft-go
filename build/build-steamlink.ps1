@@ -29,7 +29,7 @@ $pluginDir = [System.IO.Path]::GetFullPath((Join-Path $pluginRootPath 'steamlink
 $manifestPath = Join-Path $repoPath 'plugins/steamlink/manifest.json'
 $executablePath = Join-Path $pluginDir 'steamlink-plugin.exe'
 
-$env:GOCACHE = 'F:\dev\vrcft-go\.go-gocache'
+$env:GOCACHE = Join-Path $repoPath '.go-gocache'
 New-Item -ItemType Directory -Force -Path $env:GOCACHE | Out-Null
 New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
 

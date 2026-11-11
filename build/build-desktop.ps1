@@ -24,8 +24,9 @@ $repoPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $pluginRoot = [System.IO.Path]::GetFullPath((Join-Path $repoPath 'build/bin/plugins'))
 $desktopExecutable = Join-Path $repoPath 'build/bin/vrcft-go2.exe'
 $pluginScript = Join-Path $repoPath 'build/build-steamlink.ps1'
+$picoPluginScript = Join-Path $repoPath 'build/build-pico-connect.ps1'
 
-$env:GOCACHE = 'F:\dev\vrcft-go\.go-gocache'
+$env:GOCACHE = Join-Path $repoPath '.go-gocache'
 New-Item -ItemType Directory -Force -Path $env:GOCACHE | Out-Null
 
 Push-Location $repoPath
@@ -51,10 +52,17 @@ try {
         throw 'Steam Link plugin staging failed'
     }
 
+    & $picoPluginScript -PluginRoot $pluginRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw 'PICO Connect plugin staging failed'
+    }
+
     $requiredPaths = @(
         $desktopExecutable,
         (Join-Path $pluginRoot 'steamlink/manifest.json'),
-        (Join-Path $pluginRoot 'steamlink/steamlink-plugin.exe')
+        (Join-Path $pluginRoot 'steamlink/steamlink-plugin.exe'),
+        (Join-Path $pluginRoot 'pico-connect/manifest.json'),
+        (Join-Path $pluginRoot 'pico-connect/pico-connect-plugin.exe')
     )
     foreach ($path in $requiredPaths) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
