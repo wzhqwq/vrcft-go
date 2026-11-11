@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "pico-connect",
+  "name": "PICO Connect",
+  "version": "0.1.0",
+  "description": "Eye and expression tracking from PICO Connect.",
+  "protocolMin": 1,
+  "protocolMax": 1,
+  "entrypoint": "pico-connect-plugin.exe",
+  "capabilities": 3
+}
