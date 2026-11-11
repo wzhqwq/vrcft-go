@@ -2,6 +2,7 @@ package picoconnect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -15,11 +16,16 @@ import (
 const (
 	publishInterval   = 10 * time.Millisecond
 	disconnectedAfter = 2 * time.Second
+	bindRetryInterval = 2 * time.Second
 )
 
-type Driver struct{}
+type Driver struct {
+	listen func(*net.UDPAddr) (*net.UDPConn, error)
+}
 
-func New() *Driver { return &Driver{} }
+func New() *Driver {
+	return &Driver{listen: func(addr *net.UDPAddr) (*net.UDPConn, error) { return net.ListenUDP("udp4", addr) }}
+}
 
 func (*Driver) Descriptor() pluginapi.Descriptor {
 	return pluginapi.Descriptor{APIVersion: pluginapi.APIVersion, ID: "pico-connect", Name: "PICO Connect", Version: "0.1.0", Description: "Eye and expression tracking from PICO Connect.", Capabilities: trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression}
@@ -31,18 +37,31 @@ type receivedPacket struct {
 	epoch uint64
 }
 
-func (*Driver) Run(ctx context.Context, host pluginapi.Host) error {
+func acceptsPacket(packet receivedPacket, epoch uint64, fence time.Time) bool {
+	return packet.epoch == epoch && !packet.at.Before(fence)
+}
+
+func (d *Driver) Run(ctx context.Context, host pluginapi.Host) error {
 	started := time.Now()
 	state := newStreamState(started)
 	startup := host.Startup()
 	active, sub := startup.Active, startup.Subscription.Normalize()
 	state.reset(active, sub)
 	var epoch atomic.Uint64
+	var fence time.Time
 	packets := make(chan receivedPacket, 64)
+	var oversized atomic.Uint64
+	var queueDropped atomic.Uint64
+	var invalidPackets uint64
+	var pendingOversized uint64
+	var pendingQueueDropped uint64
+	var lastDiagnostic time.Time
 	var conn *net.UDPConn
 	var workerDone chan error
 	var cfg config
 	var cfgValid bool
+	var pending *config
+	var retryAt time.Time
 	var statusError string
 	var lastInput time.Time
 	var publishedStatus pluginapi.DeviceStatus
@@ -58,11 +77,11 @@ func (*Driver) Run(ctx context.Context, host pluginapi.Host) error {
 		}
 	}
 	defer closeReceiver()
+	transition := func() { epoch.Add(1); fence = time.Now(); state.reset(active, sub) }
 	bind := func(candidate config) error {
 		if candidate.TransferProtocol == 0 {
 			closeReceiver()
-			epoch.Add(1)
-			state.reset(active, sub)
+			transition()
 			cfg = candidate
 			cfgValid = true
 			return nil
@@ -72,13 +91,12 @@ func (*Driver) Run(ctx context.Context, host pluginapi.Host) error {
 		if err != nil {
 			return err
 		}
-		next, err := net.ListenUDP("udp4", addr)
+		next, err := d.listen(addr)
 		if err != nil {
 			return err
 		}
 		closeReceiver()
-		epoch.Add(1)
-		state.reset(active, sub)
+		transition()
 		cfg = candidate
 		cfgValid = true
 		conn = next
@@ -86,18 +104,22 @@ func (*Driver) Run(ctx context.Context, host pluginapi.Host) error {
 		go func(socket *net.UDPConn, done chan<- error) {
 			buffer := make([]byte, 65535)
 			for {
+				readEpoch := epoch.Load()
 				n, _, err := socket.ReadFromUDP(buffer)
 				if err != nil {
-					done <- nil
+					done <- err
 					return
 				}
+				receivedAt := time.Now()
 				if n > 2048 {
+					oversized.Add(1)
 					continue
 				}
-				packet := receivedPacket{data: append([]byte(nil), buffer[:n]...), at: time.Now(), epoch: epoch.Load()}
+				packet := receivedPacket{data: append([]byte(nil), buffer[:n]...), at: receivedAt, epoch: readEpoch}
 				select {
 				case packets <- packet:
 				default:
+					queueDropped.Add(1)
 				}
 			}
 		}(next, workerDone)
@@ -124,6 +146,7 @@ func (*Driver) Run(ctx context.Context, host pluginapi.Host) error {
 		statusError = fmt.Sprintf("invalid configuration revision %d", startup.Config.Revision)
 	} else if err := bind(initial); err != nil {
 		statusError = "unable to listen on configured port"
+		pending, retryAt = &initial, time.Now().Add(bindRetryInterval)
 	}
 	status(time.Now())
 	ticker := time.NewTicker(publishInterval)
@@ -136,15 +159,13 @@ func (*Driver) Run(ctx context.Context, host pluginapi.Host) error {
 		case pluginapi.ActiveChanged:
 			if active != e.Active {
 				active = e.Active
-				epoch.Add(1)
-				state.reset(active, sub)
+				transition()
 			}
 		case pluginapi.SubscriptionChanged:
 			next := e.Subscription.Normalize()
 			if next != sub {
 				sub = next
-				epoch.Add(1)
-				state.reset(active, sub)
+				transition()
 			}
 		case pluginapi.ConfigChanged:
 			candidate, err := parseConfig(e.Config.Data)
@@ -154,12 +175,17 @@ func (*Driver) Run(ctx context.Context, host pluginapi.Host) error {
 			}
 			if cfgValid && candidate == cfg {
 				statusError = ""
+				pending = nil
 				break
 			}
 			if err := bind(candidate); err != nil {
 				statusError = fmt.Sprintf("unable to apply configuration revision %d", e.Config.Revision)
+				if conn == nil {
+					pending, retryAt = &candidate, time.Now().Add(bindRetryInterval)
+				}
 			} else {
 				statusError = ""
+				pending = nil
 				lastInput = time.Time{}
 			}
 		}
@@ -189,11 +215,12 @@ func (*Driver) Run(ctx context.Context, host pluginapi.Host) error {
 				return nil
 			}
 		case packet := <-packets:
-			if packet.epoch != epoch.Load() || !cfgValid || cfg.TransferProtocol != 2 {
+			if !acceptsPacket(packet, epoch.Load(), fence) || !cfgValid || cfg.TransferProtocol != 2 {
 				continue
 			}
 			parsed, err := parseLegacyPacket(packet.data)
 			if err != nil {
+				invalidPackets++
 				continue
 			}
 			valid := false
@@ -210,15 +237,35 @@ func (*Driver) Run(ctx context.Context, host pluginapi.Host) error {
 			}
 		case <-ticker.C:
 			now := time.Now()
-			if cfgValid && cfg.TransferProtocol == 2 && conn == nil {
-				if err := bind(cfg); err == nil {
+			pendingOversized += oversized.Swap(0)
+			pendingQueueDropped += queueDropped.Swap(0)
+			if cfgValid && (invalidPackets > 0 || pendingOversized > 0 || pendingQueueDropped > 0) && (lastDiagnostic.IsZero() || now.Sub(lastDiagnostic) >= 5*time.Second) {
+				host.Log(pluginapi.LogWarn, fmt.Sprintf("PICO Connect protocol=%d port=%d discarded malformed=%d oversized=%d queue-full=%d packets", cfg.TransferProtocol, cfg.ListenPort, invalidPackets, pendingOversized, pendingQueueDropped))
+				invalidPackets, pendingOversized, pendingQueueDropped, lastDiagnostic = 0, 0, 0, now
+			}
+			if pending != nil && !now.Before(retryAt) {
+				if err := bind(*pending); err == nil {
 					statusError = ""
+					pending = nil
+					lastInput = time.Time{}
+				} else {
+					retryAt = now.Add(bindRetryInterval)
 				}
 			}
 			if frame, ok := state.next(now); ok {
 				host.PublishFrame(frame)
 			}
 			status(now)
+		case err := <-workerDone:
+			workerDone = nil
+			if conn != nil {
+				_ = conn.Close()
+				conn = nil
+			}
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				return fmt.Errorf("PICO Connect receiver stopped: %w", err)
+			}
+			return fmt.Errorf("PICO Connect receiver stopped unexpectedly")
 		}
 	}
 }

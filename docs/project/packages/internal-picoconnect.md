@@ -42,7 +42,7 @@ Host source selection, final OSC output, Pico Connect settings changes, and unve
 
 ## Current implementation
 
-The protocol 2 path listens on IPv4 loopback, requires a 16-byte header with tracking type 2 and at least 892 body bytes, and maps the first 52 finite shapes. The default protocol 0 selection reports an explicit unsupported status pending interface evidence. The driver uses a bounded packet queue and per-field 250 ms freshness.
+The protocol 2 path listens on IPv4 loopback, requires a 16-byte header with tracking type 2 and at least 892 body bytes, and maps the first 52 finite shapes. The default protocol 0 selection reports an explicit unsupported status pending interface evidence. The driver uses a bounded packet queue and per-field 250 ms freshness. Initial bind conflicts retry every two seconds; an unexpected receiver failure returns to the supervisor.
 
 ## Public/internal interfaces
 
@@ -62,7 +62,7 @@ The receiver owns the socket read loop. The driver owns mapping and cache state,
 
 ## Error handling
 
-Invalid packets are discarded without changing state. Invalid configuration or bind failures are surfaced through status; protocol 0 is explicitly unsupported until its interface is verified.
+Invalid packets are discarded without changing state and summarized at most once every five seconds without payloads. Invalid configuration or bind failures are surfaced through status; protocol 0 is explicitly unsupported until its interface is verified.
 
 ## Performance constraints
 
