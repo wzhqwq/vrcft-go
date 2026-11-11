@@ -14,7 +14,7 @@ type config struct {
 }
 
 func parseConfig(data json.RawMessage) (config, error) {
-	result := config{TransferProtocol: 0, ListenPort: 29765}
+	result := config{TransferProtocol: 2, ListenPort: 29765}
 	if len(data) == 0 {
 		return result, nil
 	}
@@ -62,8 +62,8 @@ func parseConfig(data json.RawMessage) (config, error) {
 	if _, err := decoder.Token(); err != io.EOF {
 		return config{}, fmt.Errorf("pico-connect configuration trailing data")
 	}
-	if result.TransferProtocol != 0 && result.TransferProtocol != 2 {
-		return config{}, fmt.Errorf("pico-connect transferProtocol must be 0 or 2")
+	if result.TransferProtocol != 2 {
+		return config{}, fmt.Errorf("pico-connect transferProtocol must be 2")
 	}
 	if result.ListenPort < 1 || result.ListenPort > 65535 {
 		return config{}, fmt.Errorf("pico-connect listenPort must be between 1 and 65535")

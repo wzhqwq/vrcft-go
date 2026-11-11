@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-11-pico-connect-adapter-design.md`
 
+**Scope update, 2026-11-11:** The user deferred Task 6 and requested protocol 2 only. The plugin now defaults to protocol 2, rejects protocol 0, and polls the PICO Connect process and `lab.faceTrackingTransferProtocol` until both are ready. The original Task 6 below is retained as historical planning context and is outside current completion criteria.
+
 ## Global Constraints
 
 - The plugin ID is `pico-connect`; target PICO 4 Pro / Enterprise.

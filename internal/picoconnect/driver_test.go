@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,17 +53,19 @@ func (h *driverHost) logsCopy() []string {
 	return append([]string(nil), h.logs...)
 }
 
-func TestDriverProtocolZeroReportsUnsupported(t *testing.T) {
+func TestDriverWarnsWhenPicoConnectUnavailable(t *testing.T) {
 	h := &driverHost{events: make(chan pluginapi.ControlEvent, 1)}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- New().Run(ctx, h) }()
+	driver := New()
+	driver.checkPrerequisites = func() string { return "Start PICO Connect to enable face tracking" }
+	go func() { done <- driver.Run(ctx, h) }()
 	deadline := time.After(500 * time.Millisecond)
 	for {
 		statuses, _ := h.snapshot()
 		for _, s := range statuses {
-			if s.State == pluginapi.DeviceError && s.Message != "" {
+			if s.State == pluginapi.DeviceError && strings.Contains(s.Message, "Start PICO Connect") {
 				cancel()
 				if err := <-done; err != nil {
 					t.Fatal(err)
@@ -72,9 +75,92 @@ func TestDriverProtocolZeroReportsUnsupported(t *testing.T) {
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("missing unsupported status: %+v", statuses)
+			t.Fatalf("missing prerequisite warning: %+v", statuses)
 		case <-time.After(time.Millisecond):
 		}
+	}
+}
+
+func testDriver() *Driver {
+	driver := New()
+	driver.checkPrerequisites = func() string { return "" }
+	return driver
+}
+
+func TestDriverPollsPrerequisitesAndResumes(t *testing.T) {
+	probe, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.LocalAddr().(*net.UDPAddr).Port
+	probe.Close()
+	configData, _ := json.Marshal(map[string]int{"listenPort": port})
+	h := &driverHost{startup: pluginapi.Startup{Active: true, Config: pluginapi.Config{Revision: 1, Data: configData}, Subscription: pluginapi.Subscription{Generation: 1, Capabilities: trackingmodel.CapabilityExpression}}, events: make(chan pluginapi.ControlEvent, 1)}
+	var healthy atomic.Bool
+	driver := New()
+	driver.prerequisitePoll = 20 * time.Millisecond
+	driver.checkPrerequisites = func() string {
+		if healthy.Load() {
+			return ""
+		}
+		return "PICO Connect protocol must be 2"
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- driver.Run(ctx, h) }()
+	defer func() { cancel(); <-done }()
+	await := func(want pluginapi.DeviceState) {
+		t.Helper()
+		deadline := time.After(time.Second)
+		for {
+			statuses, _ := h.snapshot()
+			if len(statuses) > 0 && statuses[len(statuses)-1].State == want {
+				return
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("status never became %s: %+v", want, statuses)
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	}
+	await(pluginapi.DeviceError)
+	healthy.Store(true)
+	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	packet := legacyFixture(912)
+	binary.LittleEndian.PutUint32(packet[24+shapeJawOpen*4:], 0x3f400000)
+	deadline := time.After(time.Second)
+	for {
+		_, _ = conn.Write(packet)
+		_, frames := h.snapshot()
+		if len(frames) > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("receiver did not resume after prerequisite recovered")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	await(pluginapi.DeviceReady)
+	healthy.Store(false)
+	await(pluginapi.DeviceError)
+	_, before := h.snapshot()
+	for i := 0; i < 5; i++ {
+		_, _ = conn.Write(packet)
+		time.Sleep(10 * time.Millisecond)
+	}
+	_, after := h.snapshot()
+	if len(after) != len(before) {
+		t.Fatalf("received %d frames while prerequisites were unavailable", len(after)-len(before))
+	}
+	logs := h.logsCopy()
+	if len(logs) != 2 || !strings.Contains(logs[0], "protocol must be 2") {
+		t.Fatalf("warning transitions were not logged once each: %v", logs)
 	}
 }
 
@@ -90,7 +176,7 @@ func TestDriverProtocolTwoPublishesLegacyPacket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- New().Run(ctx, h) }()
+	go func() { done <- testDriver().Run(ctx, h) }()
 	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +216,7 @@ func TestDriverRejectsOversizedDatagram(t *testing.T) {
 	h := &driverHost{startup: pluginapi.Startup{Active: true, Config: pluginapi.Config{Revision: 1, Data: configData}, Subscription: pluginapi.Subscription{Generation: 1, Capabilities: trackingmodel.CapabilityExpression}}, events: make(chan pluginapi.ControlEvent, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- New().Run(ctx, h) }()
+	go func() { done <- testDriver().Run(ctx, h) }()
 	defer func() { cancel(); <-done }()
 	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
 	if err != nil {
@@ -175,7 +261,7 @@ func TestDriverReceivesAfterSubscriptionChange(t *testing.T) {
 	h := &driverHost{startup: pluginapi.Startup{Active: true, Config: pluginapi.Config{Revision: 1, Data: configData}, Subscription: pluginapi.Subscription{Generation: 1, Capabilities: trackingmodel.CapabilityExpression, Expressions: trackingmodel.ExpressionMaskOf(trackingmodel.ExpressionJawOpen)}}, events: make(chan pluginapi.ControlEvent, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- New().Run(ctx, h) }()
+	go func() { done <- testDriver().Run(ctx, h) }()
 	defer func() { cancel(); <-done }()
 	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
 	if err != nil {
@@ -239,7 +325,7 @@ func TestDriverRetriesStartupPortConflict(t *testing.T) {
 	h := &driverHost{startup: pluginapi.Startup{Active: true, Config: pluginapi.Config{Revision: 1, Data: configData}, Subscription: pluginapi.Subscription{Generation: 1, Capabilities: trackingmodel.CapabilityExpression}}, events: make(chan pluginapi.ControlEvent, 1)}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	done := make(chan error, 1)
-	go func() { done <- New().Run(ctx, h) }()
+	go func() { done <- testDriver().Run(ctx, h) }()
 	defer func() { cancel(); <-done }()
 	deadline := time.After(time.Second)
 	for {
@@ -292,7 +378,7 @@ func TestDriverReturnsUnexpectedReceiverFailure(t *testing.T) {
 			sockets <- socket
 		}
 		return socket, err
-	}}
+	}, checkPrerequisites: func() string { return "" }}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	done := make(chan error, 1)
@@ -325,7 +411,7 @@ func TestDriverLogsBoundedMalformedPacketSummary(t *testing.T) {
 	h := &driverHost{startup: pluginapi.Startup{Config: pluginapi.Config{Revision: 1, Data: configData}}, events: make(chan pluginapi.ControlEvent, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- New().Run(ctx, h) }()
+	go func() { done <- testDriver().Run(ctx, h) }()
 	defer func() { cancel(); <-done }()
 	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
 	if err != nil {

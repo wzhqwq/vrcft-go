@@ -19,10 +19,10 @@ checks:
     args: [./internal/picoconnect]
     weight: 2
     required: true
-  - id: protocol-zero-receiver
-    description: Default PICO Connect transfer protocol receiver exists after live interface verification
+  - id: prerequisites
+    description: PICO Connect process and protocol-2 setting checks are implemented
     type: file
-    path: internal/picoconnect/protocol0.go
+    path: internal/picoconnect/prerequisites_windows.go
     weight: 3
     required: true
 ---
@@ -42,7 +42,7 @@ Host source selection, final OSC output, Pico Connect settings changes, and unve
 
 ## Current implementation
 
-The protocol 2 path listens on IPv4 loopback, requires a 16-byte header with tracking type 2 and at least 892 body bytes, and maps the first 52 finite shapes. The default protocol 0 selection reports an explicit unsupported status pending interface evidence. The driver uses a bounded packet queue and per-field 250 ms freshness. Initial bind conflicts retry every two seconds; an unexpected receiver failure returns to the supervisor.
+The protocol 2 path listens on IPv4 loopback, requires a 16-byte header with tracking type 2 and at least 892 body bytes, and maps the first 52 finite shapes. Protocol 2 is the only accepted setting. The driver checks the PICO Connect process and its transfer setting at startup and every two seconds; it closes the receiver and reports a warning until both are ready. The driver uses a bounded packet queue and per-field 250 ms freshness. Initial bind conflicts retry every two seconds; an unexpected receiver failure returns to the supervisor.
 
 ## Public/internal interfaces
 
@@ -62,7 +62,7 @@ The receiver owns the socket read loop. The driver owns mapping and cache state,
 
 ## Error handling
 
-Invalid packets are discarded without changing state and summarized at most once every five seconds without payloads. Invalid configuration or bind failures are surfaced through status; protocol 0 is explicitly unsupported until its interface is verified.
+Invalid packets are discarded without changing state and summarized at most once every five seconds without payloads. Invalid configuration, bind failures, missing PICO Connect process, and a non-2 transfer setting are surfaced through status. The Host API has no warning state, so prerequisite warnings use error status plus a warning-level log entry.
 
 ## Performance constraints
 
@@ -78,8 +78,8 @@ Parser boundaries, mapping, freshness, configuration, live loopback reception, o
 
 ## Known gaps
 
-Protocol 0 transport and field layout are not yet known. Protocol 2 field semantics and expression correctness need hardware validation; only packet transport structure was observed on a real PICO Connect 10.6.6 session.
+Protocol 0 support is deferred by user direction. Protocol 2 field semantics and expression correctness need hardware validation; only packet transport structure was observed on a real PICO Connect 10.6.6 session.
 
 ## Completion definition
 
-Both protocol 0 and 2 receive and publish verified tracking from a real PICO 4 Pro / Enterprise session, and package checks pass.
+Protocol 2 receives and publishes verified tracking from a real PICO 4 Pro / Enterprise session, the prerequisite watcher recovers after process or setting changes, and package checks pass.

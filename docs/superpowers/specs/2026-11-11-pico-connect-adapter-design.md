@@ -2,6 +2,8 @@
 
 Date: 2026-11-11. Status: approved for implementation.
 
+Scope update, 2026-11-11: The user deferred protocol 0. The current plugin accepts only transfer protocol 2, defaults to 2, and checks the PICO Connect process and `lab.faceTrackingTransferProtocol` at startup and periodically. It warns and retries until both are ready. The original dual-protocol design below remains as historical context; protocol 0 acceptance is outside the current scope.
+
 ## Intent and evidence
 
 Add a bundled Go plugin that reads eye and face tracking from PICO Connect and publishes the existing `pluginapi` Eye and Expression fields. Support both the documented legacy transfer setting (`faceTrackingTransferProtocol=2`) and the newer default setting (`0`), without silently labeling one as the other. The first hardware target is PICO 4 Pro / Enterprise. Keep the plugin process, Host subscription, generation, and output contracts used by Steam Link.
