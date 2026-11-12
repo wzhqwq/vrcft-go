@@ -194,7 +194,8 @@ function mapPluginsWire(wire: PluginListWire): PluginsView {
 }
 
 function mapPluginWire(plugin: PluginWire): PluginView {
-  return Object.freeze({...plugin, capabilities: Object.freeze([...plugin.capabilities])})
+  return Object.freeze({...plugin, capabilities: Object.freeze([...plugin.capabilities]),
+	deviceStatus: plugin.deviceStatus ? Object.freeze({...plugin.deviceStatus}) : undefined})
 }
 
 function internalProblem(): ProblemView {

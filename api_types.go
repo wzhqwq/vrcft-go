@@ -9,6 +9,7 @@ import (
 
 	"github.com/wzhqwq/vrcft-go/internal/plugins"
 	"github.com/wzhqwq/vrcft-go/internal/userconfig"
+	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
 
@@ -99,25 +100,31 @@ type PluginListResponse struct {
 }
 
 type PluginDTO struct {
-	ID                  string     `json:"id"`
-	Name                string     `json:"name"`
-	Description         string     `json:"description"`
-	Version             string     `json:"version"`
-	Capabilities        []string   `json:"capabilities"`
-	Enabled             bool       `json:"enabled"`
-	Active              bool       `json:"active"`
-	State               string     `json:"state"`
-	ConfigRevision      uint64     `json:"configRevision"`
-	FrameRate           float64    `json:"frameRate"`
-	ConsecutiveFailures int        `json:"consecutiveFailures"`
-	RestartCount        int        `json:"restartCount"`
-	StartedAt           *time.Time `json:"startedAt,omitempty"`
-	LastHeartbeatAt     *time.Time `json:"lastHeartbeatAt,omitempty"`
-	LastFrameAt         *time.Time `json:"lastFrameAt,omitempty"`
-	NextRestartAt       *time.Time `json:"nextRestartAt,omitempty"`
-	InstalledAt         time.Time  `json:"installedAt"`
-	LastEnabledAt       *time.Time `json:"lastEnabledAt,omitempty"`
-	LastError           string     `json:"lastError,omitempty"`
+	ID                  string                 `json:"id"`
+	Name                string                 `json:"name"`
+	Description         string                 `json:"description"`
+	Version             string                 `json:"version"`
+	Capabilities        []string               `json:"capabilities"`
+	Enabled             bool                   `json:"enabled"`
+	Active              bool                   `json:"active"`
+	State               string                 `json:"state"`
+	ConfigRevision      uint64                 `json:"configRevision"`
+	FrameRate           float64                `json:"frameRate"`
+	ConsecutiveFailures int                    `json:"consecutiveFailures"`
+	RestartCount        int                    `json:"restartCount"`
+	StartedAt           *time.Time             `json:"startedAt,omitempty"`
+	LastHeartbeatAt     *time.Time             `json:"lastHeartbeatAt,omitempty"`
+	LastFrameAt         *time.Time             `json:"lastFrameAt,omitempty"`
+	NextRestartAt       *time.Time             `json:"nextRestartAt,omitempty"`
+	InstalledAt         time.Time              `json:"installedAt"`
+	LastEnabledAt       *time.Time             `json:"lastEnabledAt,omitempty"`
+	LastError           string                 `json:"lastError,omitempty"`
+	DeviceStatus        *PluginDeviceStatusDTO `json:"deviceStatus,omitempty"`
+}
+
+type PluginDeviceStatusDTO struct {
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
 }
 
 type PluginConfigResponse struct {
@@ -181,7 +188,15 @@ func pluginDTO(snapshot plugins.RuntimeSnapshot) PluginDTO {
 		InstalledAt:         snapshot.InstalledAt.UTC(),
 		LastEnabledAt:       optionalTime(snapshot.LastEnabledAt),
 		LastError:           boundedMessage(snapshot.LastError),
+		DeviceStatus:        pluginDeviceStatusDTO(snapshot.DeviceStatus),
 	}
+}
+
+func pluginDeviceStatusDTO(status pluginapi.DeviceStatus) *PluginDeviceStatusDTO {
+	if status.State == "" || status.Validate() != nil {
+		return nil
+	}
+	return &PluginDeviceStatusDTO{State: string(status.State), Message: boundedMessage(status.Message)}
 }
 
 func validatePublicPluginID(pluginID string) error {

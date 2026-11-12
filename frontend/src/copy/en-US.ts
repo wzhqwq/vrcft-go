@@ -21,6 +21,7 @@ export const copy = {
       stopped: 'Stopped', stopping: 'Stopping', crashed: 'Crashed', error: 'Runtime error', failed: 'Failed',
       unresponsive: 'Unresponsive', incompatible: 'Incompatible', backoff: 'Waiting to retry', restarting: 'Restarting',
     },
+	device: {initializing: 'Device initializing', ready: 'Device ready', disconnected: 'Device disconnected', error: 'Device error'},
     plan: {ready: 'Ready', empty: 'No plan', pending: 'Preparing', error: 'Plan error', failed: 'Plan failed'},
     osc: {
       not_running: {label: 'OSC not running', discovery: 'Not started'},
@@ -34,6 +35,7 @@ export const copy = {
     enable: (name: string) => `Enable ${name}`, capabilities: (name: string) => `${name} capabilities`,
     pending: 'Updating this plugin.', lifecycle: 'Lifecycle', frameRate: 'Frame rate', restarts: 'Restarts',
     error: 'Plugin notice', important: 'Plugins needing attention',
+	deviceStatus: 'Device status', noTrackingData: 'No tracking data received',
   },
   text: {
     runStatus: 'Runtime status', readRunStatus: 'Loading runtime status', noRunStatus: 'No runtime status available',

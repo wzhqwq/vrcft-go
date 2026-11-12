@@ -61,6 +61,7 @@ func TestRuntimeSnapshotPinsStatesAndFields(t *testing.T) {
 		ConsecutiveFailures:    2,
 		RestartCount:           7,
 		LastError:              "sanitized",
+		DeviceStatus:           pluginapi.DeviceStatus{State: pluginapi.DeviceError, Message: "device unavailable"},
 	}
 	if snapshot.ID != "camera" || snapshot.Name != "Camera" || snapshot.Description != "Camera runtime" ||
 		snapshot.Version != "1.2.3" ||
@@ -70,7 +71,7 @@ func TestRuntimeSnapshotPinsStatesAndFields(t *testing.T) {
 		snapshot.LastHeartbeatAt != now.Add(time.Second) || snapshot.LastFrameAt != now.Add(2*time.Second) ||
 		snapshot.NextRestartAt != now.Add(3*time.Second) || snapshot.FrameRate != 90.5 ||
 		snapshot.ConsecutiveFailures != 2 || snapshot.RestartCount != 7 ||
-		snapshot.LastError != "sanitized" {
+		snapshot.LastError != "sanitized" || snapshot.DeviceStatus != (pluginapi.DeviceStatus{State: pluginapi.DeviceError, Message: "device unavailable"}) {
 		t.Fatalf("RuntimeSnapshot lost an approved field: %+v", snapshot)
 	}
 }

@@ -99,6 +99,15 @@ describe('PluginsPage', () => {
     expect(screen.getByText('Lip tracker lost heartbeat')).toBeVisible()
   })
 
+  it('shows device failure even while the plugin process is running', () => {
+	const pico = plugin('pico-connect', {deviceStatus: {state: 'error', message: 'Start PICO Connect'}})
+	const injected = fixture(state({snapshot: {plugins: [pico]}, visiblePlugins: [pico], pageCount: 1, filteredTotal: 1,
+	  summary: {total: 1, enabled: 1, active: 1, problem: 1}}))
+	render(PluginsPage, {props: {plugins: injected.module}})
+	expect(screen.getByText('Start PICO Connect')).toBeVisible()
+	expect(screen.getAllByText('设备异常').length).toBeGreaterThan(0)
+  })
+
   it('reacts to loading, valid-empty, no-data problem, and stale retained snapshot views', async () => {
     const injected = fixture(state({status: 'loading', snapshot: null, visiblePlugins: [], filteredTotal: 0, summary: {total: 0, enabled: 0, active: 0, problem: 0}}))
     render(PluginsPage, {props: {plugins: injected.module}})

@@ -12,16 +12,21 @@
   type Props = {
     id: string; name: string; description?: string; enabled: boolean; active?: boolean;
     state?: string; capabilities?: readonly string[]; frameRate?: number; restartCount?: number;
+	deviceStatus?: {state: string; message?: string};
     loading?: boolean; error?: string; problem?: ProblemView;
     onCommand?: (command: PluginCardCommand) => void;
     onCopyDiagnostic?: (text: string) => void;
   };
   let {id, name, description, enabled, active = false, state = '', capabilities = [], frameRate = 0,
-    restartCount = 0, loading = false, error, problem, onCommand, onCopyDiagnostic}: Props = $props();
+	deviceStatus, restartCount = 0, loading = false, error, problem, onCommand, onCopyDiagnostic}: Props = $props();
   const titleId = $props.id();
   const pendingId = `${titleId}-pending`;
+	let deviceUnavailable = $derived(enabled && state === 'running' && (deviceStatus?.state === 'error' || deviceStatus?.state === 'disconnected'));
+	let deviceLabel = $derived(deviceStatus ? (copy.state.device[deviceStatus.state as keyof typeof copy.state.device] ?? deviceStatus.state) : '');
+	let deviceMessage = $derived(deviceStatus?.message || copy.pluginCard.noTrackingData);
   let details = $derived([
     {label: copy.pluginCard.lifecycle, value: localizedState(copy.state.plugin, state)},
+	...(enabled && state === 'running' && deviceStatus ? [{label: copy.pluginCard.deviceStatus, value: deviceLabel}] : []),
     ...(active ? [{label: copy.pluginCard.frameRate, value: `${frameRate.toFixed(1)} FPS`}] : []),
     {label: copy.pluginCard.restarts, value: String(restartCount)},
   ]);
@@ -35,6 +40,7 @@
       {#if description}<p class="min-w-0 break-words text-sm text-text-muted">{description}</p>{/if}
     </div>
     <div class="flex shrink-0 items-center gap-2">
+	  {#if deviceUnavailable}<Badge label={deviceLabel} tone="warning" />{/if}
       <Badge label={active ? copy.state.active : copy.state.inactive} tone={active ? 'success' : 'neutral'} />
       {#if onCommand}
         <Tooltip content={copy.pluginCard.enable(name)}>
@@ -66,4 +72,5 @@
   {:else if error}
     <ProblemBanner title={copy.pluginCard.error} detail={error} tone="warning" />
   {/if}
+	{#if deviceUnavailable}<ProblemBanner title={deviceLabel} detail={deviceMessage} tone="warning" />{/if}
 </article>

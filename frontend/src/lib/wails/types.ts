@@ -96,6 +96,7 @@ export interface PluginWire {
   lastFrameAt?: string | null
   nextRestartAt?: string | null
   lastError?: string
+	deviceStatus?: {state: string; message?: string}
 }
 
 export interface PluginConfigWire {

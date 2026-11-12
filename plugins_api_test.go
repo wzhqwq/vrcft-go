@@ -32,6 +32,26 @@ func TestPluginDTOIncludesPreferenceTimes(t *testing.T) {
 	}
 }
 
+func TestPluginDTOExposesBoundedDeviceStatus(t *testing.T) {
+	dto := pluginDTO(plugins.RuntimeSnapshot{DeviceStatus: pluginapi.DeviceStatus{
+		State: pluginapi.DeviceError, Message: strings.Repeat("x", maxProblemMessageBytes+10),
+	}})
+	if dto.DeviceStatus == nil || dto.DeviceStatus.State != string(pluginapi.DeviceError) || len(dto.DeviceStatus.Message) != maxProblemMessageBytes {
+		t.Fatalf("device status was lost or unbounded: %+v", dto.DeviceStatus)
+	}
+	if got := pluginDTO(plugins.RuntimeSnapshot{}).DeviceStatus; got != nil {
+		t.Fatalf("unreported status should be omitted: %+v", got)
+	}
+	if got := pluginDTO(plugins.RuntimeSnapshot{DeviceStatus: pluginapi.DeviceStatus{State: "bogus"}}).DeviceStatus; got != nil {
+		t.Fatalf("invalid status should be omitted: %+v", got)
+	}
+	clone := clonePluginDTOs([]PluginDTO{dto})
+	clone[0].DeviceStatus.Message = "mutated"
+	if dto.DeviceStatus.Message == "mutated" {
+		t.Fatal("device status pointer aliases source")
+	}
+}
+
 type fakePluginsBackend struct {
 	mu sync.Mutex
 
@@ -157,6 +177,7 @@ func TestPluginsAPIExposesOnlyApprovedWailsMethods(t *testing.T) {
 		{"LastFrameAt", "*time.Time", "lastFrameAt,omitempty"}, {"NextRestartAt", "*time.Time", "nextRestartAt,omitempty"},
 		{"InstalledAt", "time.Time", "installedAt"}, {"LastEnabledAt", "*time.Time", "lastEnabledAt,omitempty"},
 		{"LastError", "string", "lastError,omitempty"},
+		{"DeviceStatus", "*main.PluginDeviceStatusDTO", "deviceStatus,omitempty"},
 	}
 	typeOfDTO := reflect.TypeOf(PluginDTO{})
 	gotFields := make([]fieldContract, typeOfDTO.NumField())

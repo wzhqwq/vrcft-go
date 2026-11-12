@@ -28,7 +28,7 @@ func checkPrerequisites() string {
 func checkTransferSetting(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "Cannot read PICO Connect settings.json: " + err.Error()
+		return "Cannot read PICO Connect settings.json"
 	}
 	var settings struct {
 		Lab struct {

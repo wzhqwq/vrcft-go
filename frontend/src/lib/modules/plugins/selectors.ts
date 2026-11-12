@@ -3,6 +3,11 @@ import type {PluginFilter, PluginQuery, PluginSelection, PluginSummary, PluginVi
 const failedStates = new Set(['crashed', 'error', 'failed', 'unresponsive', 'incompatible'])
 const recoveryStates = new Set(['backoff', 'restarting'])
 
+export function pluginDeviceUnavailable(plugin: PluginView): boolean {
+	return plugin.enabled && plugin.state.toLowerCase() === 'running' &&
+	  (plugin.deviceStatus?.state === 'error' || plugin.deviceStatus?.state === 'disconnected')
+}
+
 export function pluginHasProblem(plugin: PluginView): boolean {
   return pluginHealthRank(plugin) < 2
 }
@@ -26,7 +31,7 @@ export function selectOverviewPlugins(plugins: readonly PluginView[]): readonly 
 function overviewRank(plugin: PluginView): number {
   const state = plugin.state.toLowerCase()
   if (failedStates.has(state)) return 0
-  if (recoveryStates.has(state) || plugin.consecutiveFailures > 0 || Boolean(plugin.lastError)) return 1
+	if (pluginDeviceUnavailable(plugin) || recoveryStates.has(state) || plugin.consecutiveFailures > 0 || Boolean(plugin.lastError)) return 1
   if (plugin.active && state === 'running') return 2
   return 3
 }
@@ -81,7 +86,7 @@ function comparePlugins(left: PluginView, right: PluginView): number {
 function pluginHealthRank(plugin: PluginView): number {
   const state = plugin.state.toLowerCase()
   if (failedStates.has(state)) return 0
-  if (recoveryStates.has(state) || plugin.consecutiveFailures > 0 || Boolean(plugin.lastError)) return 1
+	if (pluginDeviceUnavailable(plugin) || recoveryStates.has(state) || plugin.consecutiveFailures > 0 || Boolean(plugin.lastError)) return 1
   return 2
 }
 

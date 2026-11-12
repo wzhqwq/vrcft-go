@@ -102,4 +102,14 @@ describe('OverviewPage', () => {
     expect(row).toHaveTextContent('sensor unplugged')
     expect(within(row).getByLabelText('Lip 输出能力').querySelector('.lucide-smile')).not.toBeNull()
   })
+
+  it('shows unavailable device status for Pico and Steam Link without a consumer', () => {
+	mount(runtimeState(), [
+	  plugin('pico-connect', {active: false, deviceStatus: {state: 'error', message: 'Start PICO Connect'}}),
+	  plugin('steamlink', {active: false, deviceStatus: {state: 'disconnected'}}),
+	])
+	const rows = screen.getAllByTestId('overview-plugin-row')
+	expect(within(rows[0]!).getByText('Start PICO Connect')).toBeVisible()
+	expect(within(rows[1]!).getByText('尚未收到追踪数据')).toBeVisible()
+  })
 })

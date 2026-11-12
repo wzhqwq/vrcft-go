@@ -954,7 +954,7 @@ func (s *serializedPluginSupervisor) sessionCallbacks(instanceID uint64) supervi
 			sendCritical(supervisorCallback{kind: supervisorUnresponsive, instanceID: instanceID})
 		},
 		Status: func(_ uint64, status pluginapi.DeviceStatus) {
-			sendTelemetry(supervisorCallback{kind: supervisorStatus, instanceID: instanceID, status: status})
+			sendCritical(supervisorCallback{kind: supervisorStatus, instanceID: instanceID, status: status})
 		},
 		Log: func(_ uint64, log observedPluginLog) {
 			log.InstanceID = instanceID
@@ -1005,9 +1005,12 @@ func (s *serializedPluginSupervisor) handleCallback(
 		s.cancelStableTimer(state)
 		state.snapshot.State = StateUnresponsive
 	case supervisorStatus:
+		state.snapshot.DeviceStatus = callback.status
+		s.publish(state)
 		if s.config.PublishStatus != nil {
 			s.config.PublishStatus(callback.status)
 		}
+		return
 	case supervisorLog:
 		if s.config.PublishLog != nil {
 			s.config.PublishLog(callback.log)
@@ -1054,6 +1057,7 @@ func (s *serializedPluginSupervisor) clearRuntimeMetrics(snapshot *RuntimeSnapsh
 	snapshot.LastHeartbeatAt = time.Time{}
 	snapshot.LastFrameAt = time.Time{}
 	snapshot.FrameRate = 0
+	snapshot.DeviceStatus = pluginapi.DeviceStatus{}
 }
 
 func (s *serializedPluginSupervisor) publish(state *supervisorLoopState) {

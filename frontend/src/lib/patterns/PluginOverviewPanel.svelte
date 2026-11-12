@@ -4,12 +4,12 @@
   import type {PageId} from '../components/layout/NavigationItems.svelte'
   import type {PluginsModule} from '../modules/plugins/types.js'
   import type {RuntimePluginFailureView} from '../modules/runtime/types.js'
-  import {selectOverviewPlugins} from '../modules/plugins/selectors.js'
+  import {pluginDeviceUnavailable, selectOverviewPlugins} from '../modules/plugins/selectors.js'
   import {copy} from '../../copy/index.svelte.js'
 
   let {plugins, failures = [], onNavigate}: {plugins: PluginsModule; failures?: readonly RuntimePluginFailureView[]; onNavigate: (page: PageId) => void} = $props()
   const items = $derived(selectOverviewPlugins(plugins.state.snapshot?.plugins ?? []))
-  const trouble = $derived(failures.length > 0 || items.some((item) => ['crashed', 'unresponsive', 'incompatible'].includes(item.state)))
+  const trouble = $derived(failures.length > 0 || items.some((item) => ['crashed', 'unresponsive', 'incompatible'].includes(item.state) || pluginDeviceUnavailable(item)))
 </script>
 
 <section class={`surface-card min-w-0 p-4 ${trouble ? 'border-warning bg-warning/10' : ''}`} aria-labelledby="plugin-overview-title">
@@ -24,11 +24,12 @@
   {:else}
     <ul class="mt-3 grid min-w-0 gap-2">
       {#each items as item (item.id)}
-        <li data-testid="overview-plugin-row" data-plugin-id={item.id} class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-lg border border-border bg-surface p-3">
+        <li data-testid="overview-plugin-row" data-plugin-id={item.id} class={`grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-lg border bg-surface p-3 ${pluginDeviceUnavailable(item) ? 'border-warning' : 'border-border'}`}>
           <div class="min-w-0">
             <p class="truncate font-semibold" title={item.name}>{item.name}</p>
             <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-text-muted">
               <span>{copy.state.plugin[item.state as keyof typeof copy.state.plugin] ?? item.state}</span>
+			  {#if item.enabled && item.state === 'running' && item.deviceStatus}<span class={pluginDeviceUnavailable(item) ? 'text-warning' : ''}>{copy.state.device[item.deviceStatus.state as keyof typeof copy.state.device] ?? item.deviceStatus.state}</span>{/if}
               {#if item.active && item.state === 'running' && item.frameRate > 0}<span>{Math.round(item.frameRate)} FPS</span>{/if}
             </div>
             <div class="mt-2 flex items-center gap-2 text-text-muted">
@@ -38,6 +39,7 @@
             </div>
             {#if plugins.state.problems.get(item.id)}<p class="mt-2 break-words text-sm text-danger">{plugins.state.problems.get(item.id)?.detail}</p>{/if}
             {#if item.lastError}<p class="mt-2 break-words text-sm text-danger">{item.lastError}</p>{/if}
+			{#if pluginDeviceUnavailable(item)}<p class="mt-2 break-words text-sm text-warning">{item.deviceStatus?.message || copy.pluginCard.noTrackingData}</p>{/if}
           </div>
           <button type="button" class="focus-ring rounded-lg border border-border p-2 disabled:opacity-50" aria-label={item.enabled ? copy.text.disablePlugin(item.name) : copy.pluginCard.enable(item.name)} title={item.enabled ? copy.text.disablePlugin(item.name) : copy.pluginCard.enable(item.name)} aria-pressed={item.enabled} disabled={plugins.state.pendingIds.has(item.id)} onclick={() => { void plugins.setEnabled(item.id, !item.enabled) }}><Power size={18} aria-hidden="true" /></button>
         </li>

@@ -3,6 +3,7 @@ package plugins
 import (
 	"time"
 
+	"github.com/wzhqwq/vrcft-go/pkg/pluginapi"
 	"github.com/wzhqwq/vrcft-go/pkg/trackingmodel"
 )
 
@@ -51,6 +52,7 @@ type RuntimeSnapshot struct {
 	ConsecutiveFailures int
 	RestartCount        int
 	LastError           string
+	DeviceStatus        pluginapi.DeviceStatus
 }
 
 func (s RuntimeSnapshot) clone() RuntimeSnapshot { return s }

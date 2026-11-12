@@ -140,6 +140,19 @@ describe('plugin selection', () => {
       .toEqual(['incompatible', 'crashed', 'unresponsive', 'backoff'])
   })
 
+  it('prioritizes enabled running plugins whose device reports unavailable', () => {
+	const items = [
+	  plugin('healthy', {deviceStatus: {state: 'ready'}}),
+	  plugin('steamlink', {deviceStatus: {state: 'disconnected'}}),
+	  plugin('pico-connect', {deviceStatus: {state: 'error', message: 'Start PICO Connect'}}),
+	  plugin('disabled', {enabled: false, deviceStatus: {state: 'error', message: 'stale'}}),
+	]
+	expect(selectPlugins(items, {query: '', filter: 'problem', page: 1, pageSize: 24}).items.map((item) => item.id))
+	  .toEqual(['pico-connect', 'steamlink'])
+	expect(selectOverviewPlugins(items).map((item) => item.id).slice(0, 2))
+	  .toEqual(['pico-connect', 'steamlink'])
+  })
+
   it('searches names and IDs case-insensitively and applies every filter', () => {
     expect(selectPlugins(fixtures, {query: 'ALP', filter: 'all', page: 1, pageSize: 24}).items.map((x) => x.id))
       .toEqual(['backoff'])
@@ -166,6 +179,16 @@ describe('plugin selection', () => {
 })
 
 describe('Plugins module', () => {
+	 it('updates problem counts when device status changes without a consumer', async () => {
+	   const mock = new PluginsMock()
+	   const module = await startWith(mock, listWire(1, [plugin('steamlink', {active: false, deviceStatus: {state: 'disconnected'}})]))
+	   expect(module.state.summary.problem).toBe(1)
+	   mock.emit({revision: 2})
+	   mock.listPending[1]?.resolve(listWire(2, [plugin('steamlink', {active: false, deviceStatus: {state: 'ready'}})]))
+	   await vi.waitFor(() => expect(module.state.summary.problem).toBe(0))
+	   expect(module.state.snapshot?.plugins[0]?.deviceStatus?.state).toBe('ready')
+	   module.dispose()
+	 })
   it('treats events as invalidation hints and owns exactly one idempotent subscription', async () => {
     const mock = new PluginsMock()
     const module = await startWith(mock, listWire(1, [plugin('initial')]))

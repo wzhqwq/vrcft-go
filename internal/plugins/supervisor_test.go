@@ -126,6 +126,38 @@ func TestPluginSupervisorControlsStateAndOwnsStartup(t *testing.T) {
 	}
 }
 
+func TestPluginSupervisorPersistsDeviceStatusAndClearsItOnDisable(t *testing.T) {
+	factory := newSupervisorTestFactory()
+	supervisor, err := newPluginSupervisor(pluginSupervisorConfig{
+		Plugin: supervisorTestPlugin(), Preference: PluginPreference{Enabled: true},
+		Restart: DefaultRestartPolicy(), NewSession: factory.newSession,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSupervisor(t, supervisor)
+	launch := factory.awaitLaunch(t)
+	launch.callbacks.ProcessStarted(launch.instanceID, 123)
+	launch.callbacks.Ready(launch.instanceID, validHandshakeDescriptor())
+	awaitSupervisorState(t, supervisor, StateRunning)
+	want := pluginapi.DeviceStatus{State: pluginapi.DeviceError, Message: "tracking unavailable"}
+	launch.callbacks.Status(launch.instanceID, want)
+	deadline := time.After(time.Second)
+	for supervisor.Snapshot().DeviceStatus != want {
+		select {
+		case <-deadline:
+			t.Fatalf("device status not retained: %+v", supervisor.Snapshot())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if err := supervisor.Command(context.Background(), supervisorCommand{kind: supervisorDisable}); err != nil {
+		t.Fatal(err)
+	}
+	if got := supervisor.Snapshot(); got.DeviceStatus.State != "" {
+		t.Fatalf("stale device status after disable: %+v", got.DeviceStatus)
+	}
+}
+
 func TestPluginSupervisorSnapshotIdentifiesRestartedSession(t *testing.T) {
 	factory := newSupervisorTestFactory()
 	supervisor, err := newPluginSupervisor(pluginSupervisorConfig{
@@ -804,8 +836,9 @@ func TestPluginSupervisorTelemetryLogLossComposesOnNextPublishedLog(t *testing.T
 		config: pluginSupervisorConfig{PublishLog: func(log observedPluginLog) {
 			published <- log
 		}},
-		callback: make(chan supervisorCallback, 1),
-		done:     make(chan struct{}),
+		callback:         make(chan supervisorCallback, 1),
+		criticalCallback: make(chan supervisorCallback, 1),
+		done:             make(chan struct{}),
 	}
 	callbacks := supervisor.sessionCallbacks(91)
 	supervisor.callback <- supervisorCallback{kind: supervisorHeartbeat, instanceID: 91}
@@ -830,6 +863,9 @@ func TestPluginSupervisorTelemetryLogLossComposesOnNextPublishedLog(t *testing.T
 	callbacks.Heartbeat(91, time.Unix(1, 0))
 	callbacks.Frame(91, time.Unix(2, 0), 60)
 	callbacks.Status(91, pluginapi.DeviceStatus{State: pluginapi.DeviceReady})
+	if status := <-supervisor.criticalCallback; status.kind != supervisorStatus || status.status.State != pluginapi.DeviceReady {
+		t.Fatalf("device status did not use reliable callback queue: %+v", status)
+	}
 
 	<-supervisor.callback
 	callbacks.Log(91, observedPluginLog{

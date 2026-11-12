@@ -30,6 +30,7 @@ export interface PluginView {
   readonly lastFrameAt?: string | null
   readonly nextRestartAt?: string | null
   readonly lastError?: string
+	readonly deviceStatus?: {readonly state: string; readonly message?: string}
 }
 
 export interface PluginsView {

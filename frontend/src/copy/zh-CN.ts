@@ -39,6 +39,7 @@ export const copy = {
       stopped: '已停止', stopping: '正在停止', crashed: '已崩溃', error: '运行错误',
       failed: '启动失败', unresponsive: '无响应', incompatible: '不兼容', backoff: '等待重试', restarting: '正在重启',
     },
+	device: {initializing: '设备初始化中', ready: '设备已就绪', disconnected: '设备未连接', error: '设备异常'},
     plan: {ready: '已就绪', empty: '尚无计划', pending: '正在生成', error: '计划错误', failed: '计划失败'},
     osc: {
       not_running: {label: 'OSC 未运行', discovery: '未启动'},
@@ -53,6 +54,7 @@ export const copy = {
     capabilities: (name: string) => `${name} 能力`,
     pending: '正在更新此插件。', lifecycle: '生命周期', frameRate: '帧率', restarts: '重启次数',
     error: '插件运行提示', important: '需要关注的插件',
+	deviceStatus: '设备状态', noTrackingData: '尚未收到追踪数据',
   },
   text: {
     runStatus: '运行状态',

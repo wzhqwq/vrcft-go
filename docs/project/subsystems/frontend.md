@@ -27,6 +27,8 @@ checks:
 ---
 # Subsystem: frontend
 
+The Overview and Plugins pages show plugin process lifecycle and device availability separately. An enabled running plugin whose device reports `error` or `disconnected` counts as a problem, is sorted ahead of healthy plugins, and shows its bounded device message or a generic no-data hint. Disabled plugins do not show stale device warnings.
+
 ## Purpose
 Provide the accessible desktop control center for runtime status, plugin operations, restart-required settings, and safe diagnostics.
 ## Responsibilities

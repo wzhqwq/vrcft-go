@@ -578,6 +578,10 @@ func clonePluginDTOs(values []PluginDTO) []PluginDTO {
 		result[index].LastFrameAt = cloneTimePointer(value.LastFrameAt)
 		result[index].NextRestartAt = cloneTimePointer(value.NextRestartAt)
 		result[index].LastEnabledAt = cloneTimePointer(value.LastEnabledAt)
+		if value.DeviceStatus != nil {
+			status := *value.DeviceStatus
+			result[index].DeviceStatus = &status
+		}
 	}
 	return result
 }

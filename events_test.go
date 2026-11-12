@@ -185,6 +185,15 @@ func TestEventBridgeRateLimitsPluginBroadcastsToLatestSnapshot(t *testing.T) {
 	}
 }
 
+func TestDeviceStatusChangeBypassesPluginTelemetryRateLimit(t *testing.T) {
+	before := moduleEnvelope[[]PluginDTO]{Value: []PluginDTO{{ID: "pico-connect", FrameRate: 60}}}
+	after := moduleEnvelope[[]PluginDTO]{Value: []PluginDTO{{ID: "pico-connect", FrameRate: 61,
+		DeviceStatus: &PluginDeviceStatusDTO{State: "error", Message: "Start PICO Connect"}}}}
+	if pluginTelemetryOnlyChange(before, after) {
+		t.Fatal("device status change was treated as rate-limited frame telemetry")
+	}
+}
+
 func TestEventBridgeBlockedSettingsEmitterSkipsIntermediatePendingSnapshot(t *testing.T) {
 	previousProcs := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(previousProcs)
