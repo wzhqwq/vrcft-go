@@ -74,7 +74,7 @@
         {#if plugins.state.visiblePlugins.length === 0}
           <EmptyState title={copy.text.noMatchingPlugins} description={copy.text.adjustFilters} />
         {:else}
-          <ResponsiveGrid columns={3}>
+          <ResponsiveGrid columns={3} class="items-start">
             {#each plugins.state.visiblePlugins as plugin (plugin.id)}
               <PluginCard {...plugin} loading={plugins.state.pendingIds.has(plugin.id)}
                 error={plugin.lastError} problem={plugins.state.problems.get(plugin.id)}

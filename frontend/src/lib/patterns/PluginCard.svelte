@@ -32,12 +32,11 @@
   ]);
 </script>
 
-<article class="surface-card grid min-w-0 gap-4" aria-labelledby={titleId}>
+<article class="surface-card flex min-w-0 flex-col gap-4 self-start" aria-labelledby={titleId}>
   <header class="flex min-w-0 items-start justify-between gap-3">
     <div class="min-w-0">
       <h2 class="min-w-0 break-words font-semibold text-text" id={titleId}>{name}</h2>
       <p class="min-w-0 break-all text-sm text-text-muted">{id}</p>
-      {#if description}<p class="min-w-0 break-words text-sm text-text-muted">{description}</p>{/if}
     </div>
     <div class="flex shrink-0 items-center gap-2">
 	  {#if deviceUnavailable}<Badge label={deviceLabel} tone="warning" />{/if}
@@ -63,6 +62,7 @@
       {/if}
     </div>
   </header>
+  {#if description}<p class="min-w-0 break-words text-sm text-text-muted">{description}</p>{/if}
   <div aria-label={copy.pluginCard.capabilities(name)}>
     <Inline gap="sm">{#each capabilities as capability (capability)}<Badge label={capability} />{/each}</Inline>
   </div>
