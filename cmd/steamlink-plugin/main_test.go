@@ -35,8 +35,10 @@ func TestSourceManifestMatchesDriverDescriptor(t *testing.T) {
 		Entrypoint:    "steamlink-plugin.exe",
 		Capabilities:  3,
 	}
-	if manifest != wantManifest {
-		t.Fatalf("manifest = %#v, want %#v", manifest, wantManifest)
+	identity := manifest
+	identity.Troubleshooting = nil // Plugin-authored help is validated separately from driver identity.
+	if identity != wantManifest {
+		t.Fatalf("manifest identity = %#v, want %#v", identity, wantManifest)
 	}
 
 	descriptor := steamlink.New().Descriptor()

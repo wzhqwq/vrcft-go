@@ -58,7 +58,7 @@ func TestParseSpecRejectsInvalidMetadata(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			content := strings.Replace(string(valid), test.old, test.new, 1)
+			content := strings.Replace(strings.ReplaceAll(string(valid), "\r\n", "\n"), test.old, test.new, 1)
 			_, err := ParseSpec("invalid.md", []byte(content))
 			if !errors.Is(err, ErrInvalidSpec) {
 				t.Fatalf("error = %v, want ErrInvalidSpec", err)
