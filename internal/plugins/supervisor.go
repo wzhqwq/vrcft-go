@@ -294,6 +294,10 @@ func newPluginSupervisor(config pluginSupervisorConfig) (pluginSupervisor, error
 		callback:         make(chan supervisorCallback, capacity),
 		done:             make(chan struct{}),
 	}
+	guide := Troubleshooting{}
+	if config.Plugin.Manifest.Troubleshooting != nil {
+		guide = config.Plugin.Manifest.Troubleshooting.clone()
+	}
 	initial := RuntimeSnapshot{
 		ID:                     config.Plugin.Manifest.ID,
 		Name:                   config.Plugin.Manifest.Name,
@@ -305,6 +309,7 @@ func newPluginSupervisor(config pluginSupervisorConfig) (pluginSupervisor, error
 		State:                  StateStopped,
 		ConfigRevision:         config.Preference.Config.Revision,
 		SubscriptionGeneration: config.Subscription.Generation,
+		Troubleshooting:        guide,
 	}
 	supervisor.snapshot.Store(initial)
 	go supervisor.run(initial)

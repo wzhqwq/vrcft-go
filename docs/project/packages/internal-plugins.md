@@ -95,6 +95,8 @@ Directory discovery scans the required builtin root and optional development roo
 Plugin preferences persist a UTC `InstalledAt` at first discovery and a UTC `LastEnabledAt` only when a manual enable changes a disabled preference to enabled. Automatic starts and repeated enables retain the prior time. Both fields are copied into runtime snapshots for overview ordering; plugin-private configuration remains separate. The development preference format was replaced directly because there has been no public release.
 
 The supervisor retains the latest plugin-reported device status in each runtime snapshot. Status changes use the reliable callback path and publish a fresh snapshot immediately; launch, stop, and disable clear stale device status. This lets the UI show unavailable tracking even when no Avatar currently consumes the plugin.
+
+Plugin manifests may include a plain-text `troubleshooting` object with both `en-US` and `zh-CN` step arrays. Each locale must have one to eight steps, each nonblank and at most 512 UTF-8 bytes. The supervisor copies validated steps into runtime snapshots so the UI can show plugin-authored help without a new process protocol.
 ## Public/internal interfaces
 `Manager`, `FrameSink`, `Catalog`, `Store`, `Manifest`, `InstalledPlugin`, runtime snapshots, events, process abstractions, and restart policy are internal Host contracts. `RuntimeSnapshot.SessionID` identifies the current or most recently lost launch and changes across restarts, including same-plugin supervisor recreation. `FrameSink.Submit(pluginID, generation, frame)` is the generation-bearing handoff to tracking.
 

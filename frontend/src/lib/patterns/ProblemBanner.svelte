@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type {Snippet} from 'svelte';
   import {copy} from '../../copy/index.svelte.js'
   import {Button} from '../components/ui/index.js';
   import type {StatusTone} from './StatusCard.svelte';
@@ -10,10 +11,11 @@
     id?: string;
     diagnosticCode?: string;
     onCopyDiagnostic?: (diagnostic: string) => void;
+    action?: Snippet;
   };
 
   const generatedId = globalThis.crypto?.randomUUID?.() ?? `problem-banner-${Math.random().toString(36).slice(2)}`;
-  let {title, detail, tone, id = generatedId, diagnosticCode, onCopyDiagnostic}: Props = $props();
+  let {title, detail, tone, id = generatedId, diagnosticCode, onCopyDiagnostic, action}: Props = $props();
   let titleId = $derived(`${id}-title`);
   let safeCode = $derived(diagnosticCode && /^[a-z0-9_-]{1,64}$/.test(diagnosticCode) ? diagnosticCode : 'unknown');
   let safeDiagnostic = $derived(copy.format.diagnostic(safeCode));
@@ -28,5 +30,6 @@
     {#if diagnosticCode && onCopyDiagnostic}
       <Button label={copy.text.copyDiagnostics} tone="secondary" onclick={() => onCopyDiagnostic?.(safeDiagnostic)} />
     {/if}
+    {#if action}{@render action()}{/if}
   </div>
 </section>

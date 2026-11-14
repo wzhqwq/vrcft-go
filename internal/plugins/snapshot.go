@@ -53,6 +53,10 @@ type RuntimeSnapshot struct {
 	RestartCount        int
 	LastError           string
 	DeviceStatus        pluginapi.DeviceStatus
+	Troubleshooting     Troubleshooting
 }
 
-func (s RuntimeSnapshot) clone() RuntimeSnapshot { return s }
+func (s RuntimeSnapshot) clone() RuntimeSnapshot {
+	s.Troubleshooting = s.Troubleshooting.clone()
+	return s
+}

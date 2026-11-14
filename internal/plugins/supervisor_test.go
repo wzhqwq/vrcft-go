@@ -158,6 +158,25 @@ func TestPluginSupervisorPersistsDeviceStatusAndClearsItOnDisable(t *testing.T) 
 	}
 }
 
+func TestPluginSupervisorOwnsManifestTroubleshooting(t *testing.T) {
+	plugin := supervisorTestPlugin()
+	plugin.Manifest.Troubleshooting = &Troubleshooting{EnUS: []string{"Reconnect headset"}, ZhCN: []string{"重新连接头显"}}
+	supervisor, err := newPluginSupervisor(pluginSupervisorConfig{Plugin: plugin, Preference: PluginPreference{}, Restart: DefaultRestartPolicy(), NewSession: newSupervisorTestFactory().newSession})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSupervisor(t, supervisor)
+	plugin.Manifest.Troubleshooting.EnUS[0] = "caller mutation"
+	first := supervisor.Snapshot()
+	if first.Troubleshooting.EnUS[0] != "Reconnect headset" {
+		t.Fatalf("manifest guide did not enter snapshot: %+v", first.Troubleshooting)
+	}
+	first.Troubleshooting.ZhCN[0] = "caller mutation"
+	if got := supervisor.Snapshot().Troubleshooting.ZhCN[0]; got != "重新连接头显" {
+		t.Fatalf("snapshot exposed mutable guide: %q", got)
+	}
+}
+
 func TestPluginSupervisorSnapshotIdentifiesRestartedSession(t *testing.T) {
 	factory := newSupervisorTestFactory()
 	supervisor, err := newPluginSupervisor(pluginSupervisorConfig{

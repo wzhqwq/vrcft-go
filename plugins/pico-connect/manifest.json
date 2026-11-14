@@ -7,5 +7,19 @@
   "protocolMin": 1,
   "protocolMax": 1,
   "entrypoint": "pico-connect-plugin.exe",
-  "capabilities": 3
+  "capabilities": 3,
+  "troubleshooting": {
+    "en-US": [
+      "Start PICO Connect and reconnect the headset.",
+      "In %APPDATA%\\PICO Connect\\settings.json, set lab.faceTrackingTransferProtocol to 2, then restart PICO Connect.",
+      "Enable eye and lip tracking on the headset and in PICO Connect.",
+      "Make sure no other tracking module uses UDP port 29765. If you changed the port, match the plugin listenPort to PICO Connect."
+    ],
+    "zh-CN": [
+      "启动 Pico 互联并重新连接头显。",
+      "在 %APPDATA%\\PICO Connect\\settings.json 中把 lab.faceTrackingTransferProtocol 设为 2，然后重启 Pico 互联。",
+      "在头显和 Pico 互联中启用眼部与面部追踪。",
+      "确认没有其他追踪模块占用 UDP 端口 29765；如果修改了端口，请让插件 listenPort 与 Pico 互联一致。"
+    ]
+  }
 }

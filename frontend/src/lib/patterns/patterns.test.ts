@@ -1,5 +1,6 @@
-import {fireEvent, render, screen, within} from '@testing-library/svelte';
-import {createRawSnippet} from 'svelte';
+import {fireEvent, render, screen, waitFor, within} from '@testing-library/svelte';
+import {createRawSnippet, tick} from 'svelte';
+import {getLanguagePreference, setLanguagePreference} from '../../copy/index.svelte.js';
 import {describe, expect, it} from 'vitest';
 
 import {
@@ -33,6 +34,46 @@ describe('shared UI patterns', () => {
     expect(card).toHaveTextContent('已停止');
     expect(within(card).getByText('重启次数')).toBeVisible();
     expect(within(card).getByText('2')).toBeVisible();
+  });
+
+  it('opens plugin-authored troubleshooting and switches language while open', async () => {
+	const previous = getLanguagePreference();
+	try {
+	  setLanguagePreference('zh-CN');
+	  const card = render(PluginCard, {props: {id: 'steamlink', name: 'Steam Link', enabled: true, state: 'running',
+	    deviceStatus: {state: 'disconnected'}, troubleshooting: {'en-US': ['Reconnect Steam Link'], 'zh-CN': ['重新连接 Steam Link']}}});
+	  const trigger = screen.getByRole('button', {name: '故障排除：Steam Link'});
+	  trigger.focus();
+	  await fireEvent.click(trigger);
+	  expect(screen.getByRole('dialog')).toHaveTextContent('重新连接 Steam Link');
+	  setLanguagePreference('en-US');
+	  await tick();
+	  expect(screen.getByRole('dialog')).toHaveTextContent('Reconnect Steam Link');
+	  await fireEvent.keyDown(screen.getByRole('dialog'), {key: 'Escape'});
+	  await waitFor(() => expect(trigger).toHaveFocus());
+	  await card.rerender({id: 'steamlink', name: 'Steam Link', enabled: true, state: 'running',
+	    deviceStatus: {state: 'connected'}, troubleshooting: {'en-US': ['Reconnect Steam Link'], 'zh-CN': ['重新连接 Steam Link']}});
+	  expect(screen.queryByRole('button', {name: 'Troubleshoot Steam Link'})).not.toBeInTheDocument();
+	} finally {
+	  setLanguagePreference(previous);
+	}
+  });
+
+  it('omits troubleshooting help when the plugin has no guide', () => {
+	 render(PluginCard, {props: {id: 'third-party', name: 'Third Party', enabled: true, state: 'running', deviceStatus: {state: 'error', message: 'Unavailable'}}});
+	 expect(screen.queryByRole('button', {name: /故障排除|Troubleshooting/})).not.toBeInTheDocument();
+  });
+
+  it('moves focus to the card if the device recovers while help is open', async () => {
+    const guide = {'en-US': ['Reconnect Steam Link'], 'zh-CN': ['重新连接 Steam Link']};
+    const view = render(PluginCard, {props: {id: 'steamlink', name: 'Steam Link', enabled: true, state: 'running',
+      deviceStatus: {state: 'disconnected'}, troubleshooting: guide}});
+    await fireEvent.click(screen.getByRole('button', {name: /Steam Link/}));
+    expect(screen.getByRole('dialog')).toBeVisible();
+    await view.rerender({id: 'steamlink', name: 'Steam Link', enabled: true, state: 'running',
+      deviceStatus: {state: 'connected'}, troubleshooting: guide});
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('article', {name: 'Steam Link'})).toHaveFocus());
   });
   it('keeps a long Avatar ID shrinkable while retaining an available copy action', () => {
     const longId = 'avtr_'.padEnd(180, 'a');

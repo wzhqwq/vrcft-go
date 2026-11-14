@@ -45,6 +45,8 @@ supported. If another program already owns the port, select an unused port in th
 plugin configuration and change Steam Link to the same port. The plugin does not
 change SteamVR or Steam Link settings for you.
 
+When tracking data is unavailable, the Overview and Plugins pages offer a help button with English and Chinese troubleshooting steps supplied by this plugin's manifest.
+
 ## Input evidence and limits
 
 The field mapping is based on Valve's documented sharing/OSC settings and LinkFT

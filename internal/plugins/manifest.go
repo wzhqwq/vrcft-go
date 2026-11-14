@@ -25,15 +25,16 @@ const (
 )
 
 type Manifest struct {
-	SchemaVersion int                      `json:"schemaVersion"`
-	ID            string                   `json:"id"`
-	Name          string                   `json:"name"`
-	Version       string                   `json:"version"`
-	Description   string                   `json:"description"`
-	ProtocolMin   uint16                   `json:"protocolMin"`
-	ProtocolMax   uint16                   `json:"protocolMax"`
-	Entrypoint    string                   `json:"entrypoint"`
-	Capabilities  trackingmodel.Capability `json:"capabilities"`
+	SchemaVersion   int                      `json:"schemaVersion"`
+	ID              string                   `json:"id"`
+	Name            string                   `json:"name"`
+	Version         string                   `json:"version"`
+	Description     string                   `json:"description"`
+	ProtocolMin     uint16                   `json:"protocolMin"`
+	ProtocolMax     uint16                   `json:"protocolMax"`
+	Entrypoint      string                   `json:"entrypoint"`
+	Capabilities    trackingmodel.Capability `json:"capabilities"`
+	Troubleshooting *Troubleshooting         `json:"troubleshooting,omitempty"`
 }
 
 type InstalledPlugin struct {
@@ -73,6 +74,11 @@ func (m Manifest) Validate() error {
 	}
 	if err := validateEntrypoint(m.Entrypoint); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidManifest, err)
+	}
+	if m.Troubleshooting != nil {
+		if err := m.Troubleshooting.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

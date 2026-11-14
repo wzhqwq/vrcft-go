@@ -52,6 +52,22 @@ func TestPluginDTOExposesBoundedDeviceStatus(t *testing.T) {
 	}
 }
 
+func TestPluginDTOOwnsLocalizedTroubleshooting(t *testing.T) {
+	snapshot := plugins.RuntimeSnapshot{Troubleshooting: plugins.Troubleshooting{EnUS: []string{"Reconnect"}, ZhCN: []string{"重新连接"}}}
+	dto := pluginDTO(snapshot)
+	if dto.Troubleshooting == nil || dto.Troubleshooting.EnUS[0] != "Reconnect" || dto.Troubleshooting.ZhCN[0] != "重新连接" {
+		t.Fatalf("localized guide missing: %+v", dto.Troubleshooting)
+	}
+	clone := clonePluginDTOs([]PluginDTO{dto})
+	clone[0].Troubleshooting.EnUS[0] = "mutated"
+	if dto.Troubleshooting.EnUS[0] != "Reconnect" {
+		t.Fatal("public guide shares mutable steps")
+	}
+	if got := pluginDTO(plugins.RuntimeSnapshot{}).Troubleshooting; got != nil {
+		t.Fatalf("missing guide should be omitted: %+v", got)
+	}
+}
+
 type fakePluginsBackend struct {
 	mu sync.Mutex
 
@@ -178,6 +194,7 @@ func TestPluginsAPIExposesOnlyApprovedWailsMethods(t *testing.T) {
 		{"InstalledAt", "time.Time", "installedAt"}, {"LastEnabledAt", "*time.Time", "lastEnabledAt,omitempty"},
 		{"LastError", "string", "lastError,omitempty"},
 		{"DeviceStatus", "*main.PluginDeviceStatusDTO", "deviceStatus,omitempty"},
+		{"Troubleshooting", "*main.PluginTroubleshootingDTO", "troubleshooting,omitempty"},
 	}
 	typeOfDTO := reflect.TypeOf(PluginDTO{})
 	gotFields := make([]fieldContract, typeOfDTO.NumField())

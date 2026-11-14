@@ -29,6 +29,8 @@ checks:
 
 The Overview and Plugins pages show plugin process lifecycle and device availability separately. An enabled running plugin whose device reports `error` or `disconnected` counts as a problem, is sorted ahead of healthy plugins, and shows its bounded device message or a generic no-data hint. Disabled plugins do not show stale device warnings.
 
+If the plugin manifest contains paired English and Chinese troubleshooting steps, both device warnings offer a help button. The shared dialog renders plugin text as plain text in the current UI language, updates when the language changes, and returns keyboard focus to its trigger on close. Plugins without a guide show no help button.
+
 ## Purpose
 Provide the accessible desktop control center for runtime status, plugin operations, restart-required settings, and safe diagnostics.
 ## Responsibilities

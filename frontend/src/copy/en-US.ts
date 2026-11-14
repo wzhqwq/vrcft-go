@@ -36,6 +36,8 @@ export const copy = {
     pending: 'Updating this plugin.', lifecycle: 'Lifecycle', frameRate: 'Frame rate', restarts: 'Restarts',
     error: 'Plugin notice', important: 'Plugins needing attention',
 	deviceStatus: 'Device status', noTrackingData: 'No tracking data received',
+	troubleshoot: 'Troubleshooting',
+	troubleshootFor: (name: string) => `Troubleshoot ${name}`,
   },
   text: {
     runStatus: 'Runtime status', readRunStatus: 'Loading runtime status', noRunStatus: 'No runtime status available',

@@ -1,6 +1,7 @@
 <script lang="ts">
   import {CircleAlert, Glasses, Power, ScanFace, Smile} from 'lucide-svelte'
   import {Button} from '../components/ui/index.js'
+  import PluginTroubleshootingDialog from './PluginTroubleshootingDialog.svelte'
   import type {PageId} from '../components/layout/NavigationItems.svelte'
   import type {PluginsModule} from '../modules/plugins/types.js'
   import type {RuntimePluginFailureView} from '../modules/runtime/types.js'
@@ -24,7 +25,7 @@
   {:else}
     <ul class="mt-3 grid min-w-0 gap-2">
       {#each items as item (item.id)}
-        <li data-testid="overview-plugin-row" data-plugin-id={item.id} class={`grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-lg border bg-surface p-3 ${pluginDeviceUnavailable(item) ? 'border-warning' : 'border-border'}`}>
+        <li id={`overview-plugin-${item.id}`} data-testid="overview-plugin-row" data-plugin-id={item.id} tabindex="-1" class={`grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-lg border bg-surface p-3 ${pluginDeviceUnavailable(item) ? 'border-warning' : 'border-border'}`}>
           <div class="min-w-0">
             <p class="truncate font-semibold" title={item.name}>{item.name}</p>
             <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-text-muted">
@@ -39,7 +40,12 @@
             </div>
             {#if plugins.state.problems.get(item.id)}<p class="mt-2 break-words text-sm text-danger">{plugins.state.problems.get(item.id)?.detail}</p>{/if}
             {#if item.lastError}<p class="mt-2 break-words text-sm text-danger">{item.lastError}</p>{/if}
-			{#if pluginDeviceUnavailable(item)}<p class="mt-2 break-words text-sm text-warning">{item.deviceStatus?.message || copy.pluginCard.noTrackingData}</p>{/if}
+			{#if pluginDeviceUnavailable(item)}
+			  <div class="mt-2 flex min-w-0 items-start justify-between gap-2 text-warning">
+			    <p class="min-w-0 break-words text-sm">{item.deviceStatus?.message || copy.pluginCard.noTrackingData}</p>
+			    {#if item.troubleshooting}<PluginTroubleshootingDialog name={item.name} troubleshooting={item.troubleshooting} fallbackFocus={() => document.getElementById(`overview-plugin-${item.id}`)} />{/if}
+			  </div>
+			{/if}
           </div>
           <button type="button" class="focus-ring rounded-lg border border-border p-2 disabled:opacity-50" aria-label={item.enabled ? copy.text.disablePlugin(item.name) : copy.pluginCard.enable(item.name)} title={item.enabled ? copy.text.disablePlugin(item.name) : copy.pluginCard.enable(item.name)} aria-pressed={item.enabled} disabled={plugins.state.pendingIds.has(item.id)} onclick={() => { void plugins.setEnabled(item.id, !item.enabled) }}><Power size={18} aria-hidden="true" /></button>
         </li>

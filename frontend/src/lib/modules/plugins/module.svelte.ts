@@ -195,7 +195,11 @@ function mapPluginsWire(wire: PluginListWire): PluginsView {
 
 function mapPluginWire(plugin: PluginWire): PluginView {
   return Object.freeze({...plugin, capabilities: Object.freeze([...plugin.capabilities]),
-	deviceStatus: plugin.deviceStatus ? Object.freeze({...plugin.deviceStatus}) : undefined})
+	deviceStatus: plugin.deviceStatus ? Object.freeze({...plugin.deviceStatus}) : undefined,
+	troubleshooting: plugin.troubleshooting ? Object.freeze({
+	  'en-US': Object.freeze([...plugin.troubleshooting['en-US']]),
+	  'zh-CN': Object.freeze([...plugin.troubleshooting['zh-CN']]),
+	}) : undefined})
 }
 
 function internalProblem(): ProblemView {

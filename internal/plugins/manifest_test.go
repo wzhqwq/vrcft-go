@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -36,6 +37,56 @@ func TestManifestValidateAcceptsLipOnly(t *testing.T) {
 	manifest.Capabilities = trackingmodel.CapabilityLip
 	if err := manifest.Validate(); err != nil {
 		t.Fatalf("Validate(Lip-only manifest) error = %v", err)
+	}
+}
+
+func TestManifestTroubleshootingRequiresBothBoundedLocales(t *testing.T) {
+	manifest := validManifest()
+	manifest.Troubleshooting = &Troubleshooting{
+		EnUS: []string{"Check the connection."},
+		ZhCN: []string{"检查连接。"},
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("valid localized guide: %v", err)
+	}
+	for _, mutate := range []func(*Manifest){
+		func(m *Manifest) { m.Troubleshooting.ZhCN = nil },
+		func(m *Manifest) { m.Troubleshooting.EnUS[0] = " \t" },
+		func(m *Manifest) { m.Troubleshooting.EnUS[0] = strings.Repeat("x", 513) },
+		func(m *Manifest) { m.Troubleshooting.EnUS = make([]string, 9) },
+	} {
+		candidate := manifest
+		cloned := manifest.Troubleshooting.clone()
+		candidate.Troubleshooting = &cloned
+		mutate(&candidate)
+		if err := candidate.Validate(); err == nil {
+			t.Fatalf("accepted invalid guide: %+v", candidate.Troubleshooting)
+		}
+	}
+	manifest.Troubleshooting = &Troubleshooting{}
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("accepted empty troubleshooting object")
+	}
+}
+
+func TestBuiltinManifestsProvideLocalizedTroubleshooting(t *testing.T) {
+	for _, id := range []string{"steamlink", "pico-connect"} {
+		t.Run(id, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("..", "..", "plugins", id, "manifest.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var manifest Manifest
+			if err := json.Unmarshal(data, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			if err := manifest.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			if manifest.Troubleshooting == nil || len(manifest.Troubleshooting.EnUS) == 0 || len(manifest.Troubleshooting.ZhCN) == 0 {
+				t.Fatal("builtin guide missing")
+			}
+		})
 	}
 }
 

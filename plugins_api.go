@@ -582,6 +582,12 @@ func clonePluginDTOs(values []PluginDTO) []PluginDTO {
 			status := *value.DeviceStatus
 			result[index].DeviceStatus = &status
 		}
+		if value.Troubleshooting != nil {
+			result[index].Troubleshooting = &PluginTroubleshootingDTO{
+				EnUS: append([]string(nil), value.Troubleshooting.EnUS...),
+				ZhCN: append([]string(nil), value.Troubleshooting.ZhCN...),
+			}
+		}
 	}
 	return result
 }

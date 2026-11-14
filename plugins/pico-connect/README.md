@@ -13,6 +13,8 @@ The plugin binds loopback only and does not change PICO Connect settings. Values
 
 At startup and every two seconds, the plugin checks that `PICO Connect.exe` is running and `lab.faceTrackingTransferProtocol` in its settings file is `2`. If either check fails, it closes the receiver, reports the reason in device status, logs a warning once for each change, and keeps polling. Tracking resumes automatically when both checks pass. Restart PICO Connect after changing its transfer setting.
 
+When tracking is unavailable, the Overview and Plugins pages offer a help button with English and Chinese troubleshooting steps supplied by this plugin's manifest.
+
 To build a standalone development plugin, run `powershell -NoProfile -ExecutionPolicy Bypass -File .\build\build-pico-connect.ps1`. The manifest and executable are staged under `build/bin/plugins/pico-connect/`.
 
 ## Protocol 0 status

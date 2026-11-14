@@ -55,6 +55,8 @@ export const copy = {
     pending: '正在更新此插件。', lifecycle: '生命周期', frameRate: '帧率', restarts: '重启次数',
     error: '插件运行提示', important: '需要关注的插件',
 	deviceStatus: '设备状态', noTrackingData: '尚未收到追踪数据',
+	troubleshoot: '故障排除',
+	troubleshootFor: (name: string) => `故障排除：${name}`,
   },
   text: {
     runStatus: '运行状态',

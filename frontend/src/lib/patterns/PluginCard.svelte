@@ -4,6 +4,7 @@
   import {Inline} from '../components/layout/index.js';
   import DetailList from './DetailList.svelte';
   import ProblemBanner from './ProblemBanner.svelte';
+  import PluginTroubleshootingDialog from './PluginTroubleshootingDialog.svelte';
   import type {ProblemView} from '../presentation/problem.js';
   import {copy} from '../../copy/index.svelte.js';
   import {localizedState} from '../presentation/status.js';
@@ -13,12 +14,13 @@
     id: string; name: string; description?: string; enabled: boolean; active?: boolean;
     state?: string; capabilities?: readonly string[]; frameRate?: number; restartCount?: number;
 	deviceStatus?: {state: string; message?: string};
+	troubleshooting?: {readonly 'en-US': readonly string[]; readonly 'zh-CN': readonly string[]};
     loading?: boolean; error?: string; problem?: ProblemView;
     onCommand?: (command: PluginCardCommand) => void;
     onCopyDiagnostic?: (text: string) => void;
   };
   let {id, name, description, enabled, active = false, state = '', capabilities = [], frameRate = 0,
-	deviceStatus, restartCount = 0, loading = false, error, problem, onCommand, onCopyDiagnostic}: Props = $props();
+	deviceStatus, troubleshooting, restartCount = 0, loading = false, error, problem, onCommand, onCopyDiagnostic}: Props = $props();
   const titleId = $props.id();
   const pendingId = `${titleId}-pending`;
 	let deviceUnavailable = $derived(enabled && state === 'running' && (deviceStatus?.state === 'error' || deviceStatus?.state === 'disconnected'));
@@ -32,7 +34,7 @@
   ]);
 </script>
 
-<article class="surface-card flex min-w-0 flex-col gap-4 self-start" aria-labelledby={titleId}>
+<article id={`${titleId}-card`} class="surface-card flex min-w-0 flex-col gap-4 self-start" aria-labelledby={titleId} tabindex="-1">
   <header class="flex min-w-0 items-start justify-between gap-3">
     <div class="min-w-0">
       <h2 class="min-w-0 break-words font-semibold text-text" id={titleId}>{name}</h2>
@@ -72,5 +74,11 @@
   {:else if error}
     <ProblemBanner title={copy.pluginCard.error} detail={error} tone="warning" />
   {/if}
-	{#if deviceUnavailable}<ProblemBanner title={deviceLabel} detail={deviceMessage} tone="warning" />{/if}
+	{#if deviceUnavailable}
+	  <ProblemBanner title={deviceLabel} detail={deviceMessage} tone="warning">
+	    {#snippet action()}
+	      {#if troubleshooting}<PluginTroubleshootingDialog {name} {troubleshooting} fallbackFocus={() => document.getElementById(`${titleId}-card`)} />{/if}
+	    {/snippet}
+	  </ProblemBanner>
+	{/if}
 </article>

@@ -7,5 +7,19 @@
   "protocolMin": 1,
   "protocolMax": 1,
   "entrypoint": "steamlink-plugin.exe",
-  "capabilities": 3
+  "capabilities": 3,
+  "troubleshooting": {
+    "en-US": [
+      "Connect the headset through Steam Link and start SteamVR.",
+      "Enable eye and face tracking sharing and OSC output in Steam Link / SteamVR.",
+      "Set the OSC output port to 9015, or make it match the plugin listenPort if you changed that setting.",
+      "If the plugin reports a port error, close the other program using that port or choose the same free port in Steam Link and this plugin."
+    ],
+    "zh-CN": [
+      "通过 Steam Link 连接头显并启动 SteamVR。",
+      "在 Steam Link / SteamVR 中启用眼部与面部追踪共享，以及 OSC 输出。",
+      "将 OSC 输出端口设为 9015；如果修改了插件 listenPort，两处端口应一致。",
+      "如果插件提示端口错误，请关闭占用端口的其他程序，或在 Steam Link 和插件中选择同一个空闲端口。"
+    ]
+  }
 }

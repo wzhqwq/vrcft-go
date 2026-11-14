@@ -97,6 +97,7 @@ export interface PluginWire {
   nextRestartAt?: string | null
   lastError?: string
 	deviceStatus?: {state: string; message?: string}
+	troubleshooting?: {'en-US': string[]; 'zh-CN': string[]}
 }
 
 export interface PluginConfigWire {

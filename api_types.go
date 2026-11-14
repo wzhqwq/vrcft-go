@@ -100,31 +100,37 @@ type PluginListResponse struct {
 }
 
 type PluginDTO struct {
-	ID                  string                 `json:"id"`
-	Name                string                 `json:"name"`
-	Description         string                 `json:"description"`
-	Version             string                 `json:"version"`
-	Capabilities        []string               `json:"capabilities"`
-	Enabled             bool                   `json:"enabled"`
-	Active              bool                   `json:"active"`
-	State               string                 `json:"state"`
-	ConfigRevision      uint64                 `json:"configRevision"`
-	FrameRate           float64                `json:"frameRate"`
-	ConsecutiveFailures int                    `json:"consecutiveFailures"`
-	RestartCount        int                    `json:"restartCount"`
-	StartedAt           *time.Time             `json:"startedAt,omitempty"`
-	LastHeartbeatAt     *time.Time             `json:"lastHeartbeatAt,omitempty"`
-	LastFrameAt         *time.Time             `json:"lastFrameAt,omitempty"`
-	NextRestartAt       *time.Time             `json:"nextRestartAt,omitempty"`
-	InstalledAt         time.Time              `json:"installedAt"`
-	LastEnabledAt       *time.Time             `json:"lastEnabledAt,omitempty"`
-	LastError           string                 `json:"lastError,omitempty"`
-	DeviceStatus        *PluginDeviceStatusDTO `json:"deviceStatus,omitempty"`
+	ID                  string                    `json:"id"`
+	Name                string                    `json:"name"`
+	Description         string                    `json:"description"`
+	Version             string                    `json:"version"`
+	Capabilities        []string                  `json:"capabilities"`
+	Enabled             bool                      `json:"enabled"`
+	Active              bool                      `json:"active"`
+	State               string                    `json:"state"`
+	ConfigRevision      uint64                    `json:"configRevision"`
+	FrameRate           float64                   `json:"frameRate"`
+	ConsecutiveFailures int                       `json:"consecutiveFailures"`
+	RestartCount        int                       `json:"restartCount"`
+	StartedAt           *time.Time                `json:"startedAt,omitempty"`
+	LastHeartbeatAt     *time.Time                `json:"lastHeartbeatAt,omitempty"`
+	LastFrameAt         *time.Time                `json:"lastFrameAt,omitempty"`
+	NextRestartAt       *time.Time                `json:"nextRestartAt,omitempty"`
+	InstalledAt         time.Time                 `json:"installedAt"`
+	LastEnabledAt       *time.Time                `json:"lastEnabledAt,omitempty"`
+	LastError           string                    `json:"lastError,omitempty"`
+	DeviceStatus        *PluginDeviceStatusDTO    `json:"deviceStatus,omitempty"`
+	Troubleshooting     *PluginTroubleshootingDTO `json:"troubleshooting,omitempty"`
 }
 
 type PluginDeviceStatusDTO struct {
 	State   string `json:"state"`
 	Message string `json:"message,omitempty"`
+}
+
+type PluginTroubleshootingDTO struct {
+	EnUS []string `json:"en-US"`
+	ZhCN []string `json:"zh-CN"`
 }
 
 type PluginConfigResponse struct {
@@ -189,6 +195,20 @@ func pluginDTO(snapshot plugins.RuntimeSnapshot) PluginDTO {
 		LastEnabledAt:       optionalTime(snapshot.LastEnabledAt),
 		LastError:           boundedMessage(snapshot.LastError),
 		DeviceStatus:        pluginDeviceStatusDTO(snapshot.DeviceStatus),
+		Troubleshooting:     pluginTroubleshootingDTO(snapshot.Troubleshooting),
+	}
+}
+
+func pluginTroubleshootingDTO(guide plugins.Troubleshooting) *PluginTroubleshootingDTO {
+	if len(guide.EnUS) == 0 && len(guide.ZhCN) == 0 {
+		return nil
+	}
+	if guide.Validate() != nil {
+		return nil
+	}
+	return &PluginTroubleshootingDTO{
+		EnUS: append([]string(nil), guide.EnUS...),
+		ZhCN: append([]string(nil), guide.ZhCN...),
 	}
 }
 

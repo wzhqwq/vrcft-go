@@ -76,6 +76,15 @@ func TestRuntimeSnapshotPinsStatesAndFields(t *testing.T) {
 	}
 }
 
+func TestRuntimeSnapshotClonesTroubleshooting(t *testing.T) {
+	snapshot := RuntimeSnapshot{Troubleshooting: Troubleshooting{EnUS: []string{"First"}, ZhCN: []string{"第一步"}}}
+	clone := snapshot.clone()
+	clone.Troubleshooting.EnUS[0] = "changed"
+	if snapshot.Troubleshooting.EnUS[0] != "First" {
+		t.Fatal("snapshot clone shares plugin-authored guide")
+	}
+}
+
 func TestRuntimeSnapshotEventContractContainsNoFrames(t *testing.T) {
 	// Catches reintroducing high-frequency frame data into the bounded event
 	// system, where it could retain frames or create unbounded pressure.

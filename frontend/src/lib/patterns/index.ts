@@ -8,6 +8,7 @@ export {default as FormRow} from './FormRow.svelte';
 export {default as FormSection} from './FormSection.svelte';
 export {default as OSCSummary} from './OSCSummary.svelte';
 export {default as PluginCard} from './PluginCard.svelte';
+export {default as PluginTroubleshootingDialog} from './PluginTroubleshootingDialog.svelte';
 export {default as ProblemBanner} from './ProblemBanner.svelte';
 export {default as StatusCard} from './StatusCard.svelte';
 export {default as UnsavedChangesBar} from './UnsavedChangesBar.svelte';

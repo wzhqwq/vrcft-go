@@ -31,6 +31,7 @@ export interface PluginView {
   readonly nextRestartAt?: string | null
   readonly lastError?: string
 	readonly deviceStatus?: {readonly state: string; readonly message?: string}
+	readonly troubleshooting?: {readonly 'en-US': readonly string[]; readonly 'zh-CN': readonly string[]}
 }
 
 export interface PluginsView {

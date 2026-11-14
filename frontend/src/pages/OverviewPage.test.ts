@@ -112,4 +112,24 @@ describe('OverviewPage', () => {
 	expect(within(rows[0]!).getByText('Start PICO Connect')).toBeVisible()
 	expect(within(rows[1]!).getByText('尚未收到追踪数据')).toBeVisible()
   })
+
+  it('opens the plugin guide from the overview warning', async () => {
+	mount(runtimeState(), [plugin('pico-connect', {active: false, deviceStatus: {state: 'error', message: 'Start PICO Connect'},
+	  troubleshooting: {'en-US': ['Start PICO Connect'], 'zh-CN': ['启动 Pico 互联']}})])
+	const row = screen.getByTestId('overview-plugin-row')
+	await fireEvent.click(within(row).getByRole('button', {name: '故障排除：pico-connect'}))
+	expect(screen.getByRole('dialog')).toHaveTextContent('启动 Pico 互联')
+  })
+
+  it('returns focus to the overview row when the device recovers during help', async () => {
+    const guide = {'en-US': ['Start PICO Connect'], 'zh-CN': ['启动 Pico 互联']}
+    const {plugins} = mount(runtimeState(), [plugin('pico-connect', {deviceStatus: {state: 'error'}, troubleshooting: guide})])
+    const row = screen.getByTestId('overview-plugin-row')
+    await fireEvent.click(within(row).getByRole('button', {name: '故障排除：pico-connect'}))
+    expect(screen.getByRole('dialog')).toBeVisible()
+    plugins.setState(pluginsState([plugin('pico-connect', {deviceStatus: {state: 'connected'}, troubleshooting: guide})]))
+    await tick()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await waitFor(() => expect(row).toHaveFocus())
+  })
 })
