@@ -9,19 +9,20 @@ import (
 
 func TestMapShapesGazeBlinkAndExpression(t *testing.T) {
 	var packet shapePacket
-	for _, slot := range []int{0, 2, 31, 44, 28, 38, 7} {
+	for _, slot := range []int{0, 2, 31, 44, 28, 38, 46, 7} {
 		packet.present[slot] = true
 	}
 	packet.values[2] = .6 // left eye looks inward = rightward
 	packet.values[28] = .25
 	packet.values[38] = .5
+	packet.values[46] = 1
 	packet.values[7] = .75
 	sub := pluginapi.Subscription{Generation: 1, Capabilities: trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression}
 	got := mapShapes(packet, sub)
 	if got.Eye.Valid&(trackingmodel.EyeValidLeftGaze|trackingmodel.EyeValidLeftOpenness|trackingmodel.EyeValidRightOpenness) != trackingmodel.EyeValidLeftGaze|trackingmodel.EyeValidLeftOpenness|trackingmodel.EyeValidRightOpenness {
 		t.Fatalf("eye valid = %b", got.Eye.Valid)
 	}
-	if got.Eye.LeftGaze.X != .6 || got.Eye.LeftOpenness != .75 || got.Eye.RightOpenness != .5 {
+	if got.Eye.LeftGaze.X != .6 || got.Eye.LeftOpenness != .5625 || got.Eye.RightOpenness != .5 {
 		t.Fatalf("eye = %+v", got.Eye)
 	}
 	if value, ok := got.Expressions.Get(trackingmodel.ExpressionJawOpen); !ok || value != .75 {
@@ -29,6 +30,37 @@ func TestMapShapesGazeBlinkAndExpression(t *testing.T) {
 	}
 	if got.Eye.Valid&trackingmodel.EyeValidLeftPupil != 0 {
 		t.Fatal("invented pupil")
+	}
+}
+
+func TestMapShapesEyeOpennessMatchesSteamLinkRange(t *testing.T) {
+	tests := []struct {
+		name     string
+		blink    float32
+		wide     float32
+		withWide bool
+		want     float32
+	}{
+		{"ordinary open", 0, 0, false, .75},
+		{"partly closed", .5, 0, false, .375},
+		{"fully closed", 1, 1, true, 0},
+		{"wide open", 0, 1, true, 1},
+		{"overrange blink", -1, 2, true, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var packet shapePacket
+			packet.present[shapeEyeBlinkL] = true
+			packet.values[shapeEyeBlinkL] = tt.blink
+			if tt.withWide {
+				packet.present[shapeEyeWideL] = true
+				packet.values[shapeEyeWideL] = tt.wide
+			}
+			frame := mapShapes(packet, pluginapi.Subscription{Generation: 1, Capabilities: trackingmodel.CapabilityEye})
+			if frame.Eye.Valid&trackingmodel.EyeValidLeftOpenness == 0 || frame.Eye.LeftOpenness != tt.want {
+				t.Fatalf("left openness = %v, valid=%v; want %v", frame.Eye.LeftOpenness, frame.Eye.Valid, tt.want)
+			}
+		})
 	}
 }
 

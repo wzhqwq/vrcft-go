@@ -122,6 +122,14 @@ func clamp(value, low, high float32) float32 {
 	return value
 }
 
+func eyeOpenness(packet shapePacket, blinkSlot, wideSlot int) float32 {
+	wide := float32(0)
+	if packet.present[wideSlot] {
+		wide = clamp(packet.values[wideSlot], 0, 1)
+	}
+	return (1 - clamp(packet.values[blinkSlot], 0, 1)) * (0.75 + 0.25*wide)
+}
+
 func mapShapes(packet shapePacket, sub pluginapi.Subscription) trackingmodel.TrackingFrame {
 	frame := trackingmodel.TrackingFrame{Capabilities: sub.Capabilities & (trackingmodel.CapabilityEye | trackingmodel.CapabilityExpression)}
 	if frame.Capabilities.Has(trackingmodel.CapabilityEye) {
@@ -134,11 +142,11 @@ func mapShapes(packet shapePacket, sub pluginapi.Subscription) trackingmodel.Tra
 			frame.Eye.Valid |= trackingmodel.EyeValidRightGaze
 		}
 		if packet.present[shapeEyeBlinkL] {
-			frame.Eye.LeftOpenness = 1 - clamp(packet.values[shapeEyeBlinkL], 0, 1)
+			frame.Eye.LeftOpenness = eyeOpenness(packet, shapeEyeBlinkL, shapeEyeWideL)
 			frame.Eye.Valid |= trackingmodel.EyeValidLeftOpenness
 		}
 		if packet.present[shapeEyeBlinkR] {
-			frame.Eye.RightOpenness = 1 - clamp(packet.values[shapeEyeBlinkR], 0, 1)
+			frame.Eye.RightOpenness = eyeOpenness(packet, shapeEyeBlinkR, shapeEyeWideR)
 			frame.Eye.Valid |= trackingmodel.EyeValidRightOpenness
 		}
 	}
